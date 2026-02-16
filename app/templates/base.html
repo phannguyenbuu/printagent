@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title }} | Printer Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+  </head>
+  <body data-page="{{ active_tab }}">
+    <div class="layout-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-dot"></div>
+          <div>
+            <div class="brand-title">Printer Agent</div>
+            <div class="brand-sub">Operations Console</div>
+          </div>
+        </div>
+        <nav class="side-nav">
+          <a class="side-link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+          <a class="side-link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="side-link {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Analytics</a>
+          <a class="side-link {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">Settings</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <h1>{{ page_title }}</h1>
+            <p>Ricoh photocopy, print, and scanner monitoring</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refresh-btn" class="btn ghost">Refresh Data</button>
+          </div>
+        </header>
+
+        <div class="nav-tabs">
+          <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Overview</a>
+          <a class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Device Manager</a>
+          <a class="tab {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Counter Trend</a>
+          <a class="tab {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">Config</a>
+        </div>
+
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>

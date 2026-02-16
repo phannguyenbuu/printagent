@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h3>Counter Analytics</h3>
+    <span>Synthetic trend generated from active inventory</span>
+  </div>
+  <svg id="analytics-chart" class="trend-svg tall" viewBox="0 0 900 320" preserveAspectRatio="none"></svg>
+</section>
+
+<section class="stats-grid stats-grid-three">
+  <article class="stat-card">
+    <div class="stat-label">Avg Copier/Day</div>
+    <div id="avg-copier" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Avg Print/Day</div>
+    <div id="avg-print" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Avg Scan/Day</div>
+    <div id="avg-scan" class="stat-value">--</div>
+  </article>
+</section>
+{% endblock %}

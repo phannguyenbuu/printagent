@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h3>Devices</h3>
+    <span>Device inventory loaded from backend API and local Windows printers</span>
+  </div>
+  <div class="table-wrap">
+    <table class="device-table">
+      <thead>
+        <tr>
+          <th>Enable</th>
+          <th>Name</th>
+          <th>IP</th>
+          <th>Port</th>
+          <th>Connection</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Source</th>
+          <th>Action</th>
+          <th>Counter Log (1 min)</th>
+          <th>Status Log (30 sec)</th>
+        </tr>
+      </thead>
+      <tbody id="device-table-body">
+        <tr>
+          <td colspan="11">Loading...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

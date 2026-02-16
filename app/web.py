@@ -1,0 +1,649 @@
+from __future__ import annotations
+
+import csv
+import logging
+import re
+import subprocess
+import threading
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from flask import Flask, jsonify, redirect, render_template, request, url_for
+
+from app.config import AppConfig
+from app.modules.ricoh.service import RicohService
+from app.services.api_client import APIClient, Printer
+from app.services.updater import AutoUpdater
+from app.services.ws_client import WSClient
+
+
+LOGGER = logging.getLogger(__name__)
+HISTORY_FILE = Path("storage/data/live_overview_history.csv")
+COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
+STATUS_LOG_FILE = Path("storage/data/log_status.csv")
+
+
+def _load_printers(api_client: APIClient) -> list[Printer]:
+    try:
+        return api_client.get_printers()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to fetch printers from API: %s", exc)
+        return []
+
+
+def _extract_ip(value: str) -> str:
+    match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", value or "")
+    return match.group(1) if match else ""
+
+
+def _safe_json_load(raw: str) -> Any:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        import json
+
+        return json.loads(text)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _load_local_windows_printers() -> list[dict[str, Any]]:
+    script = r"""
+$ErrorActionPreference='Stop'
+$printers = Get-Printer | Select-Object Name,DriverName,PortName,PrinterStatus,WorkOffline,Type,Shared
+$ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortMonitor
+[PSCustomObject]@{
+  printers = $printers
+  ports = $ports
+} | ConvertTo-Json -Depth 6
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Cannot read local Windows printers: %s", exc)
+        return []
+
+    payload = _safe_json_load(result.stdout)
+    if not isinstance(payload, dict):
+        return []
+
+    raw_printers = payload.get("printers", [])
+    raw_ports = payload.get("ports", [])
+    if isinstance(raw_printers, dict):
+        raw_printers = [raw_printers]
+    if isinstance(raw_ports, dict):
+        raw_ports = [raw_ports]
+
+    port_map: dict[str, dict[str, Any]] = {}
+    for port in raw_ports:
+        if not isinstance(port, dict):
+            continue
+        name = str(port.get("Name", "") or "")
+        if not name:
+            continue
+        port_map[name] = port
+
+    devices: list[dict[str, Any]] = []
+    for item in raw_printers:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name", "") or "")
+        port_name = str(item.get("PortName", "") or "")
+        status_raw = str(item.get("PrinterStatus", "") or "")
+        work_offline = bool(item.get("WorkOffline", False))
+        port_info = port_map.get(port_name, {})
+        host_addr = str(port_info.get("PrinterHostAddress", "") or "")
+        port_monitor = str(port_info.get("PortMonitor", "") or "")
+        ip = host_addr or _extract_ip(port_name)
+
+        connection_type = "unknown"
+        upper_port = port_name.upper()
+        if "USB" in upper_port or "DOT4" in upper_port:
+            connection_type = "usb"
+        elif ip:
+            connection_type = "ip"
+        elif "WSD" in upper_port:
+            connection_type = "wsd"
+
+        status = "offline" if work_offline else "online"
+        if status_raw and status_raw.lower() in {"error", "degraded", "stopped"}:
+            status = "offline"
+
+        devices.append(
+            {
+                "id": 0,
+                "name": name or "Local Printer",
+                "ip": ip,
+                "type": "windows-local",
+                "status": status,
+                "user": "",
+                "port_name": port_name,
+                "port_monitor": port_monitor,
+                "connection_type": connection_type,
+                "source": "local",
+                "printer_status_raw": status_raw,
+            }
+        )
+    return devices
+
+
+def _test_printer(config: AppConfig) -> Printer:
+    return Printer(
+        name="Test Printer",
+        ip=config.get_string("test.ip"),
+        user=config.get_string("test.user"),
+        password=config.get_string("test.password"),
+        printer_type="ricoh",
+        status="unknown",
+    )
+
+
+def _to_int(value: str | int | None) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _resolve_printer(ip: str, devices: list[Printer], config: AppConfig) -> Printer | None:
+    target = next((p for p in devices if p.ip == ip), None)
+    if target:
+        return target
+    test = _test_printer(config)
+    if test.ip == ip:
+        return test
+    return None
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _append_history(copier: int, printer: int, scanner: int, active: int, offline: int, total: int) -> None:
+    _ensure_parent(HISTORY_FILE)
+    new_file = not HISTORY_FILE.exists()
+    with HISTORY_FILE.open("a", newline="", encoding="utf-8") as fp:
+        writer = csv.writer(fp)
+        if new_file:
+            writer.writerow(["timestamp", "copier_pages", "print_pages", "scan_pages", "active", "offline", "total"])
+        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), copier, printer, scanner, active, offline, total])
+
+
+def _read_history(limit: int = 7) -> tuple[list[str], list[int], list[int], list[int]]:
+    if not HISTORY_FILE.exists():
+        return ([], [], [], [])
+    with HISTORY_FILE.open("r", newline="", encoding="utf-8") as fp:
+        rows = list(csv.DictReader(fp))
+    rows = rows[-limit:]
+    labels = [r["timestamp"][5:16] for r in rows]
+    copier = [_to_int(r.get("copier_pages")) for r in rows]
+    printer = [_to_int(r.get("print_pages")) for r in rows]
+    scanner = [_to_int(r.get("scan_pages")) for r in rows]
+    return labels, copier, printer, scanner
+
+
+def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[str, Any]:
+    ricoh_devices = [d for d in devices if d.ip and d.printer_type.lower() == "ricoh"]
+    copier_pages = 0
+    print_pages = 0
+    scan_pages = 0
+    active_count = 0
+    alert_count = {"low_toner": 0, "paper_warning": 0, "scanner_notice": 0}
+    details: list[dict[str, Any]] = []
+
+    for printer in ricoh_devices:
+        device_row: dict[str, Any] = {"name": printer.name, "ip": printer.ip, "ok": False}
+        try:
+            counter_payload = service.process_counter(printer, should_post=False)
+            status_payload = service.process_status(printer, should_post=False)
+
+            counter = counter_payload.get("counter_data", {})
+            status = status_payload.get("status_data", {})
+
+            copier_pages += _to_int(counter.get("copier_bw"))
+            print_pages += _to_int(counter.get("printer_bw"))
+            scan_pages += _to_int(counter.get("scanner_send_bw")) + _to_int(counter.get("scanner_send_color"))
+
+            system_status = status.get("system_status", "")
+            if system_status == "OK":
+                active_count += 1
+
+            if status.get("toner_black", "") != "OK":
+                alert_count["low_toner"] += 1
+            if any(k.startswith("tray_") and "status" in k for k in status):
+                paper_values = [str(v).lower() for k, v in status.items() if k.startswith("tray_") and k.endswith("_status")]
+                if any("empty" in v or "near" in v or "alert" in v for v in paper_values):
+                    alert_count["paper_warning"] += 1
+            if "scanner_alerts" in status:
+                alert_count["scanner_notice"] += 1
+
+            device_row["ok"] = True
+            device_row["counter"] = {
+                "copier_bw": counter.get("copier_bw", ""),
+                "printer_bw": counter.get("printer_bw", ""),
+                "scanner_send_bw": counter.get("scanner_send_bw", ""),
+                "scanner_send_color": counter.get("scanner_send_color", ""),
+            }
+            device_row["status"] = status
+        except Exception as exc:  # noqa: BLE001
+            device_row["error"] = str(exc)
+        details.append(device_row)
+
+    total = len(ricoh_devices)
+    offline = max(total - active_count, 0)
+    _append_history(copier_pages, print_pages, scan_pages, active_count, offline, total)
+    labels, copier_hist, print_hist, scan_hist = _read_history(limit=7)
+
+    return {
+        "stats": {
+            "total_devices": total,
+            "ricoh_devices": total,
+            "active_devices": active_count,
+            "offline_devices": offline,
+            "copier_pages_total": copier_pages,
+            "print_pages_total": print_pages,
+            "scan_pages_total": scan_pages,
+        },
+        "trend": {
+            "labels": labels,
+            "copier_pages": copier_hist,
+            "print_pages": print_hist,
+            "scan_pages": scan_hist,
+        },
+        "alerts": [
+            {"title": "Low toner", "count": alert_count["low_toner"]},
+            {"title": "Paper tray warning", "count": alert_count["paper_warning"]},
+            {"title": "Scanner notice", "count": alert_count["scanner_notice"]},
+        ],
+        "live_devices": details,
+    }
+
+
+def _counter_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
+    _ensure_parent(COUNTER_LOG_FILE)
+    new_file = not COUNTER_LOG_FILE.exists()
+    with COUNTER_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
+        writer = csv.writer(fp)
+        if new_file:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "printer_name",
+                    "printer_ip",
+                    "total",
+                    "copier_bw",
+                    "printer_bw",
+                    "scanner_send_bw",
+                    "scanner_send_color",
+                ]
+            )
+        while not stop_event.is_set():
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                parsed = service.parse_counter(service.read_counter(printer))
+                writer.writerow(
+                    [
+                        now,
+                        printer.name,
+                        printer.ip,
+                        parsed.get("total", ""),
+                        parsed.get("copier_bw", ""),
+                        parsed.get("printer_bw", ""),
+                        parsed.get("scanner_send_bw", ""),
+                        parsed.get("scanner_send_color", ""),
+                    ]
+                )
+            except Exception as exc:  # noqa: BLE001
+                writer.writerow([now, printer.name, printer.ip, "ERROR", str(exc), "", "", ""])
+            fp.flush()
+            stop_event.wait(60)
+
+
+def _status_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
+    _ensure_parent(STATUS_LOG_FILE)
+    new_file = not STATUS_LOG_FILE.exists()
+    with STATUS_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
+        writer = csv.writer(fp)
+        if new_file:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "printer_name",
+                    "printer_ip",
+                    "system_status",
+                    "printer_status",
+                    "printer_alerts",
+                    "copier_status",
+                    "copier_alerts",
+                    "scanner_status",
+                    "scanner_alerts",
+                    "toner_black",
+                    "tray_1_status",
+                    "tray_2_status",
+                    "tray_3_status",
+                    "bypass_tray_status",
+                    "other_info",
+                ]
+            )
+        while not stop_event.is_set():
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                status_data = service.parse_status(service.read_status(printer))
+                writer.writerow(service._prepare_csv_row(now, printer, status_data))
+            except Exception as exc:  # noqa: BLE001
+                writer.writerow([now, printer.name, printer.ip, "ERROR", str(exc), "", "", "", "", "", "", "", "", "", "", ""])
+            fp.flush()
+            stop_event.wait(30)
+
+
+def _start_job(jobs: dict[str, dict[str, Any]], key: str, target: Any) -> tuple[bool, str]:
+    existing = jobs.get(key)
+    if existing and existing["thread"].is_alive():
+        return False, "Job already running"
+    stop_event = threading.Event()
+    thread = threading.Thread(target=target, args=(stop_event,), daemon=True)
+    jobs[key] = {"thread": thread, "stop": stop_event, "started_at": datetime.now().isoformat(timespec="seconds")}
+    thread.start()
+    return True, "Started"
+
+
+def _stop_job(jobs: dict[str, dict[str, Any]], key: str) -> tuple[bool, str]:
+    existing = jobs.get(key)
+    if not existing:
+        return False, "Job not running"
+    existing["stop"].set()
+    return True, "Stopped"
+
+
+def create_app(config_path: str = "config.yaml") -> Flask:
+    app = Flask(__name__, template_folder="templates", static_folder="static")
+    config = AppConfig.load(config_path)
+    api_client = APIClient(config)
+    ricoh_service = RicohService(api_client)
+    updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1])
+
+    def _on_ws_message(message: str) -> None:
+        ok, note = updater.handle_text_message(message, source="ws")
+        if ok:
+            LOGGER.info("Updater signal handled from ws: %s", note)
+        else:
+            LOGGER.warning("Updater signal failed from ws: %s", note)
+
+    ws_client = WSClient(
+        url=config.get_string("ws.url"),
+        token=config.get_string("ws.token"),
+        on_message_callback=_on_ws_message,
+    )
+
+    app.config["APP_CONFIG"] = config
+    app.config["API_CLIENT"] = api_client
+    app.config["RICOH_SERVICE"] = ricoh_service
+    app.config["WS_CLIENT"] = ws_client
+    app.config["UPDATER"] = updater
+    app.config["LOG_JOBS"] = {"counter": {}, "status": {}}
+
+    if config.get_bool("ws.auto_connect", False) and ws_client.is_configured():
+        ok, msg = ws_client.connect()
+        LOGGER.info("WebSocket auto-connect: %s (%s)", ok, msg)
+
+    @app.get("/")
+    def index() -> Any:
+        return redirect(url_for("dashboard"))
+
+    @app.get("/dashboard")
+    def dashboard() -> Any:
+        return render_template("dashboard.html", active_tab="dashboard", page_title="Device Overview")
+
+    @app.get("/devices")
+    def devices() -> Any:
+        return render_template("devices.html", active_tab="devices", page_title="Device Manager")
+
+    @app.get("/analytics")
+    def analytics() -> Any:
+        return render_template("analytics.html", active_tab="analytics", page_title="Counter Analytics")
+
+    @app.get("/settings")
+    def settings() -> Any:
+        app_cfg: AppConfig = app.config["APP_CONFIG"]
+        return render_template(
+            "settings.html",
+            active_tab="settings",
+            page_title="System Settings",
+            api_url=app_cfg.api_url,
+            test_ip=app_cfg.get_string("test.ip"),
+            test_user=app_cfg.get_string("test.user"),
+        )
+
+    @app.get("/api/overview")
+    def api_overview() -> Any:
+        devices = _load_printers(api_client)
+        overview = _build_live_overview(ricoh_service, devices)
+        ws_client.send("overview_updated", overview)
+        return jsonify(overview)
+
+    @app.get("/api/devices")
+    def api_devices() -> Any:
+        api_devices = _load_printers(api_client)
+        local_devices = _load_local_windows_printers()
+
+        payload = [
+            {
+                "id": p.id,
+                "name": p.name or "Printer",
+                "ip": p.ip,
+                "type": p.printer_type or "unknown",
+                "status": p.status or "unknown",
+                "user": p.user,
+                "port_name": "",
+                "port_monitor": "",
+                "connection_type": "ip" if p.ip else "unknown",
+                "source": "api",
+            }
+            for p in api_devices
+            if p.ip
+        ]
+
+        if not payload:
+            test = _test_printer(config)
+            if test.ip:
+                payload.append(
+                    {
+                        "id": 0,
+                        "name": test.name,
+                        "ip": test.ip,
+                        "type": test.printer_type,
+                        "status": test.status,
+                        "user": test.user,
+                        "port_name": "",
+                        "port_monitor": "",
+                        "connection_type": "ip",
+                        "source": "test",
+                    }
+                )
+
+        # Merge local printers; keep all local, and only add if no exact duplicate
+        existing_keys = {(d.get("name", ""), d.get("port_name", ""), d.get("ip", "")) for d in payload}
+        for local in local_devices:
+            key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
+            if key in existing_keys:
+                continue
+            payload.append(local)
+            existing_keys.add(key)
+
+        return jsonify({"devices": payload})
+
+    @app.post("/api/devices/action")
+    def api_action() -> Any:
+        request_data = request.get_json(silent=True) or {}
+        ip = str(request_data.get("ip", "")).strip()
+        action = str(request_data.get("action", "")).strip().lower()
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        if not action:
+            return jsonify({"ok": False, "error": "Missing action"}), 400
+
+        devices = _load_printers(api_client)
+        target = _resolve_printer(ip, devices, config)
+        if not target:
+            return jsonify({"ok": False, "error": f"Device {ip} not found"}), 404
+
+        counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
+        status_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["status"]
+
+        try:
+            if action == "status":
+                payload = ricoh_service.process_status(target, should_post=False)
+                ws_client.send("device_status", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "counter":
+                payload = ricoh_service.process_counter(target, should_post=False)
+                ws_client.send("device_counter", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "device_info":
+                payload = ricoh_service.process_device_info(target, should_post=False)
+                ws_client.send("device_info", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "enable_machine":
+                ricoh_service.enable_machine(target)
+                ws_client.send("machine_enabled", {"ip": target.ip, "name": target.name})
+                return jsonify({"ok": True, "action": action, "message": "Machine enabled successfully"})
+            if action == "lock_machine":
+                ricoh_service.lock_machine(target)
+                ws_client.send("machine_locked", {"ip": target.ip, "name": target.name})
+                return jsonify({"ok": True, "action": action, "message": "Machine locked successfully"})
+            if action == "address_list":
+                payload = ricoh_service.process_address_list(target)
+                ws_client.send("address_list", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "log_counter_start":
+                ok, message = _start_job(
+                    counter_jobs,
+                    ip,
+                    lambda stop_event: _counter_worker(ricoh_service, target, stop_event),
+                )
+                ws_client.send("counter_log_start", {"ip": ip, "ok": ok, "message": message})
+                return jsonify({"ok": ok, "action": action, "message": message, "job": counter_jobs.get(ip, {})})
+            if action == "log_counter_stop":
+                ok, message = _stop_job(counter_jobs, ip)
+                ws_client.send("counter_log_stop", {"ip": ip, "ok": ok, "message": message})
+                return jsonify({"ok": ok, "action": action, "message": message})
+            if action == "log_status_start":
+                ok, message = _start_job(
+                    status_jobs,
+                    ip,
+                    lambda stop_event: _status_worker(ricoh_service, target, stop_event),
+                )
+                ws_client.send("status_log_start", {"ip": ip, "ok": ok, "message": message})
+                return jsonify({"ok": ok, "action": action, "message": message, "job": status_jobs.get(ip, {})})
+            if action == "log_status_stop":
+                ok, message = _stop_job(status_jobs, ip)
+                ws_client.send("status_log_stop", {"ip": ip, "ok": ok, "message": message})
+                return jsonify({"ok": ok, "action": action, "message": message})
+            if action == "exit":
+                c_ok, c_message = _stop_job(counter_jobs, ip)
+                s_ok, s_message = _stop_job(status_jobs, ip)
+                if not c_ok and not s_ok:
+                    ws_client.send("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
+                    return jsonify({"ok": True, "action": action, "message": "No running log jobs"})
+                ws_client.send("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
+                return jsonify(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "message": f"Stopped jobs: counter={c_message}, status={s_message}",
+                    }
+                )
+            if action == "job_status":
+                return jsonify(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "counter_running": bool(counter_jobs.get(ip) and counter_jobs[ip]["thread"].is_alive()),
+                        "status_running": bool(status_jobs.get(ip) and status_jobs[ip]["thread"].is_alive()),
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc), "action": action}), 500
+
+        return jsonify({"ok": False, "error": f"Unsupported action: {action}"}), 400
+
+    @app.get("/api/log-jobs")
+    def api_log_jobs() -> Any:
+        counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
+        status_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["status"]
+        return jsonify(
+            {
+                "counter": [
+                    {"ip": ip, "running": value["thread"].is_alive(), "started_at": value.get("started_at", "")}
+                    for ip, value in counter_jobs.items()
+                ],
+                "status": [
+                    {"ip": ip, "running": value["thread"].is_alive(), "started_at": value.get("started_at", "")}
+                    for ip, value in status_jobs.items()
+                ],
+            }
+        )
+
+    @app.get("/api/ws/status")
+    def api_ws_status() -> Any:
+        return jsonify(ws_client.status())
+
+    @app.post("/api/ws/connect")
+    def api_ws_connect() -> Any:
+        ok, message = ws_client.connect()
+        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
+
+    @app.post("/api/ws/disconnect")
+    def api_ws_disconnect() -> Any:
+        ok, message = ws_client.disconnect()
+        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
+
+    @app.post("/api/ws/send")
+    def api_ws_send() -> Any:
+        body = request.get_json(silent=True) or {}
+        event = str(body.get("event", "manual_event")).strip()
+        payload = body.get("payload", {})
+        if not isinstance(payload, dict):
+            return jsonify({"ok": False, "error": "payload must be an object"}), 400
+        ok, message = ws_client.send(event, payload)
+        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
+
+    @app.get("/api/update/status")
+    def api_update_status() -> Any:
+        return jsonify(updater.status())
+
+    @app.post("/api/update/check")
+    def api_update_check() -> Any:
+        body = request.get_json(silent=True) or {}
+        version = str(body.get("version", "")).strip()
+        command = str(body.get("command", "")).strip()
+        source = str(body.get("source", "api")).strip()
+        ok, message = updater.handle_signal(version=version, command_text=command, source=source, raw_text=str(body))
+        return jsonify({"ok": ok, "message": message, "status": updater.status()})
+
+    @app.post("/api/update/receive-text")
+    def api_update_receive_text() -> Any:
+        token = request.headers.get("X-Update-Token", "").strip()
+        expected = updater.webhook_token
+        if expected and token != expected:
+            return jsonify({"ok": False, "error": "Invalid update token"}), 403
+
+        body = request.get_json(silent=True) or {}
+        text = str(body.get("text", "")).strip()
+        if not text:
+            return jsonify({"ok": False, "error": "Missing text"}), 400
+        ok, message = updater.handle_text_message(text, source="webhook")
+        return jsonify({"ok": ok, "message": message, "status": updater.status()})
+
+    return app

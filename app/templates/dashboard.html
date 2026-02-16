@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="stats-grid">
+  <article class="stat-card">
+    <div class="stat-label">Total Devices</div>
+    <div id="stat-total" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Ricoh Devices</div>
+    <div id="stat-ricoh" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Active</div>
+    <div id="stat-active" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Offline</div>
+    <div id="stat-offline" class="stat-value">--</div>
+  </article>
+</section>
+
+<section class="stats-grid">
+  <article class="stat-card">
+    <div class="stat-label">Total Photocopy Pages</div>
+    <div id="stat-copier-total" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Total Print Pages</div>
+    <div id="stat-print-total" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Total Scanner Pages</div>
+    <div id="stat-scan-total" class="stat-value">--</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-label">Data Source</div>
+    <div class="stat-value">Live</div>
+  </article>
+</section>
+
+<section class="panel-grid">
+  <article class="panel">
+    <div class="panel-head">
+      <h3>Energy Consumption</h3>
+      <span>Photocopy / Print / Scanner</span>
+    </div>
+    <div id="bar-chart" class="bars"></div>
+  </article>
+  <article class="panel">
+    <div class="panel-head">
+      <h3>Current Usage Trend</h3>
+      <span>Last 7 days</span>
+    </div>
+    <svg id="trend-chart" class="trend-svg" viewBox="0 0 540 250" preserveAspectRatio="none"></svg>
+  </article>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Alert Summary</h3>
+    <span>Machine warning overview</span>
+  </div>
+  <div id="alerts" class="alert-list"></div>
+</section>
+{% endblock %}

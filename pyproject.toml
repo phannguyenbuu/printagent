@@ -1,0 +1,27 @@
+[project]
+name = "printer-agent"
+version = "0.1.0"
+description = "Python port of Ricoh printer monitor agent"
+requires-python = ">=3.11"
+dependencies = [
+  "flask>=3.1.0",
+  "python-dotenv>=1.0.1",
+  "pyyaml>=6.0.1",
+  "requests>=2.32.3",
+  "websocket-client>=1.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "app.services", "app.modules", "app.modules.ricoh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

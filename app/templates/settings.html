@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h3>Connection Settings</h3>
+    <span>Current values loaded from config.yaml</span>
+  </div>
+  <div class="settings-grid">
+    <label>API URL
+      <input value="{{ api_url }}" readonly />
+    </label>
+    <label>Test Device IP
+      <input value="{{ test_ip }}" readonly />
+    </label>
+    <label>Test Username
+      <input value="{{ test_user }}" readonly />
+    </label>
+  </div>
+  <p class="hint">Edit values in <code>agent/config.yaml</code> then refresh.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,623 @@
+from __future__ import annotations
+
+import base64
+import csv
+import logging
+import re
+import signal
+import threading
+import time
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from html import unescape
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin
+
+import requests
+
+from app.services.api_client import APIClient, Printer
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class AddressEntry:
+    type: str
+    registration_no: str
+    name: str
+    user_code: str
+    date_last_used: str
+    email_address: str
+    folder: str
+
+
+class RicohService:
+    def __init__(self, api_client: APIClient, interval_seconds: int = 60) -> None:
+        self.api_client = api_client
+        self.interval_seconds = interval_seconds
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            LOGGER.info("Ricoh service is already running")
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        LOGGER.info("Ricoh service started. Interval: %ss", self.interval_seconds)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+        LOGGER.info("Ricoh service stopped")
+
+    def _run_loop(self) -> None:
+        self.process_printers()
+        while not self._stop_event.wait(self.interval_seconds):
+            self.process_printers()
+
+    def process_printers(self) -> None:
+        printers = self.api_client.get_printers()
+        for printer in printers:
+            if printer.printer_type.lower() != "ricoh":
+                continue
+            try:
+                html = self.read_counter(printer)
+                payload = {
+                    "printer_name": printer.name,
+                    "ip": printer.ip,
+                    "html": html,
+                    "timestamp": self._timestamp(),
+                }
+                self.api_client.post_data(payload)
+                LOGGER.info("Posted counter data for %s (%s)", printer.name, printer.ip)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Failed processing printer %s (%s): %s", printer.name, printer.ip, exc)
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _http_get(url: str, timeout: int = 10, session: requests.Session | None = None) -> str:
+        client = session or requests.Session()
+        response = client.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.text
+
+    def read_counter(self, printer: Printer) -> str:
+        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/status/getUnificationCounter.cgi")
+
+    def read_device_info(self, printer: Printer) -> str:
+        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/status/configuration.cgi")
+
+    def read_status(self, printer: Printer) -> str:
+        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/webArch/getStatus.cgi")
+
+    def process_device_info(self, printer: Printer, should_post: bool) -> dict[str, Any]:
+        html = self.read_device_info(printer)
+        payload = {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "html": html,
+            "device_info": self.parse_device_info(html),
+            "timestamp": self._timestamp(),
+        }
+        if should_post:
+            self.api_client.post_data(payload)
+        return payload
+
+    def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
+        html = self.read_status(printer)
+        payload = {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "html": html,
+            "status_data": self.parse_status(html),
+            "timestamp": self._timestamp(),
+        }
+        if should_post:
+            self.api_client.post_data(payload)
+        return payload
+
+    def process_counter(self, printer: Printer, should_post: bool) -> dict[str, Any]:
+        html = self.read_counter(printer)
+        payload = {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "html": html,
+            "counter_data": self.parse_counter(html),
+            "timestamp": self._timestamp(),
+        }
+        if should_post:
+            self.api_client.post_data(payload)
+        return payload
+
+    @staticmethod
+    def parse_device_info(html: str) -> dict[str, str]:
+        patterns = {
+            "model_name": r"Model Name</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "machine_id": r"Machine ID</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "total_memory": r"Total Memory</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "document_server_capacity": r"Document Server</td>\s*<td[^>]*>:</td>\s*<td[^>]*>Capacity\s*:\s*([^<]+)</td>",
+            "document_server_free_space": r"Free Space\s*:\s*([^<%]+)</td>",
+            "system_version": r"System</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "nib_version": r"NIB</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "web_image_monitor_version": r"Web Image Monitor</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "adobe_postscript3_version": r"Adobe PostScript 3</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "adobe_pdf_version": r"Adobe PDF</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "rpcs_version": r"RPCS</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "pcl5e_version": r"PCL 5e Emulation</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "pclxl_version": r"PCL XL Emulation</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+        }
+        parsed: dict[str, str] = {}
+        for key, pattern in patterns.items():
+            match = re.search(pattern, html, re.S)
+            if match:
+                parsed[key] = match.group(1).strip()
+        return parsed
+
+    @staticmethod
+    def parse_status(html: str) -> dict[str, str]:
+        data: dict[str, str] = {}
+
+        if re.search(r"<dt[^>]*>System</dt>\s*<dd[^>]*>.*?Status OK", html, re.S):
+            data["system_status"] = "OK"
+        elif re.search(r"<dt[^>]*>System</dt>\s*<dd[^>]*>.*?Alert", html, re.S):
+            data["system_status"] = "Alert"
+
+        def parse_alerts(section: str, key_prefix: str) -> None:
+            match = re.search(rf"<dt[^>]*>{section}</dt>.*?<ul>(.*?)</ul>", html, re.S)
+            if not match:
+                return
+            alerts = [a.strip() for a in re.findall(r"<li>([^<]+)</li>", match.group(1))]
+            alerts = [a for a in alerts if a]
+            if alerts:
+                data[f"{key_prefix}_alerts"] = "; ".join(alerts)
+            else:
+                data[f"{key_prefix}_status"] = "OK"
+
+        parse_alerts("Printer", "printer")
+        parse_alerts("Copier", "copier")
+        parse_alerts("Scanner", "scanner")
+
+        if re.search(r"<dt[^>]*>Black</dt>\s*<dd[^>]*>.*?Status OK", html, re.S):
+            data["toner_black"] = "OK"
+
+        for tray_num, title in re.findall(r"<dt[^>]*>Tray (\d+)</dt>\s*<dd[^>]*>.*?title=['\"]([^'\"]+)['\"]", html, re.S):
+            data[f"tray_{tray_num}_status"] = title
+
+        bypass = re.search(r"<dt[^>]*>Bypass Tray</dt>\s*<dd[^>]*>.*?title=['\"]([^'\"]+)['\"]", html, re.S)
+        if bypass:
+            data["bypass_tray_status"] = bypass.group(1)
+        return data
+
+    @staticmethod
+    def parse_counter(html: str) -> dict[str, str]:
+        patterns = {
+            "total": r"Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "copier_bw": r"Copier</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "printer_bw": r"Printer</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "fax_bw": r"Fax</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "send_tx_total_bw": r"Send/TX Total</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "send_tx_total_color": r"Send/TX Total</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "fax_transmission_total": r"Fax Transmission</div>.*?Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "scanner_send_bw": r"Scanner Send</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "scanner_send_color": r"Scanner Send</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "coverage_copier_bw": r"Copier</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
+            "coverage_printer_bw": r"Printer</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
+            "coverage_fax_bw": r"Fax</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
+            "a3_dlt": r"A3/DLT</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "duplex": r"Duplex</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+        }
+        parsed: dict[str, str] = {}
+        for key, pattern in patterns.items():
+            match = re.search(pattern, html, re.S)
+            if match:
+                parsed[key] = match.group(1).strip()
+        return parsed
+
+    def _login(self, session: requests.Session, printer: Printer) -> None:
+        if not printer.user:
+            raise ValueError("username is required for login")
+        base_url = f"http://{printer.ip}"
+        session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
+        login_page = session.get(urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"), timeout=10)
+        login_page.raise_for_status()
+        html = login_page.text
+
+        token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", html)
+        wim_token = token_match.group(1) if token_match else "689773994"
+        form = {
+            "userid": base64.b64encode(printer.user.encode("utf-8")).decode("ascii"),
+            "password": base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii"),
+            "wimToken": wim_token,
+            "open": "",
+        }
+        resp = session.post(
+            urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"),
+            data=form,
+            headers={"Referer": urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi")},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        if "login.cgi" in resp.text or "Login User Name" in resp.text:
+            raise RuntimeError("login failed, still on login form")
+
+    def create_http_client(self, printer: Printer) -> requests.Session:
+        session = requests.Session()
+        session.headers.update({"User-Agent": "printer-agent/0.1"})
+        if printer.user:
+            self._login(session, printer)
+        else:
+            session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
+        return session
+
+    def authenticate_and_get(self, session: requests.Session, printer: Printer, target_url: str) -> str:
+        full_url = f"http://{printer.ip}{target_url}"
+        response = session.get(full_url, timeout=10)
+        response.raise_for_status()
+        html = response.text
+        if ("authForm.cgi" in html or "login.cgi" in html) and printer.user:
+            self._login(session, printer)
+            response = session.get(full_url, timeout=10)
+            response.raise_for_status()
+            html = response.text
+        return html
+
+    @staticmethod
+    def _extract_wim_token(html: str) -> str:
+        match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", html)
+        if not match:
+            raise ValueError("wimToken not found")
+        return match.group(1)
+
+    def enable_machine(self, printer: Printer) -> None:
+        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
+        session = self.create_http_client(printer)
+        html = self.authenticate_and_get(session, printer, config_url)
+        wim_token = self._extract_wim_token(html)
+
+        form: list[tuple[str, str]] = [
+            ("wimToken", wim_token),
+            ("accessConf", "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"),
+            ("title", "MENU_USERAUTH"),
+            ("userAuthenticationRW", "3"),
+            ("userAuthenticationMethod", "UA_USER_CODE"),
+            ("printerJob", "UA_ALL"),
+            ("userCodeDocumentBox", "false"),
+            ("userCodeFax", "false"),
+            ("userCodeScaner", "false"),
+            ("userCodeMfpBrowser", "false"),
+        ]
+        for value in ["RADIO_OFF", "UA_USER_CODE", "UA_LOCAL_AUTHENTICATION", "UA_NT_AUTHENTICATION", "UA_LDAP_AUTHENTICATION", "UA_RDH_AUTHENTICATION"]:
+            form.append(("userAuthenticationMethodInfo", value))
+        for _ in range(5):
+            form.extend(
+                [
+                    ("exclusionHostIpv6Select", "false"),
+                    ("exclusionHostIpv6RangeFrom", "::"),
+                    ("exclusionHostIpv6RangeTo", "::"),
+                    ("exclusionHostIpv6MaskBase", "::"),
+                    ("exclusionHostIpv6MaskLen", "128"),
+                ]
+            )
+        form.extend(
+            [
+                ("userCodeCopy", "false"),
+                ("userCodeCopybox", ""),
+                ("userCodeCopy", ""),
+                ("userCodeCopybox", ""),
+                ("userCodeCopy", ""),
+                ("userCodeCopybox", ""),
+                ("userCodeCopy", ""),
+                ("userCodePrinter", "false"),
+                ("userCodePrinterbox", ""),
+                ("userCodePrinter", ""),
+                ("userCodePrinterbox", "true"),
+                ("userCodePrinter", "true"),
+            ]
+        )
+        for _ in range(33):
+            form.extend([("userCodeSdkAplibox", ""), ("userCodeSdkApli", "")])
+        resp = session.post(
+            f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
+            data=form,
+            headers={"Referer": f"http://{printer.ip}{config_url}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+
+    def lock_machine(self, printer: Printer) -> None:
+        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
+        session = self.create_http_client(printer)
+        html = self.authenticate_and_get(session, printer, config_url)
+        wim_token = self._extract_wim_token(html)
+        form: list[tuple[str, str]] = [
+            ("wimToken", wim_token),
+            ("accessConf", "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"),
+            ("title", "MENU_USERAUTH"),
+            ("userAuthenticationRW", "3"),
+            ("userAuthenticationMethod", "UA_USER_CODE"),
+            ("userCodeCopy", "true"),
+            ("userCodeCopy", ""),
+            ("userCodeCopy", ""),
+            ("userCodeCopy", ""),
+            ("userCodePrinter", "true"),
+            ("userCodePrinter", "false"),
+            ("userCodePrinter", ""),
+            ("userCodeDocumentBox", "true"),
+            ("userCodeFax", "true"),
+            ("userCodeScaner", "true"),
+            ("userCodeMfpBrowser", "true"),
+        ]
+        resp = session.post(
+            f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
+            data=form,
+            headers={"Referer": f"http://{printer.ip}{config_url}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+
+    def read_address_list_with_client(self, session: requests.Session, printer: Printer) -> str:
+        urls = [
+            "/web/entry/en/address/adrsList.cgi",
+            "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
+            "/web/entry/en/address/adrsListAll.cgi",
+            "/web/entry/en/address/getAddressList.cgi",
+        ]
+        for target in urls:
+            try:
+                html = self.authenticate_and_get(session, printer, target)
+                if "Address List" in html or "adrsList" in html:
+                    return html
+            except Exception:  # noqa: BLE001
+                continue
+        return self.authenticate_and_get(session, printer, urls[0])
+
+    def read_address_list(self, printer: Printer) -> str:
+        session = self.create_http_client(printer)
+        return self.read_address_list_with_client(session, printer)
+
+    @staticmethod
+    def _strip_html(input_value: str) -> str:
+        text = re.sub(r"<[^>]*>", "", input_value)
+        return unescape(text).strip()
+
+    def parse_address_list(self, html: str) -> list[AddressEntry]:
+        user_count = re.search(r'<span id="span_numOfUsers">(\d+)</span>', html)
+        group_count = re.search(r'<span id="span_numOfGroups">(\d+)</span>', html)
+        user_code_count = re.search(r'<span id="span_numOfUserCode">(\d+)</span>', html)
+        entries = [
+            AddressEntry(
+                type="Summary",
+                registration_no="-",
+                name=f"Users: {user_count.group(1) if user_count else '0'}, Groups: {group_count.group(1) if group_count else '0'}, User Codes: {user_code_count.group(1) if user_code_count else '0'}",
+                user_code="-",
+                date_last_used="-",
+                email_address="-",
+                folder="-",
+            )
+        ]
+
+        tbody_match = re.search(r'<tbody id="ReportListArea_TableBody">(.*?)</tbody>', html, re.S)
+        if not tbody_match:
+            return entries
+
+        rows = re.findall(r"<tr(?:\s+[^>]*)?>(?:\s*<td[^>]*>.*?</td>\s*){7,}</tr>", tbody_match.group(1), re.S)
+        for row in rows:
+            if "reportListDummyRow" in row:
+                continue
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+            if len(cells) < 8:
+                continue
+            entry = AddressEntry(
+                type=self._strip_html(cells[1]),
+                registration_no=self._strip_html(cells[2]),
+                name=self._strip_html(cells[3]),
+                user_code=self._strip_html(cells[4]),
+                date_last_used=self._strip_html(cells[5]),
+                email_address=self._strip_html(cells[6]),
+                folder=self._strip_html(cells[7]),
+            )
+            if entry.name and entry.name != "-" and entry.registration_no:
+                entries.append(entry)
+        return entries
+
+    def get_address_list_ajax_with_client(self, session: requests.Session, printer: Printer) -> str:
+        return self.authenticate_and_get(
+            session, printer, "/web/entry/en/address/adrsListLoadEntry.cgi?listCountIn=50&getCountIn=1"
+        )
+
+    @staticmethod
+    def parse_javascript_array_fields(data: str) -> list[str]:
+        fields: list[str] = []
+        current: list[str] = []
+        in_quotes = False
+        quote_char = ""
+        escaped = False
+        for char in data:
+            if escaped:
+                current.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                current.append(char)
+                escaped = True
+                continue
+            if char in {"'", '"'}:
+                if not in_quotes:
+                    in_quotes = True
+                    quote_char = char
+                elif char == quote_char:
+                    in_quotes = False
+                else:
+                    current.append(char)
+                continue
+            if char == "," and not in_quotes:
+                fields.append("".join(current).strip())
+                current = []
+            else:
+                current.append(char)
+        if current:
+            fields.append("".join(current).strip())
+        return fields
+
+    def parse_ajax_address_list(self, data: str) -> list[AddressEntry]:
+        entries: list[AddressEntry] = []
+        data = data.strip()
+        if not data.startswith("[") or not data.endswith("]"):
+            return entries
+        raw_entries = re.findall(r"\[([^\]]+)\]", data)
+        for raw in raw_entries:
+            fields = self.parse_javascript_array_fields(raw)
+            if len(fields) < 8:
+                continue
+            last_used = fields[5]
+            if "#" in last_used:
+                last_used = last_used.split("#", 1)[1]
+            type_map = {"1": "User", "2": "Group"}
+            entry = AddressEntry(
+                type=type_map.get(fields[1], f"Type_{fields[1]}"),
+                registration_no=fields[2].strip("'\""),
+                name=fields[3].strip("'\""),
+                user_code=fields[4].strip("'\""),
+                date_last_used=last_used.strip("'\""),
+                email_address=fields[6].strip("'\""),
+                folder=fields[7].strip("'\""),
+            )
+            if entry.name or entry.registration_no:
+                entries.append(entry)
+        return entries
+
+    def process_address_list(self, printer: Printer) -> dict[str, Any]:
+        session = self.create_http_client(printer)
+        html = self.read_address_list_with_client(session, printer)
+        entries = self.parse_address_list(html)
+        try:
+            ajax_entries = self.parse_ajax_address_list(self.get_address_list_ajax_with_client(session, printer))
+            if ajax_entries and entries:
+                entries = [entries[0], *ajax_entries]
+        except Exception:  # noqa: BLE001
+            pass
+        payload = {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "html": html,
+            "address_list": [asdict(item) for item in entries],
+            "timestamp": self._timestamp(),
+        }
+        return payload
+
+    def start_counter_logging(self, printer: Printer) -> None:
+        stop_event = threading.Event()
+
+        def handle_signal(signum: int, _frame: Any) -> None:
+            LOGGER.info("Received signal %s. Stopping counter logging.", signum)
+            stop_event.set()
+
+        old_int = signal.signal(signal.SIGINT, handle_signal)
+        old_term = signal.signal(signal.SIGTERM, handle_signal)
+        try:
+            while not stop_event.is_set():
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    data = self.parse_counter(self.read_counter(printer))
+                    LOGGER.info("[%s] Counter summary: total=%s copier=%s printer=%s scanner=%s", timestamp, data.get("total", ""), data.get("copier_bw", ""), data.get("printer_bw", ""), data.get("scanner_send_bw", ""))
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.error("[%s] Counter logging failed: %s", timestamp, exc)
+                stop_event.wait(60)
+        finally:
+            signal.signal(signal.SIGINT, old_int)
+            signal.signal(signal.SIGTERM, old_term)
+
+    @staticmethod
+    def _prepare_csv_row(timestamp: str, printer: Printer, status_data: dict[str, str]) -> list[str]:
+        def get_value(key: str) -> str:
+            return status_data.get(key, "")
+
+        other = [
+            f"{k}:{v}"
+            for k, v in status_data.items()
+            if not any(token in k for token in ("system", "printer", "copier", "scanner", "toner", "tray"))
+            and v
+        ]
+        return [
+            timestamp,
+            printer.name,
+            printer.ip,
+            get_value("system_status"),
+            get_value("printer_status"),
+            get_value("printer_alerts"),
+            get_value("copier_status"),
+            get_value("copier_alerts"),
+            get_value("scanner_status"),
+            get_value("scanner_alerts"),
+            get_value("toner_black"),
+            get_value("tray_1_status"),
+            get_value("tray_2_status"),
+            get_value("tray_3_status"),
+            get_value("bypass_tray_status"),
+            "; ".join(other),
+        ]
+
+    def start_status_logging(self, printer: Printer, csv_path: str | Path = "storage/data/log_status.csv") -> None:
+        output = Path(csv_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not output.exists()
+        with output.open("a", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            if write_header:
+                writer.writerow(
+                    [
+                        "timestamp",
+                        "printer_name",
+                        "printer_ip",
+                        "system_status",
+                        "printer_status",
+                        "printer_alerts",
+                        "copier_status",
+                        "copier_alerts",
+                        "scanner_status",
+                        "scanner_alerts",
+                        "toner_black",
+                        "tray_1_status",
+                        "tray_2_status",
+                        "tray_3_status",
+                        "bypass_tray_status",
+                        "other_info",
+                    ]
+                )
+
+            while True:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    status_data = self.parse_status(self.read_status(printer))
+                    writer.writerow(self._prepare_csv_row(timestamp, printer, status_data))
+                except Exception as exc:  # noqa: BLE001
+                    writer.writerow(
+                        [
+                            timestamp,
+                            printer.name,
+                            printer.ip,
+                            "ERROR",
+                            "ERROR",
+                            str(exc),
+                            "ERROR",
+                            "",
+                            "ERROR",
+                            "",
+                            "ERROR",
+                            "ERROR",
+                            "ERROR",
+                            "ERROR",
+                            "ERROR",
+                            "",
+                        ]
+                    )
+                file.flush()
+                time.sleep(30)
