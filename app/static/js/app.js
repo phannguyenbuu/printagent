@@ -180,7 +180,14 @@ async function runAction(ip, action, options = {}) {
     if (data.ok) {
       if (out) out.textContent = jsonString(data);
       if (!out && !silent) {
-        const msg = data.message || `${action} succeeded`;
+        let msg = data.message || `${action} succeeded`;
+        if (action === "counter") {
+          const c = data?.payload?.counter_data || {};
+          msg = `Counter ${ip}: total=${c.total || "-"}, copier_bw=${c.copier_bw || "-"}, printer_bw=${c.printer_bw || "-"}, scanner_bw=${c.scanner_send_bw || "-"}`;
+        } else if (action === "status") {
+          const s = data?.payload?.status_data || {};
+          msg = `Status ${ip}: system=${s.system_status || "-"}, printer=${s.printer_status || s.printer_alerts || "-"}`;
+        }
         alert(msg);
       }
       return data;
@@ -206,24 +213,28 @@ function setRowEnabled(row, enabled) {
   });
 }
 
-async function loadDevices() {
+async function loadDevices(forceRefresh = false) {
   const body = document.getElementById("device-table-body");
   if (!body) return;
-  const data = await jsonFetch("/api/devices");
+  const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
+  const data = await jsonFetch(url);
   const devices = data.devices || [];
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="11">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
     .map((d) => {
       const ok = ["active", "online", "ready"].includes(String(d.status || "").toLowerCase());
       const hasIp = Boolean(d.ip);
+      const isRicoh = String(d.type || "").toLowerCase() === "ricoh";
+      const canQuery = hasIp && isRicoh;
+      const canControl = hasIp;
       return `
       <tr>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="enable" data-ip="${d.ip || ""}" ${hasIp ? "checked" : "disabled"} />
+            <input type="checkbox" data-row-checker="enable" data-ip="${d.ip || ""}" ${canControl ? "checked" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -235,18 +246,20 @@ async function loadDevices() {
         <td><span class="badge ${ok ? "ok" : "warn"}">${d.status || "unknown"}</span></td>
         <td>${d.source || "-"}</td>
         <td>
-          <button class="btn action" data-ip="${d.ip || ""}" data-action="status" ${hasIp ? "" : "disabled"}>Status</button>
-          <button class="btn action alt" data-ip="${d.ip || ""}" data-action="counter" ${hasIp ? "" : "disabled"}>Counter</button>
+          <button class="btn action" data-ip="${d.ip || ""}" data-action="status" ${canQuery ? "" : "disabled"}>Status</button>
+        </td>
+        <td>
+          <button class="btn action alt" data-ip="${d.ip || ""}" data-action="counter" ${canQuery ? "" : "disabled"}>Counter</button>
         </td>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
+            <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${canControl ? "" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="status" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
+            <input type="checkbox" data-row-checker="status" data-ip="${d.ip || ""}" ${canControl ? "" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -316,6 +329,8 @@ async function loadDevices() {
 
 const dashboardState = {
   env: {},
+  env_overrides: {},
+  device_filters: {},
   network: {},
   computers: [],
   printers: [],
@@ -344,6 +359,24 @@ function renderEnvGrid(envPayload) {
       </div>`
     )
     .join("");
+}
+
+function renderEnvOverrideForm(envOverrides) {
+  const form = document.getElementById("env-override-form");
+  if (!form) return;
+  Object.keys(envOverrides || {}).forEach((key) => {
+    if (!form.elements[key]) return;
+    form.elements[key].value = envOverrides[key] ?? "";
+  });
+}
+
+function renderDeviceFilterForm(deviceFilters) {
+  const form = document.getElementById("device-filter-form");
+  if (!form) return;
+  const values = deviceFilters?.ignore_printer_prefixes || [];
+  if (form.elements.ignore_printer_prefixes) {
+    form.elements.ignore_printer_prefixes.value = Array.isArray(values) ? values.join(",") : "";
+  }
 }
 
 function renderNetworkForm(networkPayload) {
@@ -454,6 +487,8 @@ function collectLinkPayload() {
 
 function bindDashboardActions() {
   const networkForm = document.getElementById("network-config-form");
+  const envForm = document.getElementById("env-override-form");
+  const deviceFilterForm = document.getElementById("device-filter-form");
   const computerForm = document.getElementById("computer-form");
   const printerForm = document.getElementById("printer-form");
   const saveLinksBtn = document.getElementById("save-links-btn");
@@ -482,6 +517,57 @@ function bindDashboardActions() {
         setDashboardMessage("Saved network config.");
       } catch (err) {
         setDashboardMessage(`Save network config failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (envForm && !envForm.dataset.bound) {
+    envForm.dataset.bound = "1";
+    envForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = {
+        API_URL: envForm.elements.API_URL.value,
+        USER_TOKEN: envForm.elements.USER_TOKEN.value,
+        DATABASE_URL: envForm.elements.DATABASE_URL.value,
+        WS_URL: envForm.elements.WS_URL.value,
+        WS_AUTO_CONNECT: envForm.elements.WS_AUTO_CONNECT.value,
+        WEBHOOK_MODE: envForm.elements.WEBHOOK_MODE.value,
+        WEBHOOK_LISTEN_PATH: envForm.elements.WEBHOOK_LISTEN_PATH.value,
+        TEST_IP: envForm.elements.TEST_IP.value,
+        TEST_USER: envForm.elements.TEST_USER.value,
+        TEST_PASSWORD: envForm.elements.TEST_PASSWORD.value,
+      };
+      try {
+        await jsonFetch("/api/dashboard/env", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await loadDashboardConfig();
+        setDashboardMessage("Saved ENV overrides to DB.");
+      } catch (err) {
+        setDashboardMessage(`Save ENV overrides failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (deviceFilterForm && !deviceFilterForm.dataset.bound) {
+    deviceFilterForm.dataset.bound = "1";
+    deviceFilterForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = {
+        ignore_printer_prefixes: deviceFilterForm.elements.ignore_printer_prefixes.value,
+      };
+      try {
+        await jsonFetch("/api/dashboard/device-filters", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await loadDashboardConfig();
+        setDashboardMessage("Saved device filters.");
+      } catch (err) {
+        setDashboardMessage(`Save device filters failed: ${err.message}`);
       }
     });
   }
@@ -587,12 +673,16 @@ async function loadDashboardConfig() {
   try {
     const data = await jsonFetch("/api/dashboard/config");
     dashboardState.env = data.env || {};
+    dashboardState.env_overrides = data.env_overrides || {};
+    dashboardState.device_filters = data.device_filters || {};
     dashboardState.network = data.network || {};
     dashboardState.computers = data.computers || [];
     dashboardState.printers = data.printers || [];
     dashboardState.links = data.links || [];
 
     renderEnvGrid(dashboardState.env);
+    renderEnvOverrideForm(dashboardState.env_overrides);
+    renderDeviceFilterForm(dashboardState.device_filters);
     renderNetworkForm(dashboardState.network);
     renderComputersTable(dashboardState.computers);
     renderPrintersTable(dashboardState.printers);
@@ -615,11 +705,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const refresh = document.getElementById("refresh-btn");
   if (refresh) {
-    refresh.addEventListener("click", () => {
+    refresh.addEventListener("click", async () => {
       if (page === "dashboard") {
         loadDashboardConfig();
       } else if (page === "devices") {
         loadOverview().catch(() => {});
+        try {
+          await jsonFetch("/api/devices/refresh", { method: "POST" });
+        } catch (_e) {}
         loadDevices();
       } else {
         loadOverview().catch(() => {});

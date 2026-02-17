@@ -4,11 +4,61 @@
 <section class="panel">
   <div class="panel-head">
     <h3>ENV Runtime Config</h3>
-    <span>All values below are loaded from .env</span>
+    <span>Effective values with DB overrides</span>
   </div>
   <div id="env-config-grid" class="env-grid">
     <div class="hint">Loading...</div>
   </div>
+  <form id="env-override-form" class="settings-grid">
+    <label>API URL
+      <input name="API_URL" placeholder="http://localhost:8080/api" />
+    </label>
+    <label>User Token
+      <input name="USER_TOKEN" placeholder="token" />
+    </label>
+    <label>Database URL
+      <input name="DATABASE_URL" placeholder="sqlite:///storage/data/agent_config.db" />
+    </label>
+    <label>WS URL
+      <input name="WS_URL" placeholder="ws://host/ws" />
+    </label>
+    <label>WS Auto Connect
+      <input name="WS_AUTO_CONNECT" placeholder="true/false" />
+    </label>
+    <label>Webhook Mode
+      <input name="WEBHOOK_MODE" placeholder="listen" />
+    </label>
+    <label>Webhook Listen Path
+      <input name="WEBHOOK_LISTEN_PATH" placeholder="/api/update/receive-text" />
+    </label>
+    <label>Test IP
+      <input name="TEST_IP" placeholder="192.168.1.228" />
+    </label>
+    <label>Test User
+      <input name="TEST_USER" placeholder="admin" />
+    </label>
+    <label>Test Password
+      <input name="TEST_PASSWORD" placeholder="password" />
+    </label>
+    <div>
+      <button type="submit" class="btn ghost">Save ENV Overrides (DB)</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Device Filters</h3>
+    <span>Ignore printer names by prefix (comma-separated)</span>
+  </div>
+  <form id="device-filter-form" class="settings-grid">
+    <label>Ignored Prefixes
+      <input name="ignore_printer_prefixes" placeholder="RustDesk,Microsoft,Fax,AnyDesk,Foxit" />
+    </label>
+    <div>
+      <button type="submit" class="btn ghost">Save Device Filters</button>
+    </div>
+  </form>
 </section>
 
 <section class="panel">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import re
 import subprocess
@@ -24,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 HISTORY_FILE = Path("storage/data/live_overview_history.csv")
 COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
 STATUS_LOG_FILE = Path("storage/data/log_status.csv")
+DEVICES_CACHE_FILE = Path("storage/data/devices_cache.json")
 
 
 def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
@@ -43,6 +45,14 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
     }
 
 
+def _merge_env_overrides(snapshot: dict[str, str], overrides: dict[str, str]) -> dict[str, str]:
+    merged = dict(snapshot)
+    for key, value in (overrides or {}).items():
+        if key in merged and str(value or "").strip():
+            merged[key] = str(value)
+    return merged
+
+
 def _load_printers(api_client: APIClient) -> list[Printer]:
     try:
         return api_client.get_printers()
@@ -54,6 +64,153 @@ def _load_printers(api_client: APIClient) -> list[Printer]:
 def _extract_ip(value: str) -> str:
     match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", value or "")
     return match.group(1) if match else ""
+
+
+def _extract_port_link_id(port_name: str) -> str:
+    text = str(port_name or "").strip()
+    if not text:
+        return ""
+    # For local/WSD printers without reachable IP, use port identifier as a stable ID fallback.
+    return text
+
+
+def _normalize_mac(value: str) -> str:
+    text = str(value or "").strip().replace("-", ":").upper()
+    if not text:
+        return ""
+    if not re.fullmatch(r"[0-9A-F:]{17}", text):
+        return ""
+    parts = text.split(":")
+    if len(parts) != 6 or any(len(part) != 2 for part in parts):
+        return ""
+    if text == "00:00:00:00:00:00":
+        return ""
+    return text
+
+
+def _load_neighbor_mac_map() -> dict[str, str]:
+    script = r"""
+$ErrorActionPreference='Stop'
+Get-NetNeighbor -AddressFamily IPv4 |
+  Select-Object IPAddress,LinkLayerAddress,State |
+  ConvertTo-Json -Depth 4
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=True,
+        )
+        payload = _safe_json_load(result.stdout)
+        if isinstance(payload, dict):
+            payload = [payload]
+        if isinstance(payload, list):
+            mapping: dict[str, str] = {}
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                ip = str(item.get("IPAddress", "") or "").strip()
+                mac = _normalize_mac(str(item.get("LinkLayerAddress", "") or ""))
+                if ip and mac:
+                    mapping[ip] = mac
+            if mapping:
+                return mapping
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("Get-NetNeighbor lookup failed: %s", exc)
+
+    try:
+        result = subprocess.run(
+            ["arp", "-a"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("arp lookup failed: %s", exc)
+        return {}
+
+    mapping: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9a-fA-F:-]{17})\s+\w+", line)
+        if not match:
+            continue
+        ip = match.group(1)
+        mac = _normalize_mac(match.group(2))
+        if mac:
+            mapping[ip] = mac
+    return mapping
+
+
+def _resolve_device_machine_ids(service: RicohService, devices: list[Printer]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for device in devices:
+        ip = str(device.ip or "").strip()
+        if not ip:
+            continue
+        if str(device.printer_type or "").strip().lower() != "ricoh":
+            continue
+        try:
+            payload = service.process_device_info(device, should_post=False)
+            info = payload.get("device_info", {}) if isinstance(payload, dict) else {}
+            if not isinstance(info, dict):
+                continue
+            machine_id = str(info.get("machine_id", "") or "").strip()
+            if machine_id:
+                mapping[ip] = machine_id
+                continue
+            mac_address = _normalize_mac(str(info.get("mac_address", "") or ""))
+            if mac_address:
+                mapping[ip] = mac_address
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("Cannot resolve machine_id for %s (%s): %s", device.name, ip, exc)
+    return mapping
+
+
+def _resolve_single_machine_id(service: RicohService, device: Printer) -> str:
+    ip = str(device.ip or "").strip()
+    if not ip:
+        return ""
+    try:
+        payload = service.process_device_info(device, should_post=False)
+        info = payload.get("device_info", {}) if isinstance(payload, dict) else {}
+        if not isinstance(info, dict):
+            return ""
+        machine_id = str(info.get("machine_id", "") or "").strip()
+        if machine_id:
+            return machine_id
+        mac_address = _normalize_mac(str(info.get("mac_address", "") or ""))
+        return mac_address
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("Cannot resolve machine_id for %s (%s): %s", device.name, ip, exc)
+        return ""
+
+
+def _save_devices_cache(devices: list[dict[str, Any]]) -> None:
+    _ensure_parent(DEVICES_CACHE_FILE)
+    payload = {
+        "cached_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "devices": devices,
+    }
+    DEVICES_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
+
+def _load_devices_cache() -> tuple[list[dict[str, Any]], str]:
+    if not DEVICES_CACHE_FILE.exists():
+        return [], ""
+    try:
+        payload = json.loads(DEVICES_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return [], ""
+    if not isinstance(payload, dict):
+        return [], ""
+    cached_devices = payload.get("devices", [])
+    cached_at = str(payload.get("cached_at", "") or "")
+    if isinstance(cached_devices, list):
+        return cached_devices, cached_at
+    return [], ""
 
 
 def _safe_json_load(raw: str) -> Any:
@@ -141,6 +298,7 @@ $ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortMonitor
                 "id": 0,
                 "name": name or "Local Printer",
                 "ip": ip,
+                "mac_id": _extract_port_link_id(port_name),
                 "type": "windows-local",
                 "status": status,
                 "user": "",
@@ -152,6 +310,84 @@ $ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortMonitor
             }
         )
     return devices
+
+
+def _should_ignore_device(name: str, ignored_prefixes: list[str]) -> bool:
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return False
+    for prefix in ignored_prefixes:
+        pref = str(prefix or "").strip().lower()
+        if pref and lowered.startswith(pref):
+            return True
+    return False
+
+
+def _scan_devices_payload(
+    config: AppConfig,
+    api_client: APIClient,
+    ricoh_service: RicohService,
+    ignored_prefixes: list[str],
+) -> list[dict[str, Any]]:
+    api_devices = _load_printers(api_client)
+    local_devices = _load_local_windows_printers()
+    neighbor_mac_map = _load_neighbor_mac_map()
+    machine_id_map = _resolve_device_machine_ids(ricoh_service, api_devices)
+
+    payload = [
+        {
+            "id": p.id,
+            "name": p.name or "Printer",
+            "ip": p.ip,
+            # Keep field name mac_id for UI compatibility, but value follows legacy ref logic (machine_id).
+            "mac_id": machine_id_map.get(p.ip, neighbor_mac_map.get(p.ip, "")),
+            "type": p.printer_type or "unknown",
+            "status": p.status or "unknown",
+            "user": p.user,
+            "port_name": "",
+            "port_monitor": "",
+            "connection_type": "ip" if p.ip else "unknown",
+            "source": "api",
+        }
+        for p in api_devices
+        if p.ip and not _should_ignore_device(p.name, ignored_prefixes)
+    ]
+
+    if not payload:
+        test = _test_printer(config)
+        if test.ip:
+            test_machine_id = _resolve_single_machine_id(ricoh_service, test)
+            payload.append(
+                {
+                    "id": 0,
+                    "name": test.name,
+                    "ip": test.ip,
+                    "mac_id": test_machine_id or neighbor_mac_map.get(test.ip, ""),
+                    "type": test.printer_type,
+                    "status": test.status,
+                    "user": test.user,
+                    "port_name": "",
+                    "port_monitor": "",
+                    "connection_type": "ip",
+                    "source": "test",
+                }
+            )
+
+    existing_keys = {(d.get("name", ""), d.get("port_name", ""), d.get("ip", "")) for d in payload}
+    for local in local_devices:
+        key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
+        if key in existing_keys:
+            continue
+        if _should_ignore_device(str(local.get("name", "")), ignored_prefixes):
+            continue
+        ip = str(local.get("ip", "") or "")
+        if ip:
+            resolved = machine_id_map.get(ip, neighbor_mac_map.get(ip, ""))
+            if resolved:
+                local["mac_id"] = resolved
+        payload.append(local)
+        existing_keys.add(key)
+    return payload
 
 
 def _test_printer(config: AppConfig) -> Printer:
@@ -432,15 +668,35 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         store: ConfigStore = app.config["CONFIG_STORE"]
         app_cfg: AppConfig = app.config["APP_CONFIG"]
         payload = store.get_dashboard_payload()
+        env_payload = _merge_env_overrides(_env_snapshot(app_cfg, updater), payload.env_overrides)
         return jsonify(
             {
-                "env": _env_snapshot(app_cfg, updater),
+                "env": env_payload,
                 "network": payload.network,
                 "computers": payload.computers,
                 "printers": payload.printers,
                 "links": payload.links,
+                "env_overrides": payload.env_overrides,
+                "device_filters": payload.device_filters,
             }
         )
+
+    @app.post("/api/dashboard/env")
+    def api_dashboard_env() -> Any:
+        body = request.get_json(silent=True) or {}
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        saved = store.save_env_overrides(body)
+        return jsonify({"ok": True, "env_overrides": saved})
+
+    @app.post("/api/dashboard/device-filters")
+    def api_dashboard_device_filters() -> Any:
+        body = request.get_json(silent=True) or {}
+        prefixes = str(body.get("ignore_printer_prefixes", "") or "")
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        saved = store.save_ignore_printer_prefixes(prefixes)
+        if DEVICES_CACHE_FILE.exists():
+            DEVICES_CACHE_FILE.unlink(missing_ok=True)
+        return jsonify({"ok": True, "device_filters": {"ignore_printer_prefixes": saved}})
 
     @app.post("/api/dashboard/network")
     def api_dashboard_network() -> Any:
@@ -512,54 +768,34 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.get("/api/devices")
     def api_devices() -> Any:
-        api_devices = _load_printers(api_client)
-        local_devices = _load_local_windows_printers()
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        ignored_prefixes = store.get_ignore_printer_prefixes()
+        refresh_arg = str(request.args.get("refresh", "") or "").strip().lower()
+        force_refresh = refresh_arg in {"1", "true", "yes", "y"}
 
-        payload = [
+        if not force_refresh:
+            cached_devices, cached_at = _load_devices_cache()
+            if cached_devices:
+                return jsonify({"devices": cached_devices, "cached": True, "cached_at": cached_at})
+
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes)
+        _save_devices_cache(payload)
+        return jsonify(
             {
-                "id": p.id,
-                "name": p.name or "Printer",
-                "ip": p.ip,
-                "type": p.printer_type or "unknown",
-                "status": p.status or "unknown",
-                "user": p.user,
-                "port_name": "",
-                "port_monitor": "",
-                "connection_type": "ip" if p.ip else "unknown",
-                "source": "api",
+                "devices": payload,
+                "cached": False,
+                "cached_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            for p in api_devices
-            if p.ip
-        ]
+        )
 
-        if not payload:
-            test = _test_printer(config)
-            if test.ip:
-                payload.append(
-                    {
-                        "id": 0,
-                        "name": test.name,
-                        "ip": test.ip,
-                        "type": test.printer_type,
-                        "status": test.status,
-                        "user": test.user,
-                        "port_name": "",
-                        "port_monitor": "",
-                        "connection_type": "ip",
-                        "source": "test",
-                    }
-                )
-
-        # Merge local printers; keep all local, and only add if no exact duplicate
-        existing_keys = {(d.get("name", ""), d.get("port_name", ""), d.get("ip", "")) for d in payload}
-        for local in local_devices:
-            key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
-            if key in existing_keys:
-                continue
-            payload.append(local)
-            existing_keys.add(key)
-
-        return jsonify({"devices": payload})
+    @app.post("/api/devices/refresh")
+    def api_devices_refresh() -> Any:
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        ignored_prefixes = store.get_ignore_printer_prefixes()
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _save_devices_cache(payload)
+        return jsonify({"ok": True, "devices": payload, "cached": False, "cached_at": now})
 
     @app.post("/api/devices/action")
     def api_action() -> Any:

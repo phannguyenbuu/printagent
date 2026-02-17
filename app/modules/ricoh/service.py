@@ -142,6 +142,9 @@ class RicohService:
         patterns = {
             "model_name": r"Model Name</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
             "machine_id": r"Machine ID</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
+            "mac_address": r"MAC(?:\s+Address)?</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([0-9A-Fa-f:\-]{12,17})</td>",
+            "ethernet_address": r"Ethernet(?:\s+Address)?</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([0-9A-Fa-f:\-]{12,17})</td>",
+            "hardware_address": r"Hardware(?:\s+Address)?</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([0-9A-Fa-f:\-]{12,17})</td>",
             "total_memory": r"Total Memory</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([^<]+)</td>",
             "document_server_capacity": r"Document Server</td>\s*<td[^>]*>:</td>\s*<td[^>]*>Capacity\s*:\s*([^<]+)</td>",
             "document_server_free_space": r"Free Space\s*:\s*([^<%]+)</td>",
@@ -159,6 +162,16 @@ class RicohService:
             match = re.search(pattern, html, re.S)
             if match:
                 parsed[key] = match.group(1).strip()
+        # Normalize MAC-like fields if available.
+        mac_candidates = [parsed.get("mac_address", ""), parsed.get("ethernet_address", ""), parsed.get("hardware_address", "")]
+        for value in mac_candidates:
+            raw = str(value or "").strip()
+            if not raw:
+                continue
+            cleaned = raw.replace("-", ":").upper()
+            if re.fullmatch(r"[0-9A-F]{2}(?::[0-9A-F]{2}){5}", cleaned):
+                parsed["mac_address"] = cleaned
+                break
         return parsed
 
     @staticmethod

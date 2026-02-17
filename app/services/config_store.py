@@ -6,7 +6,23 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Base, Computer, ComputerPrinterLink, NetworkConfig, PrinterDevice
+from app.models import AppSetting, Base, Computer, ComputerPrinterLink, NetworkConfig, PrinterDevice
+
+
+DEFAULT_IGNORE_PREFIXES = ["RustDesk", "Microsoft", "Fax", "AnyDesk", "Foxit"]
+IGNORE_PREFIXES_KEY = "device.ignore_prefixes"
+ENV_SETTING_KEYS = [
+    "API_URL",
+    "USER_TOKEN",
+    "DATABASE_URL",
+    "WS_URL",
+    "WS_AUTO_CONNECT",
+    "WEBHOOK_MODE",
+    "WEBHOOK_LISTEN_PATH",
+    "TEST_IP",
+    "TEST_USER",
+    "TEST_PASSWORD",
+]
 
 
 @dataclass
@@ -15,6 +31,8 @@ class DashboardConfigPayload:
     computers: list[dict[str, Any]]
     printers: list[dict[str, Any]]
     links: list[dict[str, int]]
+    env_overrides: dict[str, str]
+    device_filters: dict[str, Any]
 
 
 class ConfigStore:
@@ -30,7 +48,9 @@ class ConfigStore:
             row = session.get(NetworkConfig, 1)
             if row is None:
                 session.add(NetworkConfig(id=1))
-                session.commit()
+            if session.get(AppSetting, IGNORE_PREFIXES_KEY) is None:
+                session.add(AppSetting(key=IGNORE_PREFIXES_KEY, value=",".join(DEFAULT_IGNORE_PREFIXES)))
+            session.commit()
 
     def get_dashboard_payload(self) -> DashboardConfigPayload:
         with self.session_factory() as session:
@@ -43,6 +63,8 @@ class ConfigStore:
             computers = session.execute(select(Computer).order_by(Computer.name.asc())).scalars().all()
             printers = session.execute(select(PrinterDevice).order_by(PrinterDevice.name.asc())).scalars().all()
             links = session.execute(select(ComputerPrinterLink)).scalars().all()
+            env_overrides = self.get_env_overrides()
+            ignored_prefixes = self.get_ignore_printer_prefixes()
 
             return DashboardConfigPayload(
                 network={
@@ -75,6 +97,8 @@ class ConfigStore:
                     for row in printers
                 ],
                 links=[{"computer_id": row.computer_id, "printer_id": row.printer_id} for row in links],
+                env_overrides=env_overrides,
+                device_filters={"ignore_printer_prefixes": ignored_prefixes},
             )
 
     def save_network(self, payload: dict[str, Any]) -> None:
@@ -158,6 +182,57 @@ class ConfigStore:
                 session.add(ComputerPrinterLink(computer_id=computer_id, printer_id=printer_id))
             session.commit()
         return len(set(valid_links))
+
+    def get_ignore_printer_prefixes(self) -> list[str]:
+        value = self.get_setting(IGNORE_PREFIXES_KEY, ",".join(DEFAULT_IGNORE_PREFIXES))
+        prefixes = [part.strip() for part in str(value).split(",")]
+        return [item for item in prefixes if item]
+
+    def save_ignore_printer_prefixes(self, value: str) -> list[str]:
+        raw = str(value or "").strip()
+        self.set_setting(IGNORE_PREFIXES_KEY, raw)
+        return self.get_ignore_printer_prefixes()
+
+    def get_env_overrides(self) -> dict[str, str]:
+        result: dict[str, str] = {}
+        with self.session_factory() as session:
+            for env_key in ENV_SETTING_KEYS:
+                row = session.get(AppSetting, f"env.{env_key}")
+                result[env_key] = row.value if row else ""
+        return result
+
+    def save_env_overrides(self, payload: dict[str, Any]) -> dict[str, str]:
+        with self.session_factory() as session:
+            for env_key in ENV_SETTING_KEYS:
+                if env_key not in payload:
+                    continue
+                setting_key = f"env.{env_key}"
+                value = str(payload.get(env_key, "") or "").strip()
+                row = session.get(AppSetting, setting_key)
+                if row is None:
+                    row = AppSetting(key=setting_key, value=value)
+                    session.add(row)
+                else:
+                    row.value = value
+            session.commit()
+        return self.get_env_overrides()
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self.session_factory() as session:
+            row = session.get(AppSetting, key)
+            if row is None:
+                return default
+            return str(row.value or "")
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.session_factory() as session:
+            row = session.get(AppSetting, key)
+            if row is None:
+                row = AppSetting(key=key, value=str(value))
+                session.add(row)
+            else:
+                row.value = str(value)
+            session.commit()
 
 
 def _to_int(value: Any, default: int = 0) -> int:
