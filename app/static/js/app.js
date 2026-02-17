@@ -428,7 +428,7 @@ async function loadDevices(forceRefresh = false) {
           </label>
         </td>
         <td>
-          <button class="name-counter-trigger" data-counter-trigger="1" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
+          <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
         </td>
         <td>${d.ip || "-"}</td>
         <td>${d.port_name || "-"}</td>
@@ -447,8 +447,9 @@ async function loadDevices(forceRefresh = false) {
 
   body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const titlePrefix = "Counter + Status";
-      showResultModalLoading(`${titlePrefix} - ${btn.dataset.ip}`);
+      const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
+      const title = `Counter + Status - ${printerName} (${btn.dataset.ip})`;
+      showResultModalLoading(title);
       const [counterResult, statusResult] = await Promise.all([
         runAction(btn.dataset.ip, "counter", { silent: true }),
         runAction(btn.dataset.ip, "status", { silent: true }),
@@ -457,7 +458,7 @@ async function loadDevices(forceRefresh = false) {
       if (!modal || modal.hidden) return;
       if (!counterResult.ok && !statusResult.ok) {
         showResultModalError(
-          `${titlePrefix} - ${btn.dataset.ip}`,
+          title,
           counterResult.error || statusResult.error || "Request failed"
         );
         return;
@@ -472,7 +473,7 @@ async function loadDevices(forceRefresh = false) {
         status_data: statusPayload.status_data || {},
         html: counterPayload.html || "",
       };
-      showResultModal(`${titlePrefix} - ${btn.dataset.ip}`, dataView);
+      showResultModal(title, dataView);
     });
   });
 
