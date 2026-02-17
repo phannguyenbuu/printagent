@@ -3,7 +3,13 @@
 {% block content %}
 <section class="panel">
   <div class="panel-head">
-    <h3>Devices</h3>
+    <div class="panel-head-title">
+      <h3>Devices</h3>
+      <label class="inline-check">
+        <input id="valid-printer-only" type="checkbox" />
+        Valid printer only
+      </label>
+    </div>
     <span>Device inventory loaded from backend API and local Windows printers</span>
   </div>
   <div class="table-wrap">

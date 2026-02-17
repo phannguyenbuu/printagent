@@ -227,6 +227,20 @@ body {
   font-size: 12px;
 }
 
+.panel-head-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .bars {
   display: flex;
   align-items: end;

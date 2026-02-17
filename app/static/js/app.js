@@ -213,10 +213,16 @@ function setRowEnabled(row, enabled) {
   });
 }
 
+function getDeviceFilterMode() {
+  const validOnlyInput = document.getElementById("valid-printer-only");
+  return validOnlyInput?.checked ? "valid_only" : "all";
+}
+
 async function loadDevices(forceRefresh = false) {
   const body = document.getElementById("device-table-body");
   if (!body) return;
-  const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
+  const mode = getDeviceFilterMode();
+  const url = forceRefresh ? `/api/devices?refresh=1&mode=${mode}` : `/api/devices?mode=${mode}`;
   const data = await jsonFetch(url);
   const devices = data.devices || [];
   if (!devices.length) {
@@ -334,6 +340,24 @@ async function loadDevices(forceRefresh = false) {
       if (s) s.checked = statusOn;
     } catch (_e) {}
   }
+}
+
+async function initDevicesPage() {
+  const validOnlyInput = document.getElementById("valid-printer-only");
+  if (validOnlyInput && !validOnlyInput.dataset.bound) {
+    validOnlyInput.dataset.bound = "1";
+    try {
+      const cfg = await jsonFetch("/api/dashboard/config");
+      const mode = String(cfg?.device_filters?.filter_mode || "all");
+      validOnlyInput.checked = mode === "valid_only";
+    } catch (_e) {
+      validOnlyInput.checked = false;
+    }
+    validOnlyInput.addEventListener("change", () => {
+      loadDevices(true).catch(() => {});
+    });
+  }
+  await loadDevices();
 }
 
 const dashboardState = {
@@ -715,7 +739,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "analytics") loadOverview().catch(() => {});
   if (page === "devices") {
     loadOverview().catch(() => {});
-    loadDevices();
+    initDevicesPage().catch(() => {});
   }
   const refresh = document.getElementById("refresh-btn");
   if (refresh) {
@@ -724,10 +748,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadDashboardConfig();
       } else if (page === "devices") {
         loadOverview().catch(() => {});
-        try {
-          await jsonFetch("/api/devices/refresh", { method: "POST" });
-        } catch (_e) {}
-        loadDevices();
+        loadDevices(true).catch(() => {});
       } else {
         loadOverview().catch(() => {});
       }
