@@ -218,6 +218,23 @@ function getDeviceFilterMode() {
   return validOnlyInput?.checked ? "valid_only" : "all";
 }
 
+function isValidPrinterName(name) {
+  const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
+  const lowered = String(name || "").trim().toLowerCase();
+  if (!lowered) return true;
+  return !blockedPrefixes.some((prefix) => lowered.startsWith(prefix));
+}
+
+function applyValidPrinterFilter() {
+  const body = document.getElementById("device-table-body");
+  if (!body) return;
+  const validOnly = getDeviceFilterMode() === "valid_only";
+  body.querySelectorAll("tr[data-printer-name]").forEach((row) => {
+    const name = row.dataset.printerName || "";
+    row.style.display = validOnly && !isValidPrinterName(name) ? "none" : "";
+  });
+}
+
 async function loadDevices(forceRefresh = false) {
   const body = document.getElementById("device-table-body");
   if (!body) return;
@@ -230,8 +247,7 @@ async function loadDevices(forceRefresh = false) {
         </div>
       </td>
     </tr>`;
-  const mode = getDeviceFilterMode();
-  const url = forceRefresh ? `/api/devices?refresh=1&mode=${mode}` : `/api/devices?mode=${mode}`;
+  const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
   const data = await jsonFetch(url);
   const devices = data.devices || [];
   if (!devices.length) {
@@ -247,7 +263,7 @@ async function loadDevices(forceRefresh = false) {
       const isControllableSource = ["api", "test"].includes(String(d.source || "").toLowerCase());
       const canMachineControl = canQuery && isControllableSource;
       return `
-      <tr>
+      <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
         <td>
           <label class="mini-switch">
             <input type="checkbox" data-row-checker="enable" data-machine-control="${canMachineControl ? "1" : "0"}" data-ip="${d.ip || ""}" checked />
@@ -349,6 +365,8 @@ async function loadDevices(forceRefresh = false) {
       if (s) s.checked = statusOn;
     } catch (_e) {}
   }
+
+  applyValidPrinterFilter();
 }
 
 async function initDevicesPage() {
@@ -363,7 +381,7 @@ async function initDevicesPage() {
       validOnlyInput.checked = false;
     }
     validOnlyInput.addEventListener("change", () => {
-      loadDevices(true).catch(() => {});
+      applyValidPrinterFilter();
     });
   }
   await loadDevices();
