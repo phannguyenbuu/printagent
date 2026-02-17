@@ -229,12 +229,14 @@ async function loadDevices(forceRefresh = false) {
       const hasIp = Boolean(d.ip);
       const isRicoh = String(d.type || "").toLowerCase() === "ricoh";
       const canQuery = hasIp && isRicoh;
+      const isControllableSource = ["api", "test"].includes(String(d.source || "").toLowerCase());
+      const canMachineControl = canQuery && isControllableSource;
       const canControl = hasIp;
       return `
       <tr>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="enable" data-ip="${d.ip || ""}" ${canControl ? "checked" : "disabled"} />
+            <input type="checkbox" data-row-checker="enable" data-machine-control="${canMachineControl ? "1" : "0"}" data-ip="${d.ip || ""}" ${canControl ? "checked" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -283,6 +285,11 @@ async function loadDevices(forceRefresh = false) {
       const isChecked = inp.checked;
       const kind = inp.dataset.rowChecker;
       const row = inp.closest("tr");
+      const canMachineControl = inp.dataset.machineControl === "1";
+      if (kind === "enable" && !canMachineControl) {
+        setRowEnabled(row, isChecked);
+        return;
+      }
       let action = "";
       if (kind === "enable") action = isChecked ? "enable_machine" : "lock_machine";
       if (kind === "counter") action = isChecked ? "log_counter_start" : "log_counter_stop";
