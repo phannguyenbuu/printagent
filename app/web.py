@@ -66,6 +66,19 @@ def _extract_ip(value: str) -> str:
     return match.group(1) if match else ""
 
 
+def _normalize_ipv4(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.fullmatch(r"(\d{1,3})(?:\.(\d{1,3})){3}", text)
+    if not match:
+        return ""
+    parts = text.split(".")
+    if any(int(part) > 255 for part in parts):
+        return ""
+    return ".".join(str(int(part)) for part in parts)
+
+
 def _extract_port_link_id(port_name: str) -> str:
     text = str(port_name or "").strip()
     if not text:
@@ -259,7 +272,8 @@ $ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortMonitor
         port_info = port_map.get(port_name, {})
         host_addr = str(port_info.get("PrinterHostAddress", "") or "")
         port_monitor = str(port_info.get("PortMonitor", "") or "")
-        ip = host_addr or _extract_ip(port_name)
+        # Read printer IP directly from PrinterHostAddress.
+        ip = _normalize_ipv4(host_addr)
 
         connection_type = "unknown"
         upper_port = port_name.upper()
