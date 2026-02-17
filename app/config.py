@@ -43,6 +43,9 @@ class AppConfig:
         env_map: list[tuple[str, str, str]] = [
             ("API_URL", "api_url", "str"),
             ("USER_TOKEN", "user_token", "str"),
+            ("DATABASE_URL", "database_url", "str"),
+            ("WEBHOOK_MODE", "webhook.mode", "str"),
+            ("WEBHOOK_LISTEN_PATH", "webhook.listen_path", "str"),
             ("WS_URL", "ws.url", "str"),
             ("WS_TOKEN", "ws.token", "str"),
             ("WS_AUTO_CONNECT", "ws.auto_connect", "bool"),
@@ -89,3 +92,7 @@ class AppConfig:
     @property
     def user_token(self) -> str:
         return self.get_string("user_token", "")
+
+    @property
+    def database_url(self) -> str:
+        return self.get_string("database_url", "sqlite:///storage/data/agent_config.db")

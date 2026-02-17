@@ -13,7 +13,11 @@ python -m app.main
 Web UI (mac dinh):
 
 - URL: `http://127.0.0.1:5000/dashboard`
-- Tabs: Overview, Device Manager, Counter Trend, Config
+- Tabs: Config, Device Manager, Counter Trend
+- Dashboard now includes:
+  - ENV runtime snapshot (loaded from `.env`)
+  - Network printer config profile
+  - Computer list, printer list, and many-to-many cross mapping
 - Menu thao tac trong tab Device Manager bam sat `-test`: `1,3,4,5,6,7,8`
 
 Flask runtime can be configured in `.env`:
@@ -39,6 +43,9 @@ Preferred: configure in `.env`:
 WS_URL=ws://main-server:9000/ws/agent
 WS_TOKEN=
 WS_AUTO_CONNECT=true
+DATABASE_URL=sqlite:///storage/data/agent_config.db
+WEBHOOK_MODE=listen
+WEBHOOK_LISTEN_PATH=/api/update/receive-text
 ```
 
 You can still configure in `config.yaml`:

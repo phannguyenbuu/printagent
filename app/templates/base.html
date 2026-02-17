@@ -20,10 +20,9 @@
           </div>
         </div>
         <nav class="side-nav">
-          <a class="side-link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+          <a class="side-link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a class="side-link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
           <a class="side-link {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Analytics</a>
-          <a class="side-link {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">Settings</a>
         </nav>
       </aside>
 
@@ -39,10 +38,9 @@
         </header>
 
         <div class="nav-tabs">
-          <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Overview</a>
+          <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Device Manager</a>
           <a class="tab {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Counter Trend</a>
-          <a class="tab {% if active_tab == 'settings' %}active{% endif %}" href="{{ url_for('settings') }}">Config</a>
         </div>
 
         {% block content %}{% endblock %}

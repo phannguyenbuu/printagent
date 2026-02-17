@@ -22,6 +22,25 @@ function makePath(values, width, height, pad) {
     .join(" ");
 }
 
+function jsonString(value) {
+  return JSON.stringify(value, null, 2);
+}
+
+async function jsonFetch(url, options = {}) {
+  const res = await fetch(url, options);
+  let body = {};
+  try {
+    body = await res.json();
+  } catch (_e) {
+    body = {};
+  }
+  if (!res.ok) {
+    const message = body.error || body.message || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+  return body;
+}
+
 function renderTrendChart(el, labels, seriesA, seriesB, seriesC) {
   if (!el) return;
   const width = 900;
@@ -70,8 +89,7 @@ function renderBars(el, labels, a, b, c) {
 }
 
 async function loadOverview() {
-  const res = await fetch("/api/overview");
-  const data = await res.json();
+  const data = await jsonFetch("/api/overview");
   const stats = data.stats || {};
   const trend = data.trend || {};
   const alerts = data.alerts || [];
@@ -154,39 +172,28 @@ async function runAction(ip, action, options = {}) {
   };
 
   try {
-    const res = await fetch("/api/devices/action", {
+    const data = await jsonFetch("/api/devices/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ip, action }),
     });
-    let data = {};
-    try {
-      data = await res.json();
-    } catch (_e) {
-      data = { ok: false, error: `HTTP ${res.status}` };
-    }
-    if (!res.ok && data.ok === undefined) data.ok = false;
-
     if (data.ok) {
-      if (out) out.textContent = JSON.stringify(data, null, 2);
+      if (out) out.textContent = jsonString(data);
       if (!out && !silent) {
         const msg = data.message || `${action} succeeded`;
         alert(msg);
       }
       return data;
     }
-
-    const friendly = simplifyError(data.error || `HTTP ${res.status}`);
+    const friendly = simplifyError(data.error || "Unknown error");
     if (out) out.textContent = friendly;
     if (!out && !silent) alert(friendly);
-    if (data.error) console.error(`[${action}] raw error for ${ip}:`, data.error);
-    return { ...data, ok: false, error: friendly, raw_error: data.error || null };
+    return { ...data, ok: false, error: friendly };
   } catch (err) {
     const friendly = simplifyError(err?.message || err);
     if (out) out.textContent = friendly;
     if (!out && !silent) alert(friendly);
-    console.error(`[${action}] network error for ${ip}:`, err);
-    return { ok: false, error: friendly, raw_error: String(err || "") };
+    return { ok: false, error: friendly };
   }
 }
 
@@ -202,8 +209,7 @@ function setRowEnabled(row, enabled) {
 async function loadDevices() {
   const body = document.getElementById("device-table-body");
   if (!body) return;
-  const res = await fetch("/api/devices");
-  const data = await res.json();
+  const data = await jsonFetch("/api/devices");
   const devices = data.devices || [];
   if (!devices.length) {
     body.innerHTML = `<tr><td colspan="11">No devices found.</td></tr>`;
@@ -290,7 +296,6 @@ async function loadDevices() {
     setRowEnabled(enableInput.closest("tr"), !enableInput.disabled && enableInput.checked);
   });
 
-  // Load current running log state per printer row
   for (const ip of ipSet) {
     try {
       const st = await runAction(ip, "job_status", { silent: true });
@@ -309,21 +314,315 @@ async function loadDevices() {
   }
 }
 
+const dashboardState = {
+  env: {},
+  network: {},
+  computers: [],
+  printers: [],
+  links: [],
+};
+
+function setDashboardMessage(text) {
+  const out = document.getElementById("dashboard-config-output");
+  if (out) out.textContent = text;
+}
+
+function renderEnvGrid(envPayload) {
+  const root = document.getElementById("env-config-grid");
+  if (!root) return;
+  const keys = Object.keys(envPayload || {});
+  if (!keys.length) {
+    root.innerHTML = `<div class="hint">No env values available.</div>`;
+    return;
+  }
+  root.innerHTML = keys
+    .map(
+      (key) => `
+      <div class="env-item">
+        <div class="env-key">${key}</div>
+        <div class="env-value">${envPayload[key] ?? ""}</div>
+      </div>`
+    )
+    .join("");
+}
+
+function renderNetworkForm(networkPayload) {
+  const form = document.getElementById("network-config-form");
+  if (!form) return;
+  ["subnet_mask", "gateway", "dns_primary", "dns_secondary", "snmp_community", "snmp_port", "timeout_seconds"].forEach(
+    (key) => {
+      if (!form.elements[key]) return;
+      form.elements[key].value = networkPayload[key] ?? "";
+    }
+  );
+}
+
+function renderComputersTable(computers) {
+  const body = document.getElementById("computers-body");
+  if (!body) return;
+  if (!computers.length) {
+    body.innerHTML = `<tr><td colspan="4">No computers configured.</td></tr>`;
+    return;
+  }
+  body.innerHTML = computers
+    .map(
+      (row) => `
+      <tr>
+        <td>${row.name}</td>
+        <td>${row.ip || "-"}</td>
+        <td>${row.department || "-"}</td>
+        <td><button class="btn action alt js-delete-computer" data-id="${row.id}">Delete</button></td>
+      </tr>`
+    )
+    .join("");
+}
+
+function renderPrintersTable(printers) {
+  const body = document.getElementById("printers-body");
+  if (!body) return;
+  if (!printers.length) {
+    body.innerHTML = `<tr><td colspan="5">No printers configured.</td></tr>`;
+    return;
+  }
+  body.innerHTML = printers
+    .map(
+      (row) => `
+      <tr>
+        <td>${row.name}</td>
+        <td>${row.ip || "-"}</td>
+        <td>${row.model || "-"}</td>
+        <td>${row.location || "-"}</td>
+        <td><button class="btn action alt js-delete-printer" data-id="${row.id}">Delete</button></td>
+      </tr>`
+    )
+    .join("");
+}
+
+function buildLinkKey(computerId, printerId) {
+  return `${computerId}:${printerId}`;
+}
+
+function renderLinkMatrix(computers, printers, links) {
+  const table = document.getElementById("link-matrix");
+  if (!table) return;
+  const thead = table.querySelector("thead");
+  const tbody = table.querySelector("tbody");
+  if (!thead || !tbody) return;
+  if (!computers.length || !printers.length) {
+    thead.innerHTML = "";
+    tbody.innerHTML = `<tr><td>Need at least 1 computer and 1 printer to map.</td></tr>`;
+    return;
+  }
+
+  const selected = new Set((links || []).map((row) => buildLinkKey(row.computer_id, row.printer_id)));
+  thead.innerHTML = `
+    <tr>
+      <th>Computer \\ Printer</th>
+      ${printers.map((printer) => `<th>${printer.name}</th>`).join("")}
+    </tr>`;
+
+  tbody.innerHTML = computers
+    .map((computer) => {
+      return `
+        <tr>
+          <td><strong>${computer.name}</strong><br /><span class="hint">${computer.ip || "-"}</span></td>
+          ${printers
+            .map((printer) => {
+              const key = buildLinkKey(computer.id, printer.id);
+              const checked = selected.has(key) ? "checked" : "";
+              return `
+                <td>
+                  <label class="mini-switch">
+                    <input type="checkbox" data-link-check="1" data-computer-id="${computer.id}" data-printer-id="${printer.id}" ${checked} />
+                    <span class="mini-slider"></span>
+                  </label>
+                </td>`;
+            })
+            .join("")}
+        </tr>`;
+    })
+    .join("");
+}
+
+function collectLinkPayload() {
+  const nodes = document.querySelectorAll('input[data-link-check="1"]:checked');
+  return Array.from(nodes).map((node) => ({
+    computer_id: Number(node.dataset.computerId || 0),
+    printer_id: Number(node.dataset.printerId || 0),
+  }));
+}
+
+function bindDashboardActions() {
+  const networkForm = document.getElementById("network-config-form");
+  const computerForm = document.getElementById("computer-form");
+  const printerForm = document.getElementById("printer-form");
+  const saveLinksBtn = document.getElementById("save-links-btn");
+  const computersBody = document.getElementById("computers-body");
+  const printersBody = document.getElementById("printers-body");
+
+  if (networkForm && !networkForm.dataset.bound) {
+    networkForm.dataset.bound = "1";
+    networkForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = {
+        subnet_mask: networkForm.elements.subnet_mask.value,
+        gateway: networkForm.elements.gateway.value,
+        dns_primary: networkForm.elements.dns_primary.value,
+        dns_secondary: networkForm.elements.dns_secondary.value,
+        snmp_community: networkForm.elements.snmp_community.value,
+        snmp_port: Number(networkForm.elements.snmp_port.value || 161),
+        timeout_seconds: Number(networkForm.elements.timeout_seconds.value || 10),
+      };
+      try {
+        await jsonFetch("/api/dashboard/network", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        setDashboardMessage("Saved network config.");
+      } catch (err) {
+        setDashboardMessage(`Save network config failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (computerForm && !computerForm.dataset.bound) {
+    computerForm.dataset.bound = "1";
+    computerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = {
+        name: computerForm.elements.name.value,
+        ip: computerForm.elements.ip.value,
+        department: computerForm.elements.department.value,
+      };
+      try {
+        await jsonFetch("/api/dashboard/computers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        computerForm.reset();
+        await loadDashboardConfig();
+        setDashboardMessage("Added computer.");
+      } catch (err) {
+        setDashboardMessage(`Add computer failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (printerForm && !printerForm.dataset.bound) {
+    printerForm.dataset.bound = "1";
+    printerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = {
+        name: printerForm.elements.name.value,
+        ip: printerForm.elements.ip.value,
+        model: printerForm.elements.model.value,
+        location: printerForm.elements.location.value,
+      };
+      try {
+        await jsonFetch("/api/dashboard/printers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        printerForm.reset();
+        await loadDashboardConfig();
+        setDashboardMessage("Added printer.");
+      } catch (err) {
+        setDashboardMessage(`Add printer failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (saveLinksBtn && !saveLinksBtn.dataset.bound) {
+    saveLinksBtn.dataset.bound = "1";
+    saveLinksBtn.addEventListener("click", async () => {
+      const payload = { links: collectLinkPayload() };
+      try {
+        const resp = await jsonFetch("/api/dashboard/links", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        setDashboardMessage(`Saved mapping: ${resp.total_links} links.`);
+      } catch (err) {
+        setDashboardMessage(`Save mapping failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (computersBody && !computersBody.dataset.bound) {
+    computersBody.dataset.bound = "1";
+    computersBody.addEventListener("click", async (event) => {
+      const btn = event.target.closest(".js-delete-computer");
+      if (!btn) return;
+      try {
+        await jsonFetch(`/api/dashboard/computers/${btn.dataset.id}`, { method: "DELETE" });
+        await loadDashboardConfig();
+        setDashboardMessage("Deleted computer.");
+      } catch (err) {
+        setDashboardMessage(`Delete computer failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (printersBody && !printersBody.dataset.bound) {
+    printersBody.dataset.bound = "1";
+    printersBody.addEventListener("click", async (event) => {
+      const btn = event.target.closest(".js-delete-printer");
+      if (!btn) return;
+      try {
+        await jsonFetch(`/api/dashboard/printers/${btn.dataset.id}`, { method: "DELETE" });
+        await loadDashboardConfig();
+        setDashboardMessage("Deleted printer.");
+      } catch (err) {
+        setDashboardMessage(`Delete printer failed: ${err.message}`);
+      }
+    });
+  }
+}
+
+async function loadDashboardConfig() {
+  try {
+    const data = await jsonFetch("/api/dashboard/config");
+    dashboardState.env = data.env || {};
+    dashboardState.network = data.network || {};
+    dashboardState.computers = data.computers || [];
+    dashboardState.printers = data.printers || [];
+    dashboardState.links = data.links || [];
+
+    renderEnvGrid(dashboardState.env);
+    renderNetworkForm(dashboardState.network);
+    renderComputersTable(dashboardState.computers);
+    renderPrintersTable(dashboardState.printers);
+    renderLinkMatrix(dashboardState.computers, dashboardState.printers, dashboardState.links);
+  } catch (err) {
+    setDashboardMessage(`Load dashboard config failed: ${err.message}`);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const page = document.body.dataset.page;
-  if (["dashboard", "analytics"].includes(page)) loadOverview();
+  if (page === "dashboard") {
+    bindDashboardActions();
+    loadDashboardConfig();
+  }
+  if (page === "analytics") loadOverview().catch(() => {});
   if (page === "devices") {
-    loadOverview();
+    loadOverview().catch(() => {});
     loadDevices();
   }
   const refresh = document.getElementById("refresh-btn");
   if (refresh) {
     refresh.addEventListener("click", () => {
-      if (page === "devices") {
-        loadOverview();
+      if (page === "dashboard") {
+        loadDashboardConfig();
+      } else if (page === "devices") {
+        loadOverview().catch(() => {});
         loadDevices();
       } else {
-        loadOverview();
+        loadOverview().catch(() => {});
       }
     });
   }

@@ -5,7 +5,6 @@ import logging
 import re
 import subprocess
 import threading
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,9 @@ from typing import Any
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 from app.config import AppConfig
+from app.db import create_session_factory
 from app.modules.ricoh.service import RicohService
+from app.services.config_store import ConfigStore
 from app.services.api_client import APIClient, Printer
 from app.services.updater import AutoUpdater
 from app.services.ws_client import WSClient
@@ -23,6 +24,23 @@ LOGGER = logging.getLogger(__name__)
 HISTORY_FILE = Path("storage/data/live_overview_history.csv")
 COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
 STATUS_LOG_FILE = Path("storage/data/log_status.csv")
+
+
+def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
+    return {
+        "API_URL": config.api_url,
+        "USER_TOKEN": config.user_token,
+        "DATABASE_URL": config.database_url,
+        "WS_URL": config.get_string("ws.url"),
+        "WS_AUTO_CONNECT": str(config.get_bool("ws.auto_connect", False)).lower(),
+        "UPDATE_AUTO_APPLY": str(updater.auto_apply).lower(),
+        "UPDATE_DEFAULT_COMMAND": updater.default_command,
+        "WEBHOOK_MODE": config.get_string("webhook.mode", "listen") or "listen",
+        "WEBHOOK_LISTEN_PATH": config.get_string("webhook.listen_path", "/api/update/receive-text") or "/api/update/receive-text",
+        "UPDATE_WEBHOOK_TOKEN_SET": "yes" if bool(updater.webhook_token) else "no",
+        "TEST_IP": config.get_string("test.ip"),
+        "TEST_USER": config.get_string("test.user"),
+    }
 
 
 def _load_printers(api_client: APIClient) -> list[Printer]:
@@ -369,6 +387,9 @@ def _stop_job(jobs: dict[str, dict[str, Any]], key: str) -> tuple[bool, str]:
 def create_app(config_path: str = "config.yaml") -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     config = AppConfig.load(config_path)
+    session_factory = create_session_factory(config.database_url)
+    config_store = ConfigStore(session_factory)
+    config_store.create_tables()
     api_client = APIClient(config)
     ricoh_service = RicohService(api_client)
     updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1])
@@ -391,6 +412,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     app.config["RICOH_SERVICE"] = ricoh_service
     app.config["WS_CLIENT"] = ws_client
     app.config["UPDATER"] = updater
+    app.config["CONFIG_STORE"] = config_store
     app.config["LOG_JOBS"] = {"counter": {}, "status": {}}
 
     if config.get_bool("ws.auto_connect", False) and ws_client.is_configured():
@@ -403,7 +425,71 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.get("/dashboard")
     def dashboard() -> Any:
-        return render_template("dashboard.html", active_tab="dashboard", page_title="Device Overview")
+        return render_template("dashboard.html", active_tab="dashboard", page_title="Config")
+
+    @app.get("/api/dashboard/config")
+    def api_dashboard_config() -> Any:
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        app_cfg: AppConfig = app.config["APP_CONFIG"]
+        payload = store.get_dashboard_payload()
+        return jsonify(
+            {
+                "env": _env_snapshot(app_cfg, updater),
+                "network": payload.network,
+                "computers": payload.computers,
+                "printers": payload.printers,
+                "links": payload.links,
+            }
+        )
+
+    @app.post("/api/dashboard/network")
+    def api_dashboard_network() -> Any:
+        body = request.get_json(silent=True) or {}
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        store.save_network(body)
+        return jsonify({"ok": True})
+
+    @app.post("/api/dashboard/computers")
+    def api_dashboard_add_computer() -> Any:
+        body = request.get_json(silent=True) or {}
+        if not str(body.get("name", "")).strip():
+            return jsonify({"ok": False, "error": "Missing computer name"}), 400
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        row = store.add_computer(body)
+        return jsonify({"ok": True, "computer": row})
+
+    @app.delete("/api/dashboard/computers/<int:computer_id>")
+    def api_dashboard_remove_computer(computer_id: int) -> Any:
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        if not store.remove_computer(computer_id):
+            return jsonify({"ok": False, "error": "Computer not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.post("/api/dashboard/printers")
+    def api_dashboard_add_printer() -> Any:
+        body = request.get_json(silent=True) or {}
+        if not str(body.get("name", "")).strip():
+            return jsonify({"ok": False, "error": "Missing printer name"}), 400
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        row = store.add_printer(body)
+        return jsonify({"ok": True, "printer": row})
+
+    @app.delete("/api/dashboard/printers/<int:printer_id>")
+    def api_dashboard_remove_printer(printer_id: int) -> Any:
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        if not store.remove_printer(printer_id):
+            return jsonify({"ok": False, "error": "Printer not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.put("/api/dashboard/links")
+    def api_dashboard_replace_links() -> Any:
+        body = request.get_json(silent=True) or {}
+        links = body.get("links", [])
+        if not isinstance(links, list):
+            return jsonify({"ok": False, "error": "links must be a list"}), 400
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        total = store.replace_links(links)
+        return jsonify({"ok": True, "total_links": total})
 
     @app.get("/devices")
     def devices() -> Any:
@@ -415,15 +501,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.get("/settings")
     def settings() -> Any:
-        app_cfg: AppConfig = app.config["APP_CONFIG"]
-        return render_template(
-            "settings.html",
-            active_tab="settings",
-            page_title="System Settings",
-            api_url=app_cfg.api_url,
-            test_ip=app_cfg.get_string("test.ip"),
-            test_user=app_cfg.get_string("test.user"),
-        )
+        return redirect(url_for("dashboard"))
 
     @app.get("/api/overview")
     def api_overview() -> Any:
@@ -625,6 +703,18 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.post("/api/update/check")
     def api_update_check() -> Any:
+        mode = config.get_string("webhook.mode", "listen").strip().lower() or "listen"
+        if mode == "listen":
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "message": "Webhook is in listen mode; use webhook endpoint to receive update signals",
+                        "status": updater.status(),
+                    }
+                ),
+                400,
+            )
         body = request.get_json(silent=True) or {}
         version = str(body.get("version", "")).strip()
         command = str(body.get("command", "")).strip()
@@ -634,6 +724,10 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.post("/api/update/receive-text")
     def api_update_receive_text() -> Any:
+        mode = config.get_string("webhook.mode", "listen").strip().lower() or "listen"
+        if mode != "listen":
+            return jsonify({"ok": False, "error": f"Webhook mode is '{mode}', not listen"}), 400
+
         token = request.headers.get("X-Update-Token", "").strip()
         expected = updater.webhook_token
         if expected and token != expected:

@@ -1,66 +1,122 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="stats-grid">
-  <article class="stat-card">
-    <div class="stat-label">Total Devices</div>
-    <div id="stat-total" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Ricoh Devices</div>
-    <div id="stat-ricoh" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Active</div>
-    <div id="stat-active" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Offline</div>
-    <div id="stat-offline" class="stat-value">--</div>
-  </article>
+<section class="panel">
+  <div class="panel-head">
+    <h3>ENV Runtime Config</h3>
+    <span>All values below are loaded from .env</span>
+  </div>
+  <div id="env-config-grid" class="env-grid">
+    <div class="hint">Loading...</div>
+  </div>
 </section>
 
-<section class="stats-grid">
-  <article class="stat-card">
-    <div class="stat-label">Total Photocopy Pages</div>
-    <div id="stat-copier-total" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Total Print Pages</div>
-    <div id="stat-print-total" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Total Scanner Pages</div>
-    <div id="stat-scan-total" class="stat-value">--</div>
-  </article>
-  <article class="stat-card">
-    <div class="stat-label">Data Source</div>
-    <div class="stat-value">Live</div>
-  </article>
+<section class="panel">
+  <div class="panel-head">
+    <h3>Network Printer Profile</h3>
+    <span>Default config for network printers</span>
+  </div>
+  <form id="network-config-form" class="settings-grid">
+    <label>Subnet Mask
+      <input name="subnet_mask" placeholder="255.255.255.0" />
+    </label>
+    <label>Gateway
+      <input name="gateway" placeholder="192.168.1.1" />
+    </label>
+    <label>DNS Primary
+      <input name="dns_primary" placeholder="8.8.8.8" />
+    </label>
+    <label>DNS Secondary
+      <input name="dns_secondary" placeholder="1.1.1.1" />
+    </label>
+    <label>SNMP Community
+      <input name="snmp_community" placeholder="public" />
+    </label>
+    <label>SNMP Port
+      <input type="number" name="snmp_port" placeholder="161" />
+    </label>
+    <label>Timeout (seconds)
+      <input type="number" name="timeout_seconds" placeholder="10" />
+    </label>
+    <div>
+      <button type="submit" class="btn ghost">Save Network Config</button>
+    </div>
+  </form>
 </section>
 
-<section class="panel-grid">
+<section class="panel-grid dashboard-config-grid">
   <article class="panel">
     <div class="panel-head">
-      <h3>Energy Consumption</h3>
-      <span>Photocopy / Print / Scanner</span>
+      <h3>Computers</h3>
+      <span>Clients using shared printers</span>
     </div>
-    <div id="bar-chart" class="bars"></div>
+    <form id="computer-form" class="inline-form">
+      <input name="name" placeholder="Computer name" required />
+      <input name="ip" placeholder="IP address" />
+      <input name="department" placeholder="Department" />
+      <button type="submit" class="btn ghost">Add Computer</button>
+    </form>
+    <div class="table-wrap">
+      <table class="device-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>IP</th>
+            <th>Department</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="computers-body">
+          <tr><td colspan="4">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </article>
   <article class="panel">
     <div class="panel-head">
-      <h3>Current Usage Trend</h3>
-      <span>Last 7 days</span>
+      <h3>Printers</h3>
+      <span>Network printer inventory</span>
     </div>
-    <svg id="trend-chart" class="trend-svg" viewBox="0 0 540 250" preserveAspectRatio="none"></svg>
+    <form id="printer-form" class="inline-form">
+      <input name="name" placeholder="Printer name" required />
+      <input name="ip" placeholder="IP address" />
+      <input name="model" placeholder="Model" />
+      <input name="location" placeholder="Location" />
+      <button type="submit" class="btn ghost">Add Printer</button>
+    </form>
+    <div class="table-wrap">
+      <table class="device-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>IP</th>
+            <th>Model</th>
+            <th>Location</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="printers-body">
+          <tr><td colspan="5">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </article>
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h3>Alert Summary</h3>
-    <span>Machine warning overview</span>
+    <h3>Computer x Printer Mapping</h3>
+    <span>Many-to-many cross links</span>
   </div>
-  <div id="alerts" class="alert-list"></div>
+  <div class="table-wrap">
+    <table id="link-matrix" class="device-table">
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="mapping-actions">
+    <button id="save-links-btn" class="btn ghost">Save Mapping</button>
+  </div>
+  <pre id="dashboard-config-output" class="json-output"></pre>
 </section>
 {% endblock %}

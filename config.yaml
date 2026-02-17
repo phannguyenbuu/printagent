@@ -1,5 +1,6 @@
 api_url: "http://localhost:8080/api"
 user_token: ""
+database_url: "sqlite:///storage/data/agent_config.db"
 
 app:
   port: "3000"
@@ -15,3 +16,7 @@ ws:
   url: ""  # example: ws://main-server:9000/ws/agent
   token: ""
   auto_connect: false
+
+webhook:
+  mode: "listen"
+  listen_path: "/api/update/receive-text"

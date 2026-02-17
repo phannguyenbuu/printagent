@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 .env
 storage/data/*.csv
+storage/data/*.db
