@@ -10,8 +10,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
   </head>
   <body data-page="{{ active_tab }}">
-    <div class="layout-shell">
+    <div class="layout-shell" id="layout-shell">
       <aside class="sidebar">
+        <button id="nav-close" class="nav-close" type="button" aria-label="Close menu">×</button>
         <div class="brand">
           <div class="brand-dot"></div>
           <div>
@@ -33,6 +34,7 @@
             <p>Ricoh photocopy, print, and scanner monitoring</p>
           </div>
           <div class="topbar-actions">
+            <button id="nav-toggle" class="btn ghost menu-toggle" type="button" aria-label="Open menu">☰</button>
             <button id="refresh-btn" class="btn ghost">Refresh Data</button>
           </div>
         </header>
@@ -46,6 +48,7 @@
         {% block content %}{% endblock %}
       </main>
     </div>
+    <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="Close menu"></button>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   </body>
 </html>

@@ -757,7 +757,26 @@ async function loadDashboardConfig() {
   }
 }
 
+function bindMobileMenu() {
+  const shell = document.getElementById("layout-shell");
+  const openBtn = document.getElementById("nav-toggle");
+  const closeBtn = document.getElementById("nav-close");
+  const overlay = document.getElementById("sidebar-overlay");
+  if (!shell || !openBtn || !closeBtn || !overlay) return;
+  if (openBtn.dataset.bound) return;
+  const closeMenu = () => shell.classList.remove("nav-open");
+  const openMenu = () => shell.classList.add("nav-open");
+  openBtn.dataset.bound = "1";
+  openBtn.addEventListener("click", openMenu);
+  closeBtn.addEventListener("click", closeMenu);
+  overlay.addEventListener("click", closeMenu);
+  shell.querySelectorAll(".side-link").forEach((link) => {
+    link.addEventListener("click", closeMenu);
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  bindMobileMenu();
   const page = document.body.dataset.page;
   if (page === "dashboard") {
     bindDashboardActions();
