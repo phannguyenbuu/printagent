@@ -782,15 +782,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_devices() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
-        configured_mode = store.get_device_filter_mode()
         refresh_arg = str(request.args.get("refresh", "") or "").strip().lower()
         force_refresh = refresh_arg in {"1", "true", "yes", "y"}
-        mode_arg = str(request.args.get("mode", "") or "").strip().lower()
-        mode = mode_arg if mode_arg in {"all", "valid_only"} else configured_mode
+        mode = "all"
 
         if not force_refresh:
             cached_devices, cached_at = _load_devices_cache()
-            if cached_devices and mode == configured_mode:
+            if cached_devices:
                 return jsonify(
                     {
                         "devices": cached_devices,
@@ -801,8 +799,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 )
 
         payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
-        if mode == configured_mode:
-            _save_devices_cache(payload)
+        _save_devices_cache(payload)
         return jsonify(
             {
                 "devices": payload,
@@ -816,7 +813,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_devices_refresh() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
-        mode = store.get_device_filter_mode()
+        mode = "all"
         payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _save_devices_cache(payload)

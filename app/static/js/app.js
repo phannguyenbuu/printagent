@@ -221,6 +221,15 @@ function getDeviceFilterMode() {
 async function loadDevices(forceRefresh = false) {
   const body = document.getElementById("device-table-body");
   if (!body) return;
+  body.innerHTML = `
+    <tr>
+      <td colspan="12">
+        <div class="table-loading">
+          <span class="spinner"></span>
+          <span>Loading printers...</span>
+        </div>
+      </td>
+    </tr>`;
   const mode = getDeviceFilterMode();
   const url = forceRefresh ? `/api/devices?refresh=1&mode=${mode}` : `/api/devices?mode=${mode}`;
   const data = await jsonFetch(url);
