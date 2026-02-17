@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models import AppSetting, Base, Computer, ComputerPrinterLink, NetworkConfig, PrinterDevice
 
 
-DEFAULT_IGNORE_PREFIXES = ["RustDesk", "Microsoft", "Fax", "AnyDesk", "Foxit"]
+DEFAULT_IGNORE_PREFIXES = ["RustDesk", "RuskDesk", "Microsoft", "Fax", "AnyDesk", "Foxit"]
 IGNORE_PREFIXES_KEY = "device.ignore_prefixes"
+FILTER_MODE_KEY = "device.filter_mode"
+FILTER_MODE_ALL = "all"
+FILTER_MODE_VALID = "valid_only"
 ENV_SETTING_KEYS = [
     "API_URL",
     "USER_TOKEN",
@@ -50,6 +53,8 @@ class ConfigStore:
                 session.add(NetworkConfig(id=1))
             if session.get(AppSetting, IGNORE_PREFIXES_KEY) is None:
                 session.add(AppSetting(key=IGNORE_PREFIXES_KEY, value=",".join(DEFAULT_IGNORE_PREFIXES)))
+            if session.get(AppSetting, FILTER_MODE_KEY) is None:
+                session.add(AppSetting(key=FILTER_MODE_KEY, value=FILTER_MODE_ALL))
             session.commit()
 
     def get_dashboard_payload(self) -> DashboardConfigPayload:
@@ -65,6 +70,7 @@ class ConfigStore:
             links = session.execute(select(ComputerPrinterLink)).scalars().all()
             env_overrides = self.get_env_overrides()
             ignored_prefixes = self.get_ignore_printer_prefixes()
+            filter_mode = self.get_device_filter_mode()
 
             return DashboardConfigPayload(
                 network={
@@ -98,7 +104,10 @@ class ConfigStore:
                 ],
                 links=[{"computer_id": row.computer_id, "printer_id": row.printer_id} for row in links],
                 env_overrides=env_overrides,
-                device_filters={"ignore_printer_prefixes": ignored_prefixes},
+                device_filters={
+                    "ignore_printer_prefixes": ignored_prefixes,
+                    "filter_mode": filter_mode,
+                },
             )
 
     def save_network(self, payload: dict[str, Any]) -> None:
@@ -192,6 +201,19 @@ class ConfigStore:
         raw = str(value or "").strip()
         self.set_setting(IGNORE_PREFIXES_KEY, raw)
         return self.get_ignore_printer_prefixes()
+
+    def get_device_filter_mode(self) -> str:
+        value = self.get_setting(FILTER_MODE_KEY, FILTER_MODE_ALL).strip().lower()
+        if value not in {FILTER_MODE_ALL, FILTER_MODE_VALID}:
+            return FILTER_MODE_ALL
+        return value
+
+    def save_device_filter_mode(self, value: str) -> str:
+        mode = str(value or "").strip().lower()
+        if mode not in {FILTER_MODE_ALL, FILTER_MODE_VALID}:
+            mode = FILTER_MODE_ALL
+        self.set_setting(FILTER_MODE_KEY, mode)
+        return mode
 
     def get_env_overrides(self) -> dict[str, str]:
         result: dict[str, str] = {}

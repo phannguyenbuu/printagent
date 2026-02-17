@@ -49,11 +49,17 @@
 <section class="panel">
   <div class="panel-head">
     <h3>Device Filters</h3>
-    <span>Ignore printer names by prefix (comma-separated)</span>
+    <span>Show all printers or only valid printers (name not starting with blocked prefixes)</span>
   </div>
   <form id="device-filter-form" class="settings-grid">
+    <label>Filter Mode
+      <select name="filter_mode">
+        <option value="all">All printers</option>
+        <option value="valid_only">Valid only</option>
+      </select>
+    </label>
     <label>Ignored Prefixes
-      <input name="ignore_printer_prefixes" placeholder="RustDesk,Microsoft,Fax,AnyDesk,Foxit" />
+      <input name="ignore_printer_prefixes" placeholder="RustDesk,RuskDesk,Microsoft,Fax,AnyDesk,Foxit" />
     </label>
     <div>
       <button type="submit" class="btn ghost">Save Device Filters</button>

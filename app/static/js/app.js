@@ -231,12 +231,11 @@ async function loadDevices(forceRefresh = false) {
       const canQuery = hasIp && isRicoh;
       const isControllableSource = ["api", "test"].includes(String(d.source || "").toLowerCase());
       const canMachineControl = canQuery && isControllableSource;
-      const canControl = hasIp;
       return `
       <tr>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="enable" data-machine-control="${canMachineControl ? "1" : "0"}" data-ip="${d.ip || ""}" ${canControl ? "checked" : "disabled"} />
+            <input type="checkbox" data-row-checker="enable" data-machine-control="${canMachineControl ? "1" : "0"}" data-ip="${d.ip || ""}" checked />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -255,13 +254,13 @@ async function loadDevices(forceRefresh = false) {
         </td>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${canControl ? "" : "disabled"} />
+            <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
         <td>
           <label class="mini-switch">
-            <input type="checkbox" data-row-checker="status" data-ip="${d.ip || ""}" ${canControl ? "" : "disabled"} />
+            <input type="checkbox" data-row-checker="status" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -277,14 +276,17 @@ async function loadDevices(forceRefresh = false) {
   const ipSet = new Set();
   rowCheckerInputs.forEach((inp) => {
     const ip = inp.dataset.ip || "";
-    if (!ip) return;
-    ipSet.add(ip);
+    if (ip) ipSet.add(ip);
     if (inp.dataset.bound) return;
     inp.dataset.bound = "1";
     inp.addEventListener("change", async () => {
       const isChecked = inp.checked;
       const kind = inp.dataset.rowChecker;
       const row = inp.closest("tr");
+      if (!ip) {
+        if (kind === "enable") setRowEnabled(row, isChecked);
+        return;
+      }
       const canMachineControl = inp.dataset.machineControl === "1";
       if (kind === "enable" && !canMachineControl) {
         setRowEnabled(row, isChecked);
@@ -381,8 +383,12 @@ function renderDeviceFilterForm(deviceFilters) {
   const form = document.getElementById("device-filter-form");
   if (!form) return;
   const values = deviceFilters?.ignore_printer_prefixes || [];
+  const mode = String(deviceFilters?.filter_mode || "all");
   if (form.elements.ignore_printer_prefixes) {
     form.elements.ignore_printer_prefixes.value = Array.isArray(values) ? values.join(",") : "";
+  }
+  if (form.elements.filter_mode) {
+    form.elements.filter_mode.value = mode === "valid_only" ? "valid_only" : "all";
   }
 }
 
@@ -564,6 +570,7 @@ function bindDashboardActions() {
       event.preventDefault();
       const payload = {
         ignore_printer_prefixes: deviceFilterForm.elements.ignore_printer_prefixes.value,
+        filter_mode: deviceFilterForm.elements.filter_mode?.value || "all",
       };
       try {
         await jsonFetch("/api/dashboard/device-filters", {

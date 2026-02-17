@@ -328,7 +328,9 @@ def _scan_devices_payload(
     api_client: APIClient,
     ricoh_service: RicohService,
     ignored_prefixes: list[str],
+    filter_mode: str = "all",
 ) -> list[dict[str, Any]]:
+    valid_only = str(filter_mode or "").strip().lower() == "valid_only"
     api_devices = _load_printers(api_client)
     local_devices = _load_local_windows_printers()
     neighbor_mac_map = _load_neighbor_mac_map()
@@ -350,7 +352,7 @@ def _scan_devices_payload(
             "source": "api",
         }
         for p in api_devices
-        if p.ip and not _should_ignore_device(p.name, ignored_prefixes)
+        if p.ip and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
     ]
 
     if not payload:
@@ -378,7 +380,7 @@ def _scan_devices_payload(
         key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
         if key in existing_keys:
             continue
-        if _should_ignore_device(str(local.get("name", "")), ignored_prefixes):
+        if valid_only and _should_ignore_device(str(local.get("name", "")), ignored_prefixes):
             continue
         ip = str(local.get("ip", "") or "")
         if ip:
@@ -692,11 +694,21 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_dashboard_device_filters() -> Any:
         body = request.get_json(silent=True) or {}
         prefixes = str(body.get("ignore_printer_prefixes", "") or "")
+        filter_mode = str(body.get("filter_mode", "all") or "all")
         store: ConfigStore = app.config["CONFIG_STORE"]
         saved = store.save_ignore_printer_prefixes(prefixes)
+        mode_saved = store.save_device_filter_mode(filter_mode)
         if DEVICES_CACHE_FILE.exists():
             DEVICES_CACHE_FILE.unlink(missing_ok=True)
-        return jsonify({"ok": True, "device_filters": {"ignore_printer_prefixes": saved}})
+        return jsonify(
+            {
+                "ok": True,
+                "device_filters": {
+                    "ignore_printer_prefixes": saved,
+                    "filter_mode": mode_saved,
+                },
+            }
+        )
 
     @app.post("/api/dashboard/network")
     def api_dashboard_network() -> Any:
@@ -770,21 +782,33 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_devices() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
+        configured_mode = store.get_device_filter_mode()
         refresh_arg = str(request.args.get("refresh", "") or "").strip().lower()
         force_refresh = refresh_arg in {"1", "true", "yes", "y"}
+        mode_arg = str(request.args.get("mode", "") or "").strip().lower()
+        mode = mode_arg if mode_arg in {"all", "valid_only"} else configured_mode
 
         if not force_refresh:
             cached_devices, cached_at = _load_devices_cache()
-            if cached_devices:
-                return jsonify({"devices": cached_devices, "cached": True, "cached_at": cached_at})
+            if cached_devices and mode == configured_mode:
+                return jsonify(
+                    {
+                        "devices": cached_devices,
+                        "cached": True,
+                        "cached_at": cached_at,
+                        "filter_mode": mode,
+                    }
+                )
 
-        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes)
-        _save_devices_cache(payload)
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
+        if mode == configured_mode:
+            _save_devices_cache(payload)
         return jsonify(
             {
                 "devices": payload,
                 "cached": False,
                 "cached_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "filter_mode": mode,
             }
         )
 
@@ -792,10 +816,11 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_devices_refresh() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
-        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes)
+        mode = store.get_device_filter_mode()
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _save_devices_cache(payload)
-        return jsonify({"ok": True, "devices": payload, "cached": False, "cached_at": now})
+        return jsonify({"ok": True, "devices": payload, "cached": False, "cached_at": now, "filter_mode": mode})
 
     @app.post("/api/devices/action")
     def api_action() -> Any:
