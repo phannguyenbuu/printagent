@@ -383,7 +383,7 @@ body {
   background: linear-gradient(180deg, #f7faff 0%, #edf4ff 100%);
   padding: 6px 10px;
   border-radius: 10px;
-  color: #1a4fae;
+  color: #333;
   font-weight: 700;
   text-align: left;
   line-height: 1.2;
@@ -401,7 +401,7 @@ body {
 .name-counter-trigger:hover:not(:disabled) {
   background: linear-gradient(180deg, #eef5ff 0%, #e3eeff 100%);
   border-color: #bfd4ff;
-  color: #18489f;
+  color: #333;
   transform: translateY(-1px);
   box-shadow: 0 3px 8px rgba(40, 92, 185, 0.15);
 }
