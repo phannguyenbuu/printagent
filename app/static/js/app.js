@@ -766,6 +766,11 @@ function bindDashboardActions() {
         TEST_IP: envForm.elements.TEST_IP.value,
         TEST_USER: envForm.elements.TEST_USER.value,
         TEST_PASSWORD: envForm.elements.TEST_PASSWORD.value,
+        POLLING_ENABLED: envForm.elements.POLLING_ENABLED.value,
+        POLLING_URL: envForm.elements.POLLING_URL.value,
+        POLLING_LEAD: envForm.elements.POLLING_LEAD.value,
+        POLLING_TOKEN: envForm.elements.POLLING_TOKEN.value,
+        POLLING_INTERVAL_SECONDS: envForm.elements.POLLING_INTERVAL_SECONDS.value,
       };
       try {
         await jsonFetch("/api/dashboard/env", {

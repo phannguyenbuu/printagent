@@ -20,3 +20,10 @@ ws:
 webhook:
   mode: "listen"
   listen_path: "/api/update/receive-text"
+
+polling:
+  enabled: true
+  url: ""  # example: http://vps-host:8000/api/polling
+  lead: ""
+  token: ""
+  interval_seconds: 60

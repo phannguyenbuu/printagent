@@ -17,6 +17,7 @@ from app.db import create_session_factory
 from app.modules.ricoh.service import RicohService
 from app.services.config_store import ConfigStore
 from app.services.api_client import APIClient, Printer
+from app.services.polling_bridge import PollingBridge
 from app.services.updater import AutoUpdater
 from app.services.ws_client import WSClient
 
@@ -42,6 +43,11 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
         "UPDATE_WEBHOOK_TOKEN_SET": "yes" if bool(updater.webhook_token) else "no",
         "TEST_IP": config.get_string("test.ip"),
         "TEST_USER": config.get_string("test.user"),
+        "POLLING_ENABLED": str(config.get_bool("polling.enabled", True)).lower(),
+        "POLLING_URL": config.get_string("polling.url"),
+        "POLLING_LEAD": config.get_string("polling.lead"),
+        "POLLING_TOKEN": config.get_string("polling.token"),
+        "POLLING_INTERVAL_SECONDS": config.get_string("polling.interval_seconds", "60"),
     }
 
 
@@ -588,6 +594,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     config_store.create_tables()
     api_client = APIClient(config)
     ricoh_service = RicohService(api_client)
+    polling_bridge = PollingBridge(config, api_client, ricoh_service)
     updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1])
 
     def _on_ws_message(message: str) -> None:
@@ -606,6 +613,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     app.config["APP_CONFIG"] = config
     app.config["API_CLIENT"] = api_client
     app.config["RICOH_SERVICE"] = ricoh_service
+    app.config["POLLING_BRIDGE"] = polling_bridge
     app.config["WS_CLIENT"] = ws_client
     app.config["UPDATER"] = updater
     app.config["CONFIG_STORE"] = config_store
@@ -614,6 +622,9 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     if config.get_bool("ws.auto_connect", False) and ws_client.is_configured():
         ok, msg = ws_client.connect()
         LOGGER.info("WebSocket auto-connect: %s (%s)", ok, msg)
+
+    p_ok, p_msg = polling_bridge.start()
+    LOGGER.info("Polling bridge: %s (%s)", p_ok, p_msg)
 
     @app.get("/")
     def index() -> Any:
@@ -900,6 +911,11 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.get("/api/ws/status")
     def api_ws_status() -> Any:
         return jsonify(ws_client.status())
+
+    @app.get("/api/polling/status")
+    def api_polling_status() -> Any:
+        bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        return jsonify(bridge.status())
 
     @app.post("/api/ws/connect")
     def api_ws_connect() -> Any:

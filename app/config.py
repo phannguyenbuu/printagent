@@ -53,6 +53,11 @@ class AppConfig:
             ("TEST_USER", "test.user", "str"),
             ("TEST_PASSWORD", "test.password", "str"),
             ("TEST_POST_SERVER", "test.post_server", "bool"),
+            ("POLLING_ENABLED", "polling.enabled", "bool"),
+            ("POLLING_URL", "polling.url", "str"),
+            ("POLLING_LEAD", "polling.lead", "str"),
+            ("POLLING_TOKEN", "polling.token", "str"),
+            ("POLLING_INTERVAL_SECONDS", "polling.interval_seconds", "str"),
         ]
         for env_name, key, value_type in env_map:
             env_value = os.getenv(env_name)
