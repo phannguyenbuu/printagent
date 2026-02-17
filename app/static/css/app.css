@@ -253,6 +253,10 @@ body {
   font-size: 13px;
 }
 
+.table-loading[hidden] {
+  display: none !important;
+}
+
 .spinner {
   width: 16px;
   height: 16px;
@@ -375,22 +379,36 @@ body {
 }
 
 .name-counter-trigger {
-  border: none;
-  background: transparent;
-  padding: 0;
-  color: #1f5fd6;
+  border: 1px solid #d7e3fb;
+  background: linear-gradient(180deg, #f7faff 0%, #edf4ff 100%);
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: #1a4fae;
   font-weight: 700;
   text-align: left;
+  line-height: 1.2;
+  transition: all 0.18s ease;
   cursor: pointer;
 }
 
 .name-counter-trigger:disabled {
-  color: var(--muted);
+  color: #8a96aa;
+  border-color: #dfe5ef;
+  background: #f5f7fb;
   cursor: not-allowed;
 }
 
 .name-counter-trigger:hover:not(:disabled) {
-  text-decoration: underline;
+  background: linear-gradient(180deg, #eef5ff 0%, #e3eeff 100%);
+  border-color: #bfd4ff;
+  color: #18489f;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(40, 92, 185, 0.15);
+}
+
+.name-counter-trigger:focus-visible {
+  outline: 2px solid #8eb5ff;
+  outline-offset: 2px;
 }
 
 .mini-switch {

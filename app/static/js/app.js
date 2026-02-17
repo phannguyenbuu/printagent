@@ -29,6 +29,7 @@ function jsonString(value) {
 function formatCounterResult(payload) {
   const data = payload || {};
   const counter = data.counter_data || {};
+  const status = data.status_data || {};
   const lines = [];
   lines.push("COUNTER DATA");
   lines.push(`printer_name: ${data.printer_name || "-"}`);
@@ -55,6 +56,16 @@ function formatCounterResult(payload) {
   orderedKeys.forEach((key) => {
     lines.push(`  - ${key}: ${counter[key] || "0"}`);
   });
+  lines.push("");
+  lines.push("status_data:");
+  const statusKeys = Object.keys(status).sort();
+  if (!statusKeys.length) {
+    lines.push("  - (empty)");
+  } else {
+    statusKeys.forEach((key) => {
+      lines.push(`  - ${key}: ${status[key]}`);
+    });
+  }
   const htmlRaw = String(data.html || "");
   if (htmlRaw) {
     const preview = htmlRaw.replace(/\s+/g, " ").slice(0, 1200);
@@ -436,17 +447,31 @@ async function loadDevices(forceRefresh = false) {
 
   body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const action = "counter";
-      const titlePrefix = "Counter";
+      const titlePrefix = "Counter + Status";
       showResultModalLoading(`${titlePrefix} - ${btn.dataset.ip}`);
-      const result = await runAction(btn.dataset.ip, action, { silent: true });
+      const [counterResult, statusResult] = await Promise.all([
+        runAction(btn.dataset.ip, "counter", { silent: true }),
+        runAction(btn.dataset.ip, "status", { silent: true }),
+      ]);
       const modal = document.getElementById("result-modal");
       if (!modal || modal.hidden) return;
-      if (!result.ok) {
-        showResultModalError(`${titlePrefix} - ${btn.dataset.ip}`, result.error || "Request failed");
+      if (!counterResult.ok && !statusResult.ok) {
+        showResultModalError(
+          `${titlePrefix} - ${btn.dataset.ip}`,
+          counterResult.error || statusResult.error || "Request failed"
+        );
         return;
       }
-      const dataView = result.payload || result;
+      const counterPayload = counterResult.payload || {};
+      const statusPayload = statusResult.payload || {};
+      const dataView = {
+        printer_name: counterPayload.printer_name || statusPayload.printer_name || "Local Printer",
+        ip: counterPayload.ip || statusPayload.ip || btn.dataset.ip || "",
+        timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
+        counter_data: counterPayload.counter_data || {},
+        status_data: statusPayload.status_data || {},
+        html: counterPayload.html || "",
+      };
       showResultModal(`${titlePrefix} - ${btn.dataset.ip}`, dataView);
     });
   });
