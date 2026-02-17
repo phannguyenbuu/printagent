@@ -364,7 +364,7 @@ async function loadDevices(forceRefresh = false) {
       const dataView =
         action === "status"
           ? result.payload?.status_data || result.payload || result
-          : result.payload?.counter_data || result.payload || result;
+          : result.payload || result;
       showResultModal(`${titlePrefix} - ${btn.dataset.ip}`, dataView);
     });
   });

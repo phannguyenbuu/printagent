@@ -212,26 +212,26 @@ class RicohService:
     @staticmethod
     def parse_counter(html: str) -> dict[str, str]:
         patterns = {
-            "total": r"Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "copier_bw": r"Copier</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "printer_bw": r"Printer</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "fax_bw": r"Fax</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "send_tx_total_bw": r"Send/TX Total</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "send_tx_total_color": r"Send/TX Total</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "fax_transmission_total": r"Fax Transmission</div>.*?Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "scanner_send_bw": r"Scanner Send</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "scanner_send_color": r"Scanner Send</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "coverage_copier_bw": r"Copier</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
-            "coverage_printer_bw": r"Printer</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
-            "coverage_fax_bw": r"Fax</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>%</td>",
-            "a3_dlt": r"A3/DLT</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
-            "duplex": r"Duplex</td>\s*<td[^>]*>:</td>\s*<td[^>]*>(\d+)</td>",
+            "total": r"Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "copier_bw": r"Copier</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "printer_bw": r"Printer</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "fax_bw": r"Fax</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "send_tx_total_bw": r"Send/TX Total</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "send_tx_total_color": r"Send/TX Total</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "fax_transmission_total": r"Fax Transmission</div>.*?Total</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "scanner_send_bw": r"Scanner Send</div>.*?Black &amp; White</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "scanner_send_color": r"Scanner Send</div>.*?Color</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "coverage_copier_bw": r"Copier</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>\s*<td[^>]*>%</td>",
+            "coverage_printer_bw": r"Printer</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>\s*<td[^>]*>%</td>",
+            "coverage_fax_bw": r"Fax</td>.*?B &amp; W Coverage</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>\s*<td[^>]*>%</td>",
+            "a3_dlt": r"A3/DLT</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
+            "duplex": r"Duplex</td>\s*<td[^>]*>:</td>\s*<td[^>]*>([\d,\s]+)</td>",
         }
-        parsed: dict[str, str] = {}
+        parsed: dict[str, str] = {key: "" for key in patterns}
         for key, pattern in patterns.items():
             match = re.search(pattern, html, re.S)
             if match:
-                parsed[key] = match.group(1).strip()
+                parsed[key] = re.sub(r"[^\d]", "", match.group(1))
         return parsed
 
     def _login(self, session: requests.Session, printer: Printer) -> None:
