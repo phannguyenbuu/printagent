@@ -26,6 +26,45 @@ function jsonString(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function formatCounterResult(payload) {
+  const data = payload || {};
+  const counter = data.counter_data || {};
+  const lines = [];
+  lines.push("COUNTER DATA");
+  lines.push(`printer_name: ${data.printer_name || "-"}`);
+  lines.push(`ip: ${data.ip || "-"}`);
+  lines.push(`timestamp: ${data.timestamp || "-"}`);
+  lines.push("");
+  lines.push("counter_data:");
+  const orderedKeys = [
+    "total",
+    "copier_bw",
+    "printer_bw",
+    "fax_bw",
+    "send_tx_total_bw",
+    "send_tx_total_color",
+    "fax_transmission_total",
+    "scanner_send_bw",
+    "scanner_send_color",
+    "coverage_copier_bw",
+    "coverage_printer_bw",
+    "coverage_fax_bw",
+    "a3_dlt",
+    "duplex",
+  ];
+  orderedKeys.forEach((key) => {
+    lines.push(`  - ${key}: ${counter[key] || "0"}`);
+  });
+  const htmlRaw = String(data.html || "");
+  if (htmlRaw) {
+    const preview = htmlRaw.replace(/\s+/g, " ").slice(0, 1200);
+    lines.push("");
+    lines.push(`html_preview(${preview.length}/${htmlRaw.length}):`);
+    lines.push(preview + (htmlRaw.length > preview.length ? " ..." : ""));
+  }
+  return lines.join("\n");
+}
+
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, options);
   let body = {};
@@ -213,7 +252,11 @@ function showResultModal(title, payload) {
   modalTitle.textContent = title;
   modalLoading.hidden = true;
   modalBody.hidden = false;
-  modalBody.textContent = jsonString(payload || {});
+  if (String(title || "").toLowerCase().includes("counter")) {
+    modalBody.textContent = formatCounterResult(payload);
+  } else {
+    modalBody.textContent = jsonString(payload || {});
+  }
   modal.hidden = false;
 }
 
@@ -286,7 +329,7 @@ async function loadDevices(forceRefresh = false) {
   if (!body) return;
   body.innerHTML = `
     <tr>
-      <td colspan="12">
+      <td colspan="9">
         <div class="table-loading">
           <span class="spinner"></span>
           <span>Loading printers...</span>
@@ -297,12 +340,11 @@ async function loadDevices(forceRefresh = false) {
   const data = await jsonFetch(url);
   const devices = data.devices || [];
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="12">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
     .map((d) => {
-      const ok = ["active", "online", "ready"].includes(String(d.status || "").toLowerCase());
       const hasIp = Boolean(d.ip);
       const isRicoh = String(d.type || "").toLowerCase() === "ricoh";
       const canQuery = hasIp && isRicoh;
@@ -321,23 +363,13 @@ async function loadDevices(forceRefresh = false) {
         <td>${d.port_name || "-"}</td>
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
-        <td><span class="badge ${ok ? "ok" : "warn"}">${d.status || "unknown"}</span></td>
         <td>${d.source || "-"}</td>
-        <td>
-          <button class="btn action" data-ip="${d.ip || ""}" data-action="status" ${canQuery ? "" : "disabled"}>Status</button>
-        </td>
         <td>
           <button class="btn action alt" data-ip="${d.ip || ""}" data-action="counter" ${canQuery ? "" : "disabled"}>Counter</button>
         </td>
         <td>
           <label class="mini-switch">
             <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
-            <span class="mini-slider"></span>
-          </label>
-        </td>
-        <td>
-          <label class="mini-switch">
-            <input type="checkbox" data-row-checker="status" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
             <span class="mini-slider"></span>
           </label>
         </td>
@@ -348,11 +380,11 @@ async function loadDevices(forceRefresh = false) {
   body.querySelectorAll("button[data-ip][data-action]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const action = String(btn.dataset.action || "");
-      if (!["counter", "status"].includes(action)) {
+      if (action !== "counter") {
         runAction(btn.dataset.ip, btn.dataset.action);
         return;
       }
-      const titlePrefix = action === "status" ? "Status" : "Counter";
+      const titlePrefix = "Counter";
       showResultModalLoading(`${titlePrefix} - ${btn.dataset.ip}`);
       const result = await runAction(btn.dataset.ip, action, { silent: true });
       const modal = document.getElementById("result-modal");
@@ -361,10 +393,7 @@ async function loadDevices(forceRefresh = false) {
         showResultModalError(`${titlePrefix} - ${btn.dataset.ip}`, result.error || "Request failed");
         return;
       }
-      const dataView =
-        action === "status"
-          ? result.payload?.status_data || result.payload || result
-          : result.payload || result;
+      const dataView = result.payload || result;
       showResultModal(`${titlePrefix} - ${btn.dataset.ip}`, dataView);
     });
   });
@@ -392,7 +421,6 @@ async function loadDevices(forceRefresh = false) {
       let action = "";
       if (kind === "enable") action = isChecked ? "enable_machine" : "lock_machine";
       if (kind === "counter") action = isChecked ? "log_counter_start" : "log_counter_stop";
-      if (kind === "status") action = isChecked ? "log_status_start" : "log_status_stop";
       if (!action) return;
       const result = await runAction(ip, action);
       if (!result.ok) {
@@ -402,9 +430,7 @@ async function loadDevices(forceRefresh = false) {
       if (kind === "enable") {
         if (!isChecked) {
           const counterInp = row?.querySelector('input[data-row-checker="counter"]');
-          const statusInp = row?.querySelector('input[data-row-checker="status"]');
           if (counterInp) counterInp.checked = false;
-          if (statusInp) statusInp.checked = false;
         }
         setRowEnabled(row, isChecked);
       }
@@ -419,16 +445,13 @@ async function loadDevices(forceRefresh = false) {
     try {
       const st = await runAction(ip, "job_status", { silent: true });
       const counterOn = Boolean(st.counter_running);
-      const statusOn = Boolean(st.status_running);
       const e = body.querySelector(`input[data-row-checker="enable"][data-ip="${ip}"]`);
       const c = body.querySelector(`input[data-row-checker="counter"][data-ip="${ip}"]`);
-      const s = body.querySelector(`input[data-row-checker="status"][data-ip="${ip}"]`);
       if (e) {
         e.checked = true;
         setRowEnabled(e.closest("tr"), true);
       }
       if (c) c.checked = counterOn;
-      if (s) s.checked = statusOn;
     } catch (_e) {}
   }
 
