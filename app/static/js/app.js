@@ -450,8 +450,8 @@ async function loadDevices(forceRefresh = false) {
   body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
-      const title = `Counter + Status - ${printerName} (${btn.dataset.ip})`;
-      showResultModalLoading(title, "Loading counter and status...");
+      const baseTitle = `${printerName} (${btn.dataset.ip})`;
+      showResultModalLoading(baseTitle, "Loading counter and status...");
       const [counterResult, statusResult] = await Promise.all([
         runAction(btn.dataset.ip, "counter", { silent: true }),
         runAction(btn.dataset.ip, "status", { silent: true }),
@@ -460,7 +460,7 @@ async function loadDevices(forceRefresh = false) {
       if (!modal || modal.hidden) return;
       if (!counterResult.ok && !statusResult.ok) {
         showResultModalError(
-          title,
+          baseTitle,
           counterResult.error || statusResult.error || "Request failed"
         );
         return;
@@ -475,7 +475,9 @@ async function loadDevices(forceRefresh = false) {
         status_data: statusPayload.status_data || {},
         html: counterPayload.html || "",
       };
-      showResultModal(title, dataView);
+      const timestamp = dataView.timestamp || "-";
+      const finalTitle = `${baseTitle} [${timestamp}]`;
+      showResultModal(finalTitle, dataView);
     });
   });
 
