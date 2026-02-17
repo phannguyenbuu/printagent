@@ -169,25 +169,6 @@ def _resolve_device_machine_ids(service: RicohService, devices: list[Printer]) -
     return mapping
 
 
-def _resolve_single_machine_id(service: RicohService, device: Printer) -> str:
-    ip = str(device.ip or "").strip()
-    if not ip:
-        return ""
-    try:
-        payload = service.process_device_info(device, should_post=False)
-        info = payload.get("device_info", {}) if isinstance(payload, dict) else {}
-        if not isinstance(info, dict):
-            return ""
-        machine_id = str(info.get("machine_id", "") or "").strip()
-        if machine_id:
-            return machine_id
-        mac_address = _normalize_mac(str(info.get("mac_address", "") or ""))
-        return mac_address
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.debug("Cannot resolve machine_id for %s (%s): %s", device.name, ip, exc)
-        return ""
-
-
 def _save_devices_cache(devices: list[dict[str, Any]]) -> None:
     _ensure_parent(DEVICES_CACHE_FILE)
     payload = {
@@ -355,26 +336,6 @@ def _scan_devices_payload(
         if p.ip and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
     ]
 
-    if not payload:
-        test = _test_printer(config)
-        if test.ip:
-            test_machine_id = _resolve_single_machine_id(ricoh_service, test)
-            payload.append(
-                {
-                    "id": 0,
-                    "name": test.name,
-                    "ip": test.ip,
-                    "mac_id": test_machine_id or neighbor_mac_map.get(test.ip, ""),
-                    "type": test.printer_type,
-                    "status": test.status,
-                    "user": test.user,
-                    "port_name": "",
-                    "port_monitor": "",
-                    "connection_type": "ip",
-                    "source": "test",
-                }
-            )
-
     existing_keys = {(d.get("name", ""), d.get("port_name", ""), d.get("ip", "")) for d in payload}
     for local in local_devices:
         key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
@@ -392,17 +353,6 @@ def _scan_devices_payload(
     return payload
 
 
-def _test_printer(config: AppConfig) -> Printer:
-    return Printer(
-        name="Test Printer",
-        ip=config.get_string("test.ip"),
-        user=config.get_string("test.user"),
-        password=config.get_string("test.password"),
-        printer_type="ricoh",
-        status="unknown",
-    )
-
-
 def _to_int(value: str | int | None) -> int:
     if value is None:
         return 0
@@ -412,14 +362,8 @@ def _to_int(value: str | int | None) -> int:
         return 0
 
 
-def _resolve_printer(ip: str, devices: list[Printer], config: AppConfig) -> Printer | None:
-    target = next((p for p in devices if p.ip == ip), None)
-    if target:
-        return target
-    test = _test_printer(config)
-    if test.ip == ip:
-        return test
-    return None
+def _resolve_printer(ip: str, devices: list[Printer]) -> Printer | None:
+    return next((p for p in devices if p.ip == ip), None)
 
 
 def _ensure_parent(path: Path) -> None:
@@ -830,7 +774,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             return jsonify({"ok": False, "error": "Missing action"}), 400
 
         devices = _load_printers(api_client)
-        target = _resolve_printer(ip, devices, config)
+        target = _resolve_printer(ip, devices)
         if not target:
             return jsonify({"ok": False, "error": f"Device {ip} not found"}), 404
 
