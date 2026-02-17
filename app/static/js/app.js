@@ -65,6 +65,37 @@ function formatCounterResult(payload) {
   return lines.join("\n");
 }
 
+function buildCounterHtmlPreview(payload) {
+  const data = payload || {};
+  const rawHtml = String(data.html || "");
+  if (!rawHtml) return "";
+  const ip = String(data.ip || "").trim();
+  const baseTag = ip ? `<base href="http://${ip}/">` : "";
+  let prepared = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+  if (baseTag) {
+    if (/<head[^>]*>/i.test(prepared)) {
+      prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+    } else {
+      prepared = `${baseTag}${prepared}`;
+    }
+  }
+  return prepared;
+}
+
+function setResultModalView(mode) {
+  const summaryBtn = document.getElementById("result-modal-view-summary");
+  const htmlBtn = document.getElementById("result-modal-view-html");
+  const modalBody = document.getElementById("result-modal-body");
+  const htmlFrame = document.getElementById("result-modal-html");
+  if (!summaryBtn || !htmlBtn || !modalBody || !htmlFrame) return;
+  const htmlEnabled = htmlBtn.dataset.enabled === "1";
+  const target = mode === "html" && htmlEnabled ? "html" : "summary";
+  summaryBtn.classList.toggle("active", target === "summary");
+  htmlBtn.classList.toggle("active", target === "html");
+  modalBody.hidden = target !== "summary";
+  htmlFrame.hidden = target !== "html";
+}
+
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, options);
   let body = {};
@@ -247,15 +278,30 @@ function showResultModal(title, payload) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
   const modalLoading = document.getElementById("result-modal-loading");
+  const modalTools = document.getElementById("result-modal-tools");
+  const summaryBtn = document.getElementById("result-modal-view-summary");
+  const htmlBtn = document.getElementById("result-modal-view-html");
   const modalBody = document.getElementById("result-modal-body");
-  if (!modal || !modalTitle || !modalBody || !modalLoading) return;
+  const htmlFrame = document.getElementById("result-modal-html");
+  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalTools || !summaryBtn || !htmlBtn || !htmlFrame) return;
   modalTitle.textContent = title;
   modalLoading.hidden = true;
-  modalBody.hidden = false;
   if (String(title || "").toLowerCase().includes("counter")) {
     modalBody.textContent = formatCounterResult(payload);
+    const htmlPreview = buildCounterHtmlPreview(payload);
+    const htmlReady = Boolean(htmlPreview);
+    htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
+    htmlBtn.disabled = !htmlReady;
+    htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+    modalTools.hidden = false;
+    setResultModalView("summary");
   } else {
     modalBody.textContent = jsonString(payload || {});
+    htmlBtn.dataset.enabled = "0";
+    htmlBtn.disabled = true;
+    htmlFrame.srcdoc = "";
+    modalTools.hidden = true;
+    setResultModalView("summary");
   }
   modal.hidden = false;
 }
@@ -264,11 +310,19 @@ function showResultModalLoading(title) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
   const modalLoading = document.getElementById("result-modal-loading");
+  const modalTools = document.getElementById("result-modal-tools");
+  const htmlBtn = document.getElementById("result-modal-view-html");
   const modalBody = document.getElementById("result-modal-body");
-  if (!modal || !modalTitle || !modalBody || !modalLoading) return;
+  const htmlFrame = document.getElementById("result-modal-html");
+  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalTools || !htmlBtn || !htmlFrame) return;
   modalTitle.textContent = title;
   modalBody.textContent = "";
+  htmlFrame.srcdoc = "";
+  htmlBtn.dataset.enabled = "0";
+  htmlBtn.disabled = true;
+  modalTools.hidden = true;
   modalBody.hidden = true;
+  htmlFrame.hidden = true;
   modalLoading.hidden = false;
   modal.hidden = false;
 }
@@ -282,12 +336,16 @@ function showResultModalError(title, message) {
 function bindResultModal() {
   const modal = document.getElementById("result-modal");
   const closeBtn = document.getElementById("result-modal-close");
-  if (!modal || !closeBtn || closeBtn.dataset.bound) return;
+  const summaryBtn = document.getElementById("result-modal-view-summary");
+  const htmlBtn = document.getElementById("result-modal-view-html");
+  if (!modal || !closeBtn || !summaryBtn || !htmlBtn || closeBtn.dataset.bound) return;
   const close = () => {
     modal.hidden = true;
   };
   closeBtn.dataset.bound = "1";
   closeBtn.addEventListener("click", close);
+  summaryBtn.addEventListener("click", () => setResultModalView("summary"));
+  htmlBtn.addEventListener("click", () => setResultModalView("html"));
   modal.addEventListener("click", (event) => {
     if (event.target === modal) close();
   });
@@ -329,7 +387,7 @@ async function loadDevices(forceRefresh = false) {
   if (!body) return;
   body.innerHTML = `
     <tr>
-      <td colspan="9">
+      <td colspan="8">
         <div class="table-loading">
           <span class="spinner"></span>
           <span>Loading printers...</span>
@@ -340,7 +398,7 @@ async function loadDevices(forceRefresh = false) {
   const data = await jsonFetch(url);
   const devices = data.devices || [];
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="9">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
@@ -358,15 +416,14 @@ async function loadDevices(forceRefresh = false) {
             <span class="mini-slider"></span>
           </label>
         </td>
-        <td>${d.name}</td>
+        <td>
+          <button class="name-counter-trigger" data-counter-trigger="1" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
+        </td>
         <td>${d.ip || "-"}</td>
         <td>${d.port_name || "-"}</td>
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
         <td>${d.source || "-"}</td>
-        <td>
-          <button class="btn action alt" data-ip="${d.ip || ""}" data-action="counter" ${canQuery ? "" : "disabled"}>Counter</button>
-        </td>
         <td>
           <label class="mini-switch">
             <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
@@ -377,13 +434,9 @@ async function loadDevices(forceRefresh = false) {
     })
     .join("");
 
-  body.querySelectorAll("button[data-ip][data-action]").forEach((btn) => {
+  body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const action = String(btn.dataset.action || "");
-      if (action !== "counter") {
-        runAction(btn.dataset.ip, btn.dataset.action);
-        return;
-      }
+      const action = "counter";
       const titlePrefix = "Counter";
       showResultModalLoading(`${titlePrefix} - ${btn.dataset.ip}`);
       const result = await runAction(btn.dataset.ip, action, { silent: true });

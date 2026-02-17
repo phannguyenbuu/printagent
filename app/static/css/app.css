@@ -374,6 +374,25 @@ body {
   color: #c15d00;
 }
 
+.name-counter-trigger {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #1f5fd6;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.name-counter-trigger:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.name-counter-trigger:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
 .mini-switch {
   position: relative;
   display: inline-block;
@@ -589,6 +608,43 @@ body {
   font-size: 24px;
   line-height: 1;
   color: var(--muted);
+}
+
+.modal-tools {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.modal-view-btn {
+  border: 1px solid var(--line);
+  background: #f7fafe;
+  color: #3a4a5f;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modal-view-btn.active {
+  border-color: transparent;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+  color: #fff;
+}
+
+.modal-view-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-html-frame {
+  width: 100%;
+  min-height: 65vh;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
 }
 
 .nav-close {
