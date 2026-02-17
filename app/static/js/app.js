@@ -204,6 +204,30 @@ async function runAction(ip, action, options = {}) {
   }
 }
 
+function showResultModal(title, payload) {
+  const modal = document.getElementById("result-modal");
+  const modalTitle = document.getElementById("result-modal-title");
+  const modalBody = document.getElementById("result-modal-body");
+  if (!modal || !modalTitle || !modalBody) return;
+  modalTitle.textContent = title;
+  modalBody.textContent = jsonString(payload || {});
+  modal.hidden = false;
+}
+
+function bindResultModal() {
+  const modal = document.getElementById("result-modal");
+  const closeBtn = document.getElementById("result-modal-close");
+  if (!modal || !closeBtn || closeBtn.dataset.bound) return;
+  const close = () => {
+    modal.hidden = true;
+  };
+  closeBtn.dataset.bound = "1";
+  closeBtn.addEventListener("click", close);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+}
+
 function setRowEnabled(row, enabled) {
   if (!row) return;
   row.classList.toggle("device-row-disabled", !enabled);
@@ -300,7 +324,15 @@ async function loadDevices(forceRefresh = false) {
     .join("");
 
   body.querySelectorAll("button[data-ip][data-action]").forEach((btn) => {
-    btn.addEventListener("click", () => runAction(btn.dataset.ip, btn.dataset.action));
+    btn.addEventListener("click", async () => {
+      if (btn.dataset.action !== "counter") {
+        runAction(btn.dataset.ip, btn.dataset.action);
+        return;
+      }
+      const result = await runAction(btn.dataset.ip, btn.dataset.action, { silent: true });
+      if (!result.ok) return;
+      showResultModal(`Counter - ${btn.dataset.ip}`, result.payload?.counter_data || result.payload || result);
+    });
   });
 
   const rowCheckerInputs = body.querySelectorAll("input[data-row-checker][data-ip]");
@@ -370,6 +402,7 @@ async function loadDevices(forceRefresh = false) {
 }
 
 async function initDevicesPage() {
+  bindResultModal();
   const validOnlyInput = document.getElementById("valid-printer-only");
   if (validOnlyInput && !validOnlyInput.dataset.bound) {
     validOnlyInput.dataset.bound = "1";
