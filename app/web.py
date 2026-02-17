@@ -790,7 +790,15 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         devices = _load_printers(api_client)
         target = _resolve_printer(ip, devices)
         if not target:
-            return jsonify({"ok": False, "error": f"Device {ip} not found"}), 404
+            # Allow direct actions for locally discovered printers that are not in upstream API list.
+            target = Printer(
+                name="Local Printer",
+                ip=ip,
+                user=config.get_string("test.user"),
+                password=config.get_string("test.password"),
+                printer_type="ricoh",
+                status="unknown",
+            )
 
         counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
         status_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["status"]
