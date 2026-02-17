@@ -207,11 +207,33 @@ async function runAction(ip, action, options = {}) {
 function showResultModal(title, payload) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
+  const modalLoading = document.getElementById("result-modal-loading");
   const modalBody = document.getElementById("result-modal-body");
-  if (!modal || !modalTitle || !modalBody) return;
+  if (!modal || !modalTitle || !modalBody || !modalLoading) return;
   modalTitle.textContent = title;
+  modalLoading.hidden = true;
+  modalBody.hidden = false;
   modalBody.textContent = jsonString(payload || {});
   modal.hidden = false;
+}
+
+function showResultModalLoading(title) {
+  const modal = document.getElementById("result-modal");
+  const modalTitle = document.getElementById("result-modal-title");
+  const modalLoading = document.getElementById("result-modal-loading");
+  const modalBody = document.getElementById("result-modal-body");
+  if (!modal || !modalTitle || !modalBody || !modalLoading) return;
+  modalTitle.textContent = title;
+  modalBody.textContent = "";
+  modalBody.hidden = true;
+  modalLoading.hidden = false;
+  modal.hidden = false;
+}
+
+function showResultModalError(title, message) {
+  const modal = document.getElementById("result-modal");
+  if (!modal) return;
+  showResultModal(title, { ok: false, error: String(message || "Unknown error") });
 }
 
 function bindResultModal() {
@@ -325,13 +347,25 @@ async function loadDevices(forceRefresh = false) {
 
   body.querySelectorAll("button[data-ip][data-action]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (btn.dataset.action !== "counter") {
+      const action = String(btn.dataset.action || "");
+      if (!["counter", "status"].includes(action)) {
         runAction(btn.dataset.ip, btn.dataset.action);
         return;
       }
-      const result = await runAction(btn.dataset.ip, btn.dataset.action, { silent: true });
-      if (!result.ok) return;
-      showResultModal(`Counter - ${btn.dataset.ip}`, result.payload?.counter_data || result.payload || result);
+      const titlePrefix = action === "status" ? "Status" : "Counter";
+      showResultModalLoading(`${titlePrefix} - ${btn.dataset.ip}`);
+      const result = await runAction(btn.dataset.ip, action, { silent: true });
+      const modal = document.getElementById("result-modal");
+      if (!modal || modal.hidden) return;
+      if (!result.ok) {
+        showResultModalError(`${titlePrefix} - ${btn.dataset.ip}`, result.error || "Request failed");
+        return;
+      }
+      const dataView =
+        action === "status"
+          ? result.payload?.status_data || result.payload || result
+          : result.payload?.counter_data || result.payload || result;
+      showResultModal(`${titlePrefix} - ${btn.dataset.ip}`, dataView);
     });
   });
 
