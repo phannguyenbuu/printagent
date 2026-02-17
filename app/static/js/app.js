@@ -317,16 +317,18 @@ function showResultModal(title, payload) {
   modal.hidden = false;
 }
 
-function showResultModalLoading(title) {
+function showResultModalLoading(title, loadingText) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
   const modalLoading = document.getElementById("result-modal-loading");
+  const modalLoadingText = document.getElementById("result-modal-loading-text");
   const modalTools = document.getElementById("result-modal-tools");
   const htmlBtn = document.getElementById("result-modal-view-html");
   const modalBody = document.getElementById("result-modal-body");
   const htmlFrame = document.getElementById("result-modal-html");
-  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalTools || !htmlBtn || !htmlFrame) return;
+  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalLoadingText || !modalTools || !htmlBtn || !htmlFrame) return;
   modalTitle.textContent = title;
+  modalLoadingText.textContent = loadingText || "Loading...";
   modalBody.textContent = "";
   htmlFrame.srcdoc = "";
   htmlBtn.dataset.enabled = "0";
@@ -449,7 +451,7 @@ async function loadDevices(forceRefresh = false) {
     btn.addEventListener("click", async () => {
       const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
       const title = `Counter + Status - ${printerName} (${btn.dataset.ip})`;
-      showResultModalLoading(title);
+      showResultModalLoading(title, "Loading counter and status...");
       const [counterResult, statusResult] = await Promise.all([
         runAction(btn.dataset.ip, "counter", { silent: true }),
         runAction(btn.dataset.ip, "status", { silent: true }),
