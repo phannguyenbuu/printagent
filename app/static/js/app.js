@@ -66,13 +66,6 @@ function formatCounterResult(payload) {
       lines.push(`  - ${key}: ${status[key]}`);
     });
   }
-  const htmlRaw = String(data.html || "");
-  if (htmlRaw) {
-    const preview = htmlRaw.replace(/\s+/g, " ").slice(0, 1200);
-    lines.push("");
-    lines.push(`html_preview(${preview.length}/${htmlRaw.length}):`);
-    lines.push(preview + (htmlRaw.length > preview.length ? " ..." : ""));
-  }
   return lines.join("\n");
 }
 
@@ -297,10 +290,10 @@ function showResultModal(title, payload) {
   if (!modal || !modalTitle || !modalBody || !modalLoading || !modalTools || !summaryBtn || !htmlBtn || !htmlFrame) return;
   modalTitle.textContent = title;
   modalLoading.hidden = true;
-  if (String(title || "").toLowerCase().includes("counter")) {
+  const htmlPreview = buildCounterHtmlPreview(payload);
+  const htmlReady = Boolean(htmlPreview);
+  if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
     modalBody.textContent = formatCounterResult(payload);
-    const htmlPreview = buildCounterHtmlPreview(payload);
-    const htmlReady = Boolean(htmlPreview);
     htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
     htmlBtn.disabled = !htmlReady;
     htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
