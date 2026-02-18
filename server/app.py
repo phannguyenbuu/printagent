@@ -68,6 +68,14 @@ def _parse_timestamp(value: Any) -> datetime:
     text = _to_text(value)
     if not text:
         return datetime.now(timezone.utc)
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:  # noqa: BLE001
+        return datetime.now(timezone.utc)
 
 
 def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
@@ -282,11 +290,12 @@ def _upsert_printer_from_polling(
 ) -> Printer:
     printer_ip = _to_text(ip)
     printer_name_value = _to_text(printer_name) or "Unknown Printer"
+    row = None
     if printer_ip:
         row = session.execute(
             select(Printer).where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == printer_ip).limit(1)
         ).scalar_one_or_none()
-    else:
+    if row is None:
         row = session.execute(
             select(Printer)
             .where(
@@ -294,8 +303,20 @@ def _upsert_printer_from_polling(
                 Printer.lan_uid == lan_uid,
                 Printer.agent_uid == agent_uid,
                 Printer.printer_name == printer_name_value,
+            )
+            .order_by(Printer.updated_at.desc(), Printer.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    if row is None and not printer_ip:
+        row = session.execute(
+            select(Printer)
+            .where(
+                Printer.lead == lead,
+                Printer.lan_uid == lan_uid,
+                Printer.printer_name == printer_name_value,
                 Printer.ip == "",
             )
+            .order_by(Printer.updated_at.desc(), Printer.id.desc())
             .limit(1)
         ).scalar_one_or_none()
     if row is None:
@@ -764,10 +785,31 @@ def create_app() -> Flask:
         with session_factory() as session:
             _refresh_stale_offline(session=session, lead=lead)
             session.commit()
+            latest_stmt = select(Printer.lan_uid).order_by(Printer.updated_at.desc(), Printer.id.desc()).limit(1)
             stmt = select(Printer).order_by(Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc())
             if lead:
+                latest_stmt = latest_stmt.where(Printer.lead == lead)
                 stmt = stmt.where(Printer.lead == lead)
-            rows = session.execute(stmt).scalars().all()
+            latest_lan_uid = session.execute(latest_stmt).scalar_one_or_none()
+            if latest_lan_uid:
+                stmt = stmt.where(Printer.lan_uid == latest_lan_uid)
+            raw_rows = session.execute(stmt).scalars().all()
+            deduped: dict[str, Printer] = {}
+            for r in raw_rows:
+                ip_key = _to_text(r.ip)
+                if ip_key:
+                    key = f"{_to_text(r.lead)}|{_to_text(r.lan_uid)}|ip:{ip_key}"
+                else:
+                    key = f"{_to_text(r.lead)}|{_to_text(r.lan_uid)}|name:{_to_text(r.agent_uid).lower()}:{_to_text(r.printer_name).lower()}"
+                previous = deduped.get(key)
+                if previous is None:
+                    deduped[key] = r
+                    continue
+                prev_updated = previous.updated_at or datetime.fromtimestamp(0, tz=timezone.utc)
+                cur_updated = r.updated_at or datetime.fromtimestamp(0, tz=timezone.utc)
+                if cur_updated >= prev_updated:
+                    deduped[key] = r
+            rows = sorted(deduped.values(), key=lambda x: (_to_text(x.lan_uid), _to_text(x.printer_name), _to_text(x.ip)))
         return jsonify(
             {
                 "rows": [
