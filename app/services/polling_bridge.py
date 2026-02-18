@@ -144,7 +144,10 @@ class PollingBridge:
                     break
                 if not str(printer.ip or "").strip():
                     continue
-                if str(printer.printer_type or "").strip().lower() != "ricoh":
+                printer_type = str(printer.printer_type or "").strip().lower()
+                printer_name = str(printer.name or "").strip().lower()
+                # Local devices often come as "windows-local"; accept brand detection by name too.
+                if "ricoh" not in printer_type and "ricoh" not in printer_name:
                     continue
                 self._last_cycle_ricoh_printers += 1
                 try:
