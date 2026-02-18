@@ -24,9 +24,13 @@
     </div>
   </div>
   <div class="pager">
-    <button id="heatmap-prev">Prev</button>
-    <span id="heatmap-page">1 / 1</span>
-    <button id="heatmap-next">Next</button>
+    <button id="heatmap-prev" aria-label="Previous page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"></path></svg>
+    </button>
+    <div id="heatmap-page" class="pager-pages"></div>
+    <button id="heatmap-next" aria-label="Next page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6.5 15 12l-5.5 5.5"></path></svg>
+    </button>
   </div>
 </section>
 {% endblock %}

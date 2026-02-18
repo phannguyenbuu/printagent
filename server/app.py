@@ -4,9 +4,11 @@ import hashlib
 import logging
 from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
+from werkzeug.utils import secure_filename
 from sqlalchemy import func, select, text
 
 from config import ServerConfig
@@ -26,7 +28,8 @@ from models import (
 
 LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
-ONLINE_STALE_SECONDS = 90
+ONLINE_STALE_SECONDS = 300
+SCAN_UPLOAD_ROOT = Path("storage/uploads/scans")
 COUNTER_KEYS = [
     "total",
     "copier_bw",
@@ -59,6 +62,14 @@ def _to_int(value: Any) -> int | None:
 
 def _to_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _safe_path_token(value: str) -> str:
+    text = _to_text(value)
+    if not text:
+        return "unknown"
+    cleaned = secure_filename(text)
+    return cleaned or "unknown"
 
 
 def _normalize_ipv4(value: str) -> str:
@@ -873,9 +884,9 @@ def create_app() -> Flask:
             for r in raw_rows:
                 ip_key = _to_text(r.ip)
                 if ip_key:
-                    key = f"{_to_text(r.lead)}|{_to_text(r.lan_uid)}|ip:{ip_key}"
+                    key = f"{_to_text(r.lead)}|ip:{ip_key}"
                 else:
-                    key = f"{_to_text(r.lead)}|{_to_text(r.lan_uid)}|name:{_to_text(r.agent_uid).lower()}:{_to_text(r.printer_name).lower()}"
+                    key = f"{_to_text(r.lead)}|name:{_to_text(r.agent_uid).lower()}:{_to_text(r.printer_name).lower()}"
                 previous = deduped.get(key)
                 if previous is None:
                     deduped[key] = r
@@ -1672,6 +1683,73 @@ def create_app() -> Flask:
                 "devices": len(devices),
                 "inserted": inserted,
                 "updated": updated,
+            }
+        )
+
+    @app.post("/api/polling/scan-upload")
+    def ingest_scan_upload() -> Any:
+        lead = _to_text(request.form.get("lead"))
+        if not lead:
+            return jsonify({"ok": False, "error": "Missing lead"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, lead_valid, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+
+        upload = request.files.get("file")
+        if upload is None:
+            return jsonify({"ok": False, "error": "Missing file"}), 400
+
+        original_name = secure_filename(upload.filename or "scan.bin")
+        if not original_name:
+            original_name = "scan.bin"
+
+        lan_uid = _safe_path_token(_to_text(request.form.get("lan_uid")) or "legacy-lan")
+        agent_uid = _safe_path_token(_to_text(request.form.get("agent_uid")) or "legacy-agent")
+        hostname = _to_text(request.form.get("hostname"))
+        local_ip = _to_text(request.form.get("local_ip"))
+        source_path = _to_text(request.form.get("source_path"))
+        fingerprint = _to_text(request.form.get("fingerprint"))
+        event_time = _parse_timestamp(request.form.get("timestamp"))
+
+        date_folder = event_time.astimezone(UI_TZ).strftime("%Y%m%d")
+        target_dir = SCAN_UPLOAD_ROOT / _safe_path_token(lead_valid) / lan_uid / agent_uid / date_folder
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        stamp = event_time.astimezone(UI_TZ).strftime("%H%M%S")
+        digest_seed = f"{fingerprint}|{source_path}|{event_time.isoformat()}|{original_name}"
+        digest = hashlib.sha1(digest_seed.encode("utf-8")).hexdigest()[:10]
+        dest_name = f"{stamp}_{digest}_{original_name}"
+        dest_path = target_dir / dest_name
+        index = 1
+        while dest_path.exists():
+            dest_path = target_dir / f"{stamp}_{digest}_{index}_{original_name}"
+            index += 1
+
+        upload.save(dest_path)
+        file_size = int(dest_path.stat().st_size if dest_path.exists() else 0)
+        relative_path = str(dest_path.as_posix())
+
+        LOGGER.info(
+            "scan-upload: lead=%s lan=%s agent=%s host=%s ip=%s file=%s size=%s source=%s",
+            lead_valid,
+            lan_uid,
+            agent_uid,
+            hostname,
+            local_ip,
+            relative_path,
+            file_size,
+            source_path,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "lead": lead_valid,
+                "lan_uid": lan_uid,
+                "agent_uid": agent_uid,
+                "path": relative_path,
+                "size": file_size,
+                "timestamp": event_time.isoformat(),
             }
         )
 

@@ -60,6 +60,10 @@ class AppConfig:
             ("POLLING_INTERVAL_SECONDS", "polling.interval_seconds", "str"),
             ("POLLING_LAN_UID", "polling.lan_uid", "str"),
             ("POLLING_AGENT_UID", "polling.agent_uid", "str"),
+            ("POLLING_SCAN_ENABLED", "polling.scan_enabled", "bool"),
+            ("POLLING_SCAN_INTERVAL_SECONDS", "polling.scan_interval_seconds", "str"),
+            ("POLLING_SCAN_DIRS", "polling.scan_dirs", "str"),
+            ("POLLING_SCAN_RECURSIVE", "polling.scan_recursive", "bool"),
         ]
         for env_name, key, value_type in env_map:
             env_value = os.getenv(env_name)

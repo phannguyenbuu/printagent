@@ -29,3 +29,7 @@ polling:
   lan_uid: "lan-default"
   agent_uid: "agent-pc-01"
   interval_seconds: 15
+  scan_enabled: true
+  scan_interval_seconds: 1
+  scan_dirs: "storage/scans/inbox"
+  scan_recursive: true

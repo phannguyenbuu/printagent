@@ -75,6 +75,14 @@ This Flask service receives polling data from agents every 60 seconds and stores
 }
 ```
 
+### Scan file ingest
+- `POST /api/polling/scan-upload`
+- Header:
+  - `X-Lead-Token: <token>`
+- Form fields:
+  - `lead`, `lan_uid`, `agent_uid`, `hostname`, `local_ip`, `timestamp`, `source_path`, `fingerprint`
+  - `file` (multipart binary)
+
 ## Notes
 - Default lead mapping is controlled by env `LEAD_KEYS` in format:
   - `leadA:tokenA,leadB:tokenB`

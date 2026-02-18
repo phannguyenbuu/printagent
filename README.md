@@ -94,6 +94,23 @@ Update APIs:
 - `POST /api/update/receive-text` with body `{"text":"UPDATE 0.1.1|git pull --ff-only"}`
   - Optional header: `X-Update-Token` if `UPDATE_WEBHOOK_TOKEN` is set.
 
+## Scan Watcher Upload (Agent -> VPS)
+
+Agent now supports a dedicated scan thread (independent from counter polling):
+
+- Scan loop interval default: `1s`
+- Detect new files from configured scan directories
+- Wait until file is stable, then upload to VPS endpoint `POST /api/polling/scan-upload`
+
+Config keys in `config.yaml` or `.env`:
+
+```dotenv
+POLLING_SCAN_ENABLED=true
+POLLING_SCAN_INTERVAL_SECONDS=1
+POLLING_SCAN_DIRS=storage/scans/inbox
+POLLING_SCAN_RECURSIVE=true
+```
+
 ## Notes
 
 - Binary files in `printerauto/drivers` are untouched.

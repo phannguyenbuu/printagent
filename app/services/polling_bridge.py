@@ -25,6 +25,7 @@ from app.services.api_client import APIClient, Printer
 LOGGER = logging.getLogger(__name__)
 CONTROL_LOG_FILE = Path("storage/data/control_actions.csv")
 LAN_FINGER_FILE = Path("storage/data/.lan_finger.json")
+SCAN_UPLOAD_STATE_FILE = Path("storage/data/scan_upload_state.json")
 
 
 class PollingBridge:
@@ -33,6 +34,7 @@ class PollingBridge:
         self._api_client = api_client
         self._ricoh_service = ricoh_service
         self._thread: threading.Thread | None = None
+        self._scan_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_started_at = ""
         self._last_cycle_at = ""
@@ -48,6 +50,15 @@ class PollingBridge:
         self._applied_controls: dict[str, bool] = {}
         self._control_retry_after: dict[str, datetime] = {}
         self._resolved_lan_uid = ""
+        self._scan_last_cycle_at = ""
+        self._scan_last_upload_at = ""
+        self._scan_last_error = ""
+        self._scan_uploaded_total = 0
+        self._scan_failed_total = 0
+        self._scan_counter_last_by_ip: dict[str, int] = {}
+        self._scan_file_state: dict[str, dict[str, int]] = {}
+        self._scan_uploaded_fingerprints: dict[str, str] = self._load_scan_upload_state()
+        self._scan_lock = threading.Lock()
 
     def is_configured(self) -> bool:
         return bool(self._config.get_string("polling.url").strip()) and bool(self._config.get_string("polling.lead").strip()) and bool(
@@ -83,6 +94,28 @@ class PollingBridge:
         except Exception:  # noqa: BLE001
             return 15
 
+    def scan_enabled(self) -> bool:
+        return self._config.get_bool("polling.scan_enabled", True)
+
+    def scan_interval_seconds(self) -> int:
+        raw = self._config.get_string("polling.scan_interval_seconds", "1").strip()
+        try:
+            value = int(raw)
+            return max(1, value)
+        except Exception:  # noqa: BLE001
+            return 1
+
+    def _scan_dirs(self) -> list[str]:
+        raw = self._config.get_string("polling.scan_dirs", "").strip()
+        if not raw:
+            return ["storage/scans/inbox"]
+        parts = re.split(r"[,;\n]+", raw)
+        cleaned = [str(p).strip() for p in parts if str(p).strip()]
+        return cleaned or ["storage/scans/inbox"]
+
+    def _scan_recursive(self) -> bool:
+        return self._config.get_bool("polling.scan_recursive", True)
+
     def start(self) -> tuple[bool, str]:
         if not self._config.get_bool("polling.enabled", True):
             LOGGER.info("Polling bridge disabled by config polling.enabled=false")
@@ -97,6 +130,9 @@ class PollingBridge:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._worker, daemon=True, name="polling-bridge")
         self._thread.start()
+        if self.scan_enabled():
+            self._scan_thread = threading.Thread(target=self._scan_worker, daemon=True, name="scan-upload-bridge")
+            self._scan_thread.start()
         self._last_started_at = self._now_iso()
         LOGGER.info(
             "Polling bridge started: url=%s lead=%s interval=%ss",
@@ -104,10 +140,13 @@ class PollingBridge:
             self._config.get_string("polling.lead").strip(),
             self.interval_seconds(),
         )
+        if self.scan_enabled():
+            LOGGER.info("Scan watcher started: interval=%ss dirs=%s", self.scan_interval_seconds(), ",".join(self._scan_dirs()))
         return True, "Polling started"
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._save_scan_upload_state()
         LOGGER.info("Polling bridge stop requested")
 
     def status(self) -> dict[str, object]:
@@ -132,6 +171,15 @@ class PollingBridge:
             "last_control_total": self._last_control_total,
             "last_control_apply_error": self._last_control_apply_error,
             "resolved_lan_uid": self._resolved_lan_uid,
+            "scan_enabled": self.scan_enabled(),
+            "scan_running": bool(self._scan_thread and self._scan_thread.is_alive()),
+            "scan_interval_seconds": self.scan_interval_seconds(),
+            "scan_dirs": self._scan_dirs(),
+            "scan_last_cycle_at": self._scan_last_cycle_at,
+            "scan_last_upload_at": self._scan_last_upload_at,
+            "scan_last_error": self._scan_last_error,
+            "scan_uploaded_total": self._scan_uploaded_total,
+            "scan_failed_total": self._scan_failed_total,
         }
 
     def _load_printers(self) -> list[Printer]:
@@ -287,6 +335,199 @@ if ($r) { $r }
         if not parsed.scheme or not parsed.netloc:
             return ""
         return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _scan_upload_url(self) -> str:
+        base = self._polling_base_url()
+        if not base:
+            return ""
+        return f"{base}/api/polling/scan-upload"
+
+    def _load_scan_upload_state(self) -> dict[str, str]:
+        if not SCAN_UPLOAD_STATE_FILE.exists():
+            return {}
+        try:
+            payload = json.loads(SCAN_UPLOAD_STATE_FILE.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {}
+            uploaded = payload.get("uploaded")
+            if not isinstance(uploaded, dict):
+                return {}
+            result: dict[str, str] = {}
+            for key, value in uploaded.items():
+                k = str(key or "").strip()
+                v = str(value or "").strip()
+                if k and v:
+                    result[k] = v
+            return result
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _save_scan_upload_state(self) -> None:
+        try:
+            SCAN_UPLOAD_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            trimmed = dict(list(self._scan_uploaded_fingerprints.items())[-5000:])
+            payload = {"updated_at": datetime.now(timezone.utc).isoformat(), "uploaded": trimmed}
+            SCAN_UPLOAD_STATE_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            return
+
+    @staticmethod
+    def _is_scan_candidate(path: Path) -> bool:
+        name = path.name.lower()
+        if name.endswith((".tmp", ".part", ".partial", ".crdownload")):
+            return False
+        return path.is_file()
+
+    def _iter_scan_files(self) -> list[Path]:
+        files: list[Path] = []
+        recursive = self._scan_recursive()
+        for raw in self._scan_dirs():
+            try:
+                root = Path(raw).expanduser()
+                if not root.exists() or not root.is_dir():
+                    continue
+                iterator = root.rglob("*") if recursive else root.glob("*")
+                for item in iterator:
+                    if self._is_scan_candidate(item):
+                        files.append(item)
+            except Exception:  # noqa: BLE001
+                continue
+        files.sort(key=lambda p: str(p))
+        return files
+
+    @staticmethod
+    def _file_fingerprint(path: Path, size: int, mtime_ns: int) -> str:
+        return f"{path.resolve()}|{size}|{mtime_ns}"
+
+    def _upload_scan_file(
+        self,
+        path: Path,
+        fingerprint: str,
+        lead: str,
+        lan_uid: str,
+        agent_uid: str,
+        hostname: str,
+        local_ip: str,
+    ) -> None:
+        url = self._scan_upload_url()
+        token = self._config.get_string("polling.token").strip()
+        if not url or not token:
+            raise RuntimeError("Scan upload endpoint/token not configured")
+        headers = {"X-Lead-Token": token}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rel_path = str(path)
+        data = {
+            "lead": lead,
+            "lan_uid": lan_uid,
+            "agent_uid": agent_uid,
+            "hostname": hostname,
+            "local_ip": local_ip,
+            "timestamp": now_iso,
+            "source_path": rel_path,
+            "fingerprint": fingerprint,
+        }
+        with path.open("rb") as fp:
+            files = {"file": (path.name, fp, "application/octet-stream")}
+            resp = self._api_client.session.post(url, data=data, files=files, headers=headers, timeout=(10, 120))
+        resp.raise_for_status()
+        self._scan_uploaded_fingerprints[fingerprint] = now_iso
+        self._scan_uploaded_total += 1
+        self._scan_last_upload_at = self._now_iso()
+        self._scan_last_error = ""
+        if self._scan_uploaded_total % 20 == 0:
+            self._save_scan_upload_state()
+
+    def _scan_worker(self) -> None:
+        interval = self.scan_interval_seconds()
+        lead = self._config.get_string("polling.lead").strip()
+        hostname = socket.gethostname()
+        local_ip = self._resolve_local_ip()
+        lan_uid = self._resolve_lan_uid(hostname=hostname, local_ip=local_ip) or "legacy-lan"
+        agent_uid = self._config.get_string("polling.agent_uid", "").strip() or hostname
+        LOGGER.info(
+            "Scan watcher loop running: lead=%s lan_uid=%s agent_uid=%s interval=%ss dirs=%s",
+            lead,
+            lan_uid,
+            agent_uid,
+            interval,
+            ",".join(self._scan_dirs()),
+        )
+        while not self._stop_event.is_set():
+            self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, reason="timer")
+            self._stop_event.wait(interval)
+        self._save_scan_upload_state()
+
+    @staticmethod
+    def _safe_int(value: object) -> int:
+        try:
+            return int(str(value or "0").replace(",", "").strip() or "0")
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _has_new_scan_counter(self, ip: str, counter_data: dict[str, object]) -> bool:
+        ip_key = str(ip or "").strip()
+        if not ip_key:
+            return False
+        scan_bw = self._safe_int(counter_data.get("scanner_send_bw"))
+        scan_color = self._safe_int(counter_data.get("scanner_send_color"))
+        total_scan = max(0, scan_bw) + max(0, scan_color)
+        previous = self._scan_counter_last_by_ip.get(ip_key)
+        self._scan_counter_last_by_ip[ip_key] = total_scan
+        if previous is None:
+            return False
+        return total_scan > previous
+
+    def _run_scan_cycle(
+        self,
+        lead: str,
+        lan_uid: str,
+        agent_uid: str,
+        hostname: str,
+        local_ip: str,
+        reason: str = "timer",
+    ) -> None:
+        if not self._scan_lock.acquire(blocking=False):
+            return
+        try:
+            self._scan_last_cycle_at = self._now_iso()
+            files = self._iter_scan_files()
+            active_keys: set[str] = set()
+            for path in files:
+                try:
+                    stat = path.stat()
+                except Exception:  # noqa: BLE001
+                    continue
+                size = int(stat.st_size or 0)
+                mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+                if size <= 0:
+                    continue
+                key = str(path.resolve())
+                active_keys.add(key)
+                state = self._scan_file_state.get(key, {"size": -1, "mtime_ns": -1, "stable": 0})
+                same = int(state.get("size", -1)) == size and int(state.get("mtime_ns", -1)) == mtime_ns
+                stable = int(state.get("stable", 0)) + 1 if same else 0
+                state = {"size": size, "mtime_ns": mtime_ns, "stable": stable}
+                self._scan_file_state[key] = state
+                if stable < 2:
+                    continue
+                fingerprint = self._file_fingerprint(path=path, size=size, mtime_ns=mtime_ns)
+                if fingerprint in self._scan_uploaded_fingerprints:
+                    continue
+                try:
+                    self._upload_scan_file(path, fingerprint, lead, lan_uid, agent_uid, hostname, local_ip)
+                    LOGGER.info("Scan upload ok: file=%s size=%s reason=%s", path, size, reason)
+                except Exception as exc:  # noqa: BLE001
+                    self._scan_failed_total += 1
+                    self._scan_last_error = str(exc)
+                    LOGGER.warning("Scan upload failed: file=%s reason=%s error=%s", path, reason, exc)
+            stale_keys = [k for k in self._scan_file_state.keys() if k not in active_keys]
+            for key in stale_keys:
+                self._scan_file_state.pop(key, None)
+        except Exception as exc:  # noqa: BLE001
+            self._scan_last_error = str(exc)
+            LOGGER.warning("Scan watcher cycle failed: reason=%s error=%s", reason, exc)
+        finally:
+            self._scan_lock.release()
 
     def _pull_device_controls(self, lan_uid: str) -> dict[str, dict[str, object]]:
         base_url = self._polling_base_url()
@@ -451,6 +692,7 @@ if ($r) { $r }
         hostname = socket.gethostname()
         local_ip = self._resolve_local_ip()
         lan_uid = self._resolve_lan_uid(hostname=hostname, local_ip=local_ip) or "legacy-lan"
+        agent_uid = self._config.get_string("polling.agent_uid", "").strip() or hostname
         LOGGER.info("Polling worker loop running: hostname=%s local_ip=%s", hostname, local_ip)
         while not self._stop_event.is_set():
             cycle_started_at = self._now_iso()
@@ -493,6 +735,7 @@ if ($r) { $r }
             self._last_cycle_ricoh_printers = 0
             self._last_cycle_sent = 0
             self._last_cycle_failed = 0
+            scan_counter_changed = False
             LOGGER.info(
                 "Polling cycle start: ts=%s total_printers=%s interval=%ss",
                 cycle_started_at,
@@ -517,16 +760,19 @@ if ($r) { $r }
                     LOGGER.info("Polling collect: name=%s ip=%s type=%s", printer.name, printer.ip, printer.printer_type)
                     counter_payload = self._ricoh_service.process_counter(printer, should_post=False)
                     status_payload = self._ricoh_service.process_status(printer, should_post=False)
+                    counter_data = counter_payload.get("counter_data", {})
+                    if isinstance(counter_data, dict) and self._has_new_scan_counter(str(printer.ip or ""), counter_data):
+                        scan_counter_changed = True
                     payload = {
                         "lead": lead,
                         "lan_uid": lan_uid,
-                        "agent_uid": self._config.get_string("polling.agent_uid", "").strip() or hostname,
+                        "agent_uid": agent_uid,
                         "hostname": hostname,
                         "local_ip": local_ip,
                         "printer_name": counter_payload.get("printer_name", printer.name),
                         "ip": counter_payload.get("ip", printer.ip),
                         "timestamp": counter_payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                        "counter_data": counter_payload.get("counter_data", {}),
+                        "counter_data": counter_data,
                         "status_data": status_payload.get("status_data", {}),
                     }
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
@@ -552,4 +798,7 @@ if ($r) { $r }
                 self._last_cycle_sent,
                 self._last_cycle_failed,
             )
+            if self.scan_enabled() and scan_counter_changed:
+                LOGGER.info("Counter detected new scan pages -> trigger immediate scan watcher cycle")
+                self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, reason="counter-delta")
             self._stop_event.wait(interval)

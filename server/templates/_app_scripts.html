@@ -321,6 +321,25 @@ function currentPage() {
   return document.body.dataset.page;
 }
 
+function renderPager(pageId, currentPageValue, totalPagesValue, onSelectPage) {
+  const host = qs(pageId);
+  if (!host) return;
+  const totalPages = Math.max(1, Number(totalPagesValue || 1));
+  const currentPage = Math.min(totalPages, Math.max(1, Number(currentPageValue || 1)));
+  const pages = [];
+  for (let p = 1; p <= totalPages; p += 1) pages.push(p);
+  host.innerHTML = pages
+    .map((p) => `<button type="button" class="pager-page-btn ${p === currentPage ? "active" : ""}" data-page="${p}">${p}</button>`)
+    .join("");
+  host.querySelectorAll(".pager-page-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetPage = Number(btn.dataset.page || 1);
+      if (targetPage === currentPage) return;
+      onSelectPage(targetPage);
+    });
+  });
+}
+
 function refreshCurrentPage() {
   const page = currentPage();
   if (page === "dashboard") return loadSummary();
@@ -655,7 +674,10 @@ async function loadCounter() {
   });
   const data = await jget(`/api/counter/timelapse?${query.toString()}`);
   state.counter.totalPages = data.total_pages;
-  qs("counter-page").textContent = `${data.page} / ${data.total_pages}`;
+  renderPager("counter-page", data.page, data.total_pages, (targetPage) => {
+    state.counter.page = targetPage;
+    loadCounter().catch(() => {});
+  });
   const grid = qs("counter-grid");
   if (grid) {
     grid.innerHTML = data.rows.length
@@ -752,7 +774,10 @@ async function loadStatus() {
   });
   const data = await jget(`/api/status/timelapse?${query.toString()}`);
   state.status.totalPages = data.total_pages;
-  qs("status-page").textContent = `${data.page} / ${data.total_pages}`;
+  renderPager("status-page", data.page, data.total_pages, (targetPage) => {
+    state.status.page = targetPage;
+    loadStatus().catch(() => {});
+  });
   const grid = qs("status-grid");
   if (grid) {
     grid.innerHTML = data.rows.length
@@ -909,7 +934,10 @@ async function loadHeatmap() {
   const query = new URLSearchParams({ page: String(p), page_size: "12", date: dateValue, lead });
   const data = await jget(`/api/counter/heatmap?${query.toString()}`);
   state.heatmap.totalPages = data.total_pages;
-  qs("heatmap-page").textContent = `${data.page} / ${data.total_pages}`;
+  renderPager("heatmap-page", data.page, data.total_pages, (targetPage) => {
+    state.heatmap.page = targetPage;
+    loadHeatmap().catch(() => {});
+  });
   renderHeatmapRows(data.rows || []);
 }
 

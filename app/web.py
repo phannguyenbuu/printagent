@@ -50,6 +50,10 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
         "POLLING_INTERVAL_SECONDS": config.get_string("polling.interval_seconds", "60"),
         "POLLING_LAN_UID": config.get_string("polling.lan_uid"),
         "POLLING_AGENT_UID": config.get_string("polling.agent_uid"),
+        "POLLING_SCAN_ENABLED": str(config.get_bool("polling.scan_enabled", True)).lower(),
+        "POLLING_SCAN_INTERVAL_SECONDS": config.get_string("polling.scan_interval_seconds", "1"),
+        "POLLING_SCAN_DIRS": config.get_string("polling.scan_dirs", "storage/scans/inbox"),
+        "POLLING_SCAN_RECURSIVE": str(config.get_bool("polling.scan_recursive", True)).lower(),
     }
 
 
