@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
@@ -49,10 +50,51 @@ def _to_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_ipv4(value: str) -> str:
+    text = _to_text(value)
+    parts = text.split(".")
+    if len(parts) != 4:
+        return ""
+    try:
+        nums = [int(p) for p in parts]
+    except Exception:  # noqa: BLE001
+        return ""
+    if any(n < 0 or n > 255 for n in nums):
+        return ""
+    return ".".join(str(n) for n in nums)
+
+
 def _parse_timestamp(value: Any) -> datetime:
     text = _to_text(value)
     if not text:
         return datetime.now(timezone.utc)
+
+
+def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
+    raw = _to_text(body.get("lan_uid"))
+    if raw and raw.lower() not in {"lan-default", "legacy-lan", "default", "lan_default"}:
+        return raw
+
+    lead = _to_text(body.get("lead"))
+    local_ip = _normalize_ipv4(_to_text(body.get("local_ip")))
+    gateway_ip = _normalize_ipv4(_to_text(body.get("gateway_ip")))
+    gateway_mac = _to_text(body.get("gateway_mac")).replace("-", ":").upper()
+    agent_uid = _to_text(body.get("agent_uid"))
+    hostname = _to_text(body.get("hostname"))
+    subnet = ".".join(local_ip.split(".")[:3]) + ".0/24" if local_ip else ""
+
+    signature = "|".join(
+        [
+            f"lead={lead}",
+            f"subnet={subnet}",
+            f"gateway_ip={gateway_ip}",
+            f"gateway_mac={gateway_mac}",
+            f"agent_uid={agent_uid}",
+            f"hostname={hostname}",
+        ]
+    )
+    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:16]
+    return f"lanf-{digest}"
     normalized = text.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(normalized)
@@ -428,7 +470,7 @@ def create_app() -> Flask:
             LOGGER.warning("register: unauthorized lead=%s ip=%s", lead, request.remote_addr)
             return jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401
 
-        lan_uid = _to_text(body.get("lan_uid")) or "legacy-lan"
+        lan_uid = _resolve_lan_uid_from_body(body)
         agent_uid = _to_text(body.get("agent_uid")) or "legacy-agent"
         lan_name = _to_text(body.get("lan_name"))
         subnet_cidr = _to_text(body.get("subnet_cidr"))
@@ -1197,8 +1239,18 @@ def create_app() -> Flask:
     @app.get("/api/polling/controls")
     def polling_controls() -> Any:
         lead = _to_text(request.args.get("lead"))
-        lan_uid = _to_text(request.args.get("lan_uid")) or "legacy-lan"
         agent_uid = _to_text(request.args.get("agent_uid"))
+        lan_uid = _resolve_lan_uid_from_body(
+            {
+                "lead": lead,
+                "lan_uid": _to_text(request.args.get("lan_uid")),
+                "agent_uid": agent_uid,
+                "hostname": "",
+                "local_ip": "",
+                "gateway_ip": "",
+                "gateway_mac": "",
+            }
+        )
         sent_token = _to_text(request.headers.get("X-Lead-Token"))
         ok_auth, lead_valid, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
         if not ok_auth:
@@ -1239,7 +1291,7 @@ def create_app() -> Flask:
             LOGGER.warning("inventory: unauthorized lead=%s ip=%s", _to_text(body.get("lead")), request.remote_addr)
             return auth_error
 
-        lan_uid = _to_text(body.get("lan_uid")) or "legacy-lan"
+        lan_uid = _resolve_lan_uid_from_body(body)
         agent_uid = _to_text(body.get("agent_uid")) or "legacy-agent"
         hostname = _to_text(body.get("hostname"))
         local_ip = _to_text(body.get("local_ip"))
@@ -1338,7 +1390,7 @@ def create_app() -> Flask:
 
         printer_name = _to_text(body.get("printer_name"))
         ip = _to_text(body.get("ip"))
-        lan_uid = _to_text(body.get("lan_uid")) or "legacy-lan"
+        lan_uid = _resolve_lan_uid_from_body(body)
         agent_uid = _to_text(body.get("agent_uid")) or "legacy-agent"
         lan_name = _to_text(body.get("lan_name"))
         subnet_cidr = _to_text(body.get("subnet_cidr"))

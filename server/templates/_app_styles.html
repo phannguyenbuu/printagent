@@ -90,22 +90,23 @@ th, td { border-bottom: 1px solid #e6edf5; padding: 8px; text-align: left; font-
 .timelapse-panel .counter-grid { flex: 1; overflow: auto; align-content: start; padding-right: 4px; }
 .counter-card { width: 200px; height: 200px; border: 1px solid #cfe0f4; border-radius: 16px; overflow: hidden; background: #fff; box-shadow: 0 2px 8px rgba(18, 42, 76, 0.08); }
 .counter-card.loading { display: flex; align-items: center; justify-content: center; color: #64758a; font-size: 13px; }
-.counter-card-head { background: linear-gradient(135deg, #0f6fdc, #1f8fff); color: #fff; padding: 10px 12px; }
+.counter-card-head { background: linear-gradient(135deg, #0f6fdc, #1f8fff); color: #fff; padding: 10px 114px 10px 12px; }
 .counter-card.latest .counter-card-head { background: linear-gradient(135deg, #0f9f44, #36c26b); }
 .counter-card-head { position: relative; }
 .card-delete-btn { position: absolute; top: 6px; right: 8px; width: 34px; height: 34px; border: 0; background: transparent; color: #fff; cursor: pointer; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .card-delete-btn svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 2.4; fill: none; opacity: .95; }
-.card-delete-btn:hover svg { opacity: 1; stroke-width: 2.8; }
 .card-fav-btn { position: absolute; top: 6px; right: 38px; width: 34px; height: 34px; border: 0; background: transparent; color: #fff; cursor: pointer; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .card-fav-btn svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; fill: transparent; opacity: .96; }
 .card-fav-btn.active { color: #ffd54a; }
 .card-fav-btn.active svg { fill: #ffd54a; stroke: #ffe589; }
-.card-fav-btn:hover svg { opacity: 1; }
 .card-info-btn { position: absolute; top: 6px; right: 68px; width: 34px; height: 34px; border: 0; background: transparent; color: #fff; cursor: pointer; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .card-info-btn svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 2.2; fill: none; opacity: .96; }
-.card-info-btn:hover svg { opacity: 1; }
-.counter-card-index { font-size: 12px; font-weight: 700; letter-spacing: 0.4px; opacity: 0.9; }
-.counter-card-time { margin-top: 4px; font-size: 12px; line-height: 1.2; font-weight: 700; }
+.card-delete-btn, .card-fav-btn, .card-info-btn { border-radius: 8px; transition: background-color .15s ease, transform .12s ease; }
+.card-delete-btn:hover, .card-fav-btn:hover, .card-info-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.card-delete-btn:hover svg, .card-fav-btn:hover svg, .card-info-btn:hover svg { opacity: 1; }
+.card-delete-btn:active, .card-fav-btn:active, .card-info-btn:active { transform: translateY(1px); }
+.counter-card-index { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.4px; opacity: 0.9; line-height: 1.2; }
+.counter-card-time { display: block; margin-top: 4px; font-size: 12px; line-height: 1.25; font-weight: 700; word-break: break-word; }
 .counter-card-body { padding: 10px 12px; display: grid; gap: 6px; }
 .counter-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; border-bottom: 1px solid #eef3f8; padding-bottom: 4px; }
 .counter-kv:last-child { border-bottom: 0; }
