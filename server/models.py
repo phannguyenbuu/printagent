@@ -132,6 +132,8 @@ class Printer(Base):
     ip: Mapped[str] = mapped_column(String(64), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enabled_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    online_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
@@ -146,4 +148,17 @@ class PrinterEnableLog(Base):
     printer_name: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class PrinterOnlineLog(Base):
+    __tablename__ = "PrinterOnlineLog"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    printer_id: Mapped[int] = mapped_column(Integer, index=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS "Printer" (
   ip VARCHAR(64) NOT NULL DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   enabled_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_online BOOLEAN NOT NULL DEFAULT TRUE,
+  online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -34,12 +36,28 @@ CREATE TABLE IF NOT EXISTS "PrinterEnableLog" (
   changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS "PrinterOnlineLog" (
+  id SERIAL PRIMARY KEY,
+  printer_id INTEGER NOT NULL,
+  lead VARCHAR(64) NOT NULL,
+  lan_uid VARCHAR(128) NOT NULL,
+  printer_name VARCHAR(255) NOT NULL DEFAULT '',
+  ip VARCHAR(64) NOT NULL DEFAULT '',
+  is_online BOOLEAN NOT NULL DEFAULT TRUE,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_printer_lead ON "Printer"(lead);
 CREATE INDEX IF NOT EXISTS idx_printer_lan_uid ON "Printer"(lan_uid);
 CREATE INDEX IF NOT EXISTS idx_printer_agent_uid ON "Printer"(agent_uid);
 CREATE INDEX IF NOT EXISTS idx_printer_ip ON "Printer"(ip);
 CREATE INDEX IF NOT EXISTS idx_printer_enabled ON "Printer"(enabled);
 CREATE INDEX IF NOT EXISTS idx_printer_enabled_changed_at ON "Printer"(enabled_changed_at);
+CREATE INDEX IF NOT EXISTS idx_printer_is_online ON "Printer"(is_online);
+CREATE INDEX IF NOT EXISTS idx_printer_online_changed_at ON "Printer"(online_changed_at);
 
 CREATE INDEX IF NOT EXISTS idx_printer_enable_log_printer_id ON "PrinterEnableLog"(printer_id);
 CREATE INDEX IF NOT EXISTS idx_printer_enable_log_lead ON "PrinterEnableLog"(lead);
@@ -47,6 +65,13 @@ CREATE INDEX IF NOT EXISTS idx_printer_enable_log_lan_uid ON "PrinterEnableLog"(
 CREATE INDEX IF NOT EXISTS idx_printer_enable_log_ip ON "PrinterEnableLog"(ip);
 CREATE INDEX IF NOT EXISTS idx_printer_enable_log_enabled ON "PrinterEnableLog"(enabled);
 CREATE INDEX IF NOT EXISTS idx_printer_enable_log_changed_at ON "PrinterEnableLog"(changed_at);
+
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_printer_id ON "PrinterOnlineLog"(printer_id);
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_lead ON "PrinterOnlineLog"(lead);
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_lan_uid ON "PrinterOnlineLog"(lan_uid);
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_ip ON "PrinterOnlineLog"(ip);
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_is_online ON "PrinterOnlineLog"(is_online);
+CREATE INDEX IF NOT EXISTS idx_printer_online_log_changed_at ON "PrinterOnlineLog"(changed_at);
 SQL
 
 echo "Done migrate printer control tables"

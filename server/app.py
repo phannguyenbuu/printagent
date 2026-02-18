@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
@@ -9,10 +10,11 @@ from sqlalchemy import func, select
 
 from config import ServerConfig
 from db import create_session_factory
-from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, Printer, PrinterEnableLog, StatusInfor
+from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, Printer, PrinterEnableLog, PrinterOnlineLog, StatusInfor
 
 LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
+ONLINE_STALE_SECONDS = 90
 COUNTER_KEYS = [
     "total",
     "copier_bw",
@@ -233,6 +235,8 @@ def _upsert_printer_from_polling(
     printer_name: str,
     ip: str,
     event_time: datetime,
+    touch_seen: bool = True,
+    mark_online_on_create: bool = True,
 ) -> Printer:
     printer_ip = _to_text(ip)
     printer_name_value = _to_text(printer_name) or "Unknown Printer"
@@ -261,6 +265,8 @@ def _upsert_printer_from_polling(
             ip=printer_ip,
             enabled=True,
             enabled_changed_at=event_time,
+            is_online=bool(mark_online_on_create),
+            online_changed_at=event_time,
         )
         session.add(row)
         session.flush()
@@ -275,13 +281,61 @@ def _upsert_printer_from_polling(
                 changed_at=event_time,
             )
         )
+        session.add(
+            PrinterOnlineLog(
+                printer_id=row.id,
+                lead=lead,
+                lan_uid=lan_uid,
+                printer_name=row.printer_name,
+                ip=printer_ip,
+                is_online=bool(mark_online_on_create),
+                changed_at=event_time,
+            )
+        )
         return row
 
     row.agent_uid = agent_uid or row.agent_uid
     row.printer_name = printer_name_value or row.printer_name
     row.ip = printer_ip if printer_ip else row.ip
-    row.updated_at = datetime.now(timezone.utc)
+    if touch_seen:
+        row.updated_at = datetime.now(timezone.utc)
     return row
+
+
+def _set_printer_online_state(session: Any, printer: Printer, is_online: bool, changed_at: datetime) -> None:
+    next_state = bool(is_online)
+    if bool(printer.is_online) == next_state:
+        return
+    printer.is_online = next_state
+    printer.online_changed_at = changed_at
+    session.add(
+        PrinterOnlineLog(
+            printer_id=printer.id,
+            lead=printer.lead,
+            lan_uid=printer.lan_uid,
+            printer_name=printer.printer_name,
+            ip=printer.ip,
+            is_online=next_state,
+            changed_at=changed_at,
+        )
+    )
+
+
+def _refresh_stale_offline(session: Any, lead: str = "", lan_uid: str = "", agent_uid: str = "") -> None:
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_STALE_SECONDS)
+    stmt = select(Printer).where(Printer.is_online.is_(True), Printer.updated_at < stale_before)
+    if lead:
+        stmt = stmt.where(Printer.lead == lead)
+    if lan_uid:
+        stmt = stmt.where(Printer.lan_uid == lan_uid)
+    if agent_uid:
+        stmt = stmt.where(Printer.agent_uid == agent_uid)
+    rows = session.execute(stmt).scalars().all()
+    if not rows:
+        return
+    now = datetime.now(timezone.utc)
+    for item in rows:
+        _set_printer_online_state(session, item, False, now)
 
 
 def _parse_date(value: Any) -> date:
@@ -666,6 +720,8 @@ def create_app() -> Flask:
     def devices_list() -> Any:
         lead = _to_text(request.args.get("lead"))
         with session_factory() as session:
+            _refresh_stale_offline(session=session, lead=lead)
+            session.commit()
             stmt = select(Printer).order_by(Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc())
             if lead:
                 stmt = stmt.where(Printer.lead == lead)
@@ -682,6 +738,9 @@ def create_app() -> Flask:
                         "ip": r.ip,
                         "enabled": bool(r.enabled),
                         "enabled_changed_at": r.enabled_changed_at.isoformat() if r.enabled_changed_at else "",
+                        "is_online": bool(r.is_online),
+                        "online_changed_at": r.online_changed_at.isoformat() if r.online_changed_at else "",
+                        "last_seen_at": r.updated_at.isoformat() if r.updated_at else "",
                         "label": f"{r.lan_uid} / {r.printer_name}",
                     }
                     for r in rows
@@ -695,11 +754,44 @@ def create_app() -> Flask:
             printer = session.get(Printer, printer_id)
             if printer is None:
                 return jsonify({"ok": False, "error": "Printer not found"}), 404
+            _refresh_stale_offline(
+                session=session,
+                lead=printer.lead,
+                lan_uid=printer.lan_uid,
+                agent_uid=printer.agent_uid,
+            )
+            session.commit()
+            printer = session.get(Printer, printer_id)
             logs = session.execute(
                 select(PrinterEnableLog)
                 .where(PrinterEnableLog.printer_id == printer_id)
                 .order_by(PrinterEnableLog.changed_at.desc(), PrinterEnableLog.id.desc())
             ).scalars().all()
+            online_logs = session.execute(
+                select(PrinterOnlineLog)
+                .where(PrinterOnlineLog.printer_id == printer_id)
+                .order_by(PrinterOnlineLog.changed_at.desc(), PrinterOnlineLog.id.desc())
+            ).scalars().all()
+        events: list[dict[str, Any]] = []
+        events.extend(
+            {
+                "id": f"enable-{int(e.id)}",
+                "kind": "enable",
+                "value": "Enabled" if bool(e.enabled) else "Disabled",
+                "changed_at": e.changed_at.isoformat() if e.changed_at else "",
+            }
+            for e in logs
+        )
+        events.extend(
+            {
+                "id": f"online-{int(e.id)}",
+                "kind": "online",
+                "value": "Online" if bool(e.is_online) else "Offline",
+                "changed_at": e.changed_at.isoformat() if e.changed_at else "",
+            }
+            for e in online_logs
+        )
+        events.sort(key=lambda x: str(x.get("changed_at", "")), reverse=True)
         return jsonify(
             {
                 "printer": {
@@ -711,15 +803,11 @@ def create_app() -> Flask:
                     "ip": printer.ip,
                     "enabled": bool(printer.enabled),
                     "enabled_changed_at": printer.enabled_changed_at.isoformat() if printer.enabled_changed_at else "",
+                    "is_online": bool(printer.is_online),
+                    "online_changed_at": printer.online_changed_at.isoformat() if printer.online_changed_at else "",
+                    "last_seen_at": printer.updated_at.isoformat() if printer.updated_at else "",
                 },
-                "events": [
-                    {
-                        "id": int(e.id),
-                        "enabled": bool(e.enabled),
-                        "changed_at": e.changed_at.isoformat() if e.changed_at else "",
-                    }
-                    for e in logs
-                ],
+                "events": events,
             }
         )
 
@@ -880,6 +968,57 @@ def create_app() -> Flask:
                 total_pages = max(1, (today_start_local.date() - min_local.date()).days + 1)
             else:
                 total_pages = 1
+            baseline_keys = {(r.lead, r.lan_uid, r.ip) for r in rows}
+            baselines: dict[tuple[str, str, str], dict[str, Any]] = {}
+            counter_index: dict[tuple[str, str, str], dict[str, Any]] = {}
+            status_counter_values: dict[int, dict[str, int | None]] = {}
+            if baseline_keys:
+                leads = sorted({item[0] for item in baseline_keys})
+                lans = sorted({item[1] for item in baseline_keys})
+                ips = sorted({item[2] for item in baseline_keys})
+                baseline_rows = session.execute(
+                    select(CounterBaseline).where(
+                        CounterBaseline.lead.in_(leads),
+                        CounterBaseline.lan_uid.in_(lans),
+                        CounterBaseline.ip.in_(ips),
+                    )
+                ).scalars().all()
+                for b in baseline_rows:
+                    baselines[(b.lead, b.lan_uid, b.ip)] = b.raw_payload if isinstance(b.raw_payload, dict) else {}
+
+                counter_rows = session.execute(
+                    select(CounterInfor)
+                    .where(
+                        CounterInfor.lead.in_(leads),
+                        CounterInfor.lan_uid.in_(lans),
+                        CounterInfor.ip.in_(ips),
+                        CounterInfor.timestamp <= day_end_utc,
+                    )
+                    .order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc())
+                ).scalars().all()
+                grouped: dict[tuple[str, str, str], list[CounterInfor]] = {}
+                for item in counter_rows:
+                    key = (item.lead, item.lan_uid, item.ip)
+                    grouped.setdefault(key, []).append(item)
+                for key, items in grouped.items():
+                    counter_index[key] = {"times": [x.timestamp for x in items], "rows": items}
+
+                for r in rows:
+                    key = (r.lead, r.lan_uid, r.ip)
+                    info = counter_index.get(key)
+                    chosen: CounterInfor | None = None
+                    if info:
+                        idx = bisect_right(info["times"], r.timestamp) - 1
+                        if idx >= 0:
+                            chosen = info["rows"][idx]
+                    base = baselines.get(key, {})
+                    status_counter_values[r.id] = {
+                        "total": _apply_baseline(chosen.total if chosen else None, base, "total"),
+                        "copier_bw": _apply_baseline(chosen.copier_bw if chosen else None, base, "copier_bw"),
+                        "printer_bw": _apply_baseline(chosen.printer_bw if chosen else None, base, "printer_bw"),
+                        "a3_dlt": _apply_baseline(chosen.a3_dlt if chosen else None, base, "a3_dlt"),
+                        "duplex": _apply_baseline(chosen.duplex if chosen else None, base, "duplex"),
+                    }
         return jsonify(
             {
                 "rows": [
@@ -903,6 +1042,11 @@ def create_app() -> Flask:
                         "tray_2_status": r.tray_2_status,
                         "tray_3_status": r.tray_3_status,
                         "bypass_tray_status": r.bypass_tray_status,
+                        "total": (status_counter_values.get(r.id) or {}).get("total"),
+                        "copier_bw": (status_counter_values.get(r.id) or {}).get("copier_bw"),
+                        "printer_bw": (status_counter_values.get(r.id) or {}).get("printer_bw"),
+                        "a3_dlt": (status_counter_values.get(r.id) or {}).get("a3_dlt"),
+                        "duplex": (status_counter_values.get(r.id) or {}).get("duplex"),
                     }
                     for r in rows
                 ],
@@ -1149,6 +1293,8 @@ def create_app() -> Flask:
                     printer_name=printer_name,
                     ip=ip,
                     event_time=timestamp,
+                    touch_seen=False,
+                    mark_online_on_create=False,
                 )
                 if existed is None:
                     inserted += 1
@@ -1246,6 +1392,8 @@ def create_app() -> Flask:
                     ip=ip,
                     event_time=timestamp,
                 )
+            if printer_row is not None:
+                _set_printer_online_state(session=session, printer=printer_row, is_online=True, changed_at=timestamp)
             device_enabled = True if printer_row is None else bool(printer_row.enabled)
             if not device_enabled:
                 skipped_disabled = 1

@@ -121,6 +121,10 @@ function iconCloseSvg() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"></path></svg>';
 }
 
+function iconInfoSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 10.2v6.4M12 7.3h.01"></path></svg>';
+}
+
 function setFavoriteButtonState(btn, isActive) {
   btn.dataset.active = isActive ? "1" : "0";
   btn.classList.toggle("active", isActive);
@@ -378,7 +382,10 @@ function renderDeviceTabs() {
     return;
   }
   host.innerHTML = state.devices.rows
-    .map((r) => `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(r.label || `${r.lan_uid} / ${r.printer_name}`)}</button>`)
+    .map((r) => {
+      const live = r.is_online ? "Online" : "Offline";
+      return `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(r.label || `${r.lan_uid} / ${r.printer_name}`)} <span class="device-live ${r.is_online ? "online" : "offline"}">(${live})</span></button>`;
+    })
     .join("");
   host.querySelectorAll(".device-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -395,10 +402,11 @@ async function loadDeviceEvents(printerId) {
   const p = data.printer || {};
   const head = qs("devices-head");
   if (head) {
+    const live = p.is_online ? "Online" : "Offline";
     head.innerHTML = `
       <div>
         <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
-        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")}</div>
+        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
       </div>
       <label class="device-enable-wrap">
         <input id="device-enable-toggle" type="checkbox" ${p.enabled ? "checked" : ""} />
@@ -423,8 +431,8 @@ async function loadDeviceEvents(printerId) {
   if (!tbody) return;
   const events = Array.isArray(data.events) ? data.events : [];
   tbody.innerHTML = events.length
-    ? events.map((e) => `<tr><td>${escapeHtml(fmtTimestampGmt7(e.changed_at))}</td><td>${e.enabled ? "Enabled" : "Disabled"}</td></tr>`).join("")
-    : `<tr><td colspan="2">No status history</td></tr>`;
+    ? events.map((e) => `<tr><td>${escapeHtml(fmtTimestampGmt7(e.changed_at))}</td><td>${escapeHtml(e.kind || "-")}</td><td>${escapeHtml(e.value || "-")}</td></tr>`).join("")
+    : `<tr><td colspan="3">No status history</td></tr>`;
 }
 
 async function loadDevicesPage() {
@@ -444,7 +452,7 @@ async function loadDevicesPage() {
     const head = qs("devices-head");
     if (head) head.innerHTML = `<div class="meta-line">No device selected.</div>`;
     const tbody = qs("devices-events-table")?.querySelector("tbody");
-    if (tbody) tbody.innerHTML = `<tr><td colspan="2">No data</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="3">No data</td></tr>`;
   }
 }
 
@@ -468,25 +476,70 @@ function openDetailModal(kind, row) {
   if (!modal || !body || !row) return;
   const rowId = Number(row.id || 0);
   const active = Boolean(row.is_favorite);
-  const kvPairs = kind === "counter"
+  const generalPairs = [
+    ["Lead", row.lead || "-"],
+    ["Name", row.printer_name || "-"],
+    ["IP", row.ip || "-"],
+    ["Begin ID", row.begin_record_id ?? "-"],
+  ];
+  const sections = kind === "counter"
     ? [
-        ["Lead", row.lead || "-"],
-        ["Name", row.printer_name || "-"],
-        ["IP", row.ip || "-"],
-        ["Total", fmtNumber(row.total)],
-        ["Copier", fmtNumber(row.copier_bw)],
-        ["Printer", fmtNumber(row.printer_bw)],
+        {
+          title: "Counter",
+          pairs: [
+            ["Total", fmtNumber(row.total)],
+            ["Copier", fmtNumber(row.copier_bw)],
+            ["Printer", fmtNumber(row.printer_bw)],
+            ["Fax", fmtNumber(row.fax_bw)],
+            ["Send TX BW", fmtNumber(row.send_tx_total_bw)],
+            ["Send TX Color", fmtNumber(row.send_tx_total_color)],
+            ["Fax TX Total", fmtNumber(row.fax_transmission_total)],
+            ["Scanner BW", fmtNumber(row.scanner_send_bw)],
+            ["Scanner Color", fmtNumber(row.scanner_send_color)],
+            ["A3/DLT", fmtNumber(row.a3_dlt)],
+            ["Duplex", fmtNumber(row.duplex)],
+          ],
+        },
+        {
+          title: "Coverage",
+          pairs: [
+            ["Copier BW %", fmtNumber(row.coverage_copier_bw)],
+            ["Printer BW %", fmtNumber(row.coverage_printer_bw)],
+            ["Fax BW %", fmtNumber(row.coverage_fax_bw)],
+          ],
+        },
       ]
     : [
-        ["Lead", row.lead || "-"],
-        ["Name", row.printer_name || "-"],
-        ["IP", row.ip || "-"],
-        ["System", row.system_status || "-"],
-        ["Printer", row.printer_status || "-"],
-        ["Scanner", row.scanner_status || "-"],
+        {
+          title: "Status",
+          pairs: [
+            ["System", row.system_status || "-"],
+            ["Printer", row.printer_status || "-"],
+            ["Copier", row.copier_status || "-"],
+            ["Scanner", row.scanner_status || "-"],
+            ["Toner Black", row.toner_black || "-"],
+          ],
+        },
+        {
+          title: "Alerts / Trays",
+          pairs: [
+            ["Printer Alerts", row.printer_alerts || "-"],
+            ["Copier Alerts", row.copier_alerts || "-"],
+            ["Scanner Alerts", row.scanner_alerts || "-"],
+            ["Tray 1", row.tray_1_status || "-"],
+            ["Tray 2", row.tray_2_status || "-"],
+            ["Tray 3", row.tray_3_status || "-"],
+            ["Bypass Tray", row.bypass_tray_status || "-"],
+            ["Other Info", row.other_info || "-"],
+          ],
+        },
       ];
-  const kvHtml = kvPairs
-    .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(k)}</span><span class="counter-v">${escapeHtml(v)}</span></div>`)
+  const renderPairs = (pairs) =>
+    pairs
+      .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(k)}</span><span class="counter-v">${escapeHtml(v)}</span></div>`)
+      .join("");
+  const sectionHtml = sections
+    .map((section) => `<section class="detail-section"><h4 class="detail-section-title">${escapeHtml(section.title)}</h4>${renderPairs(section.pairs)}</section>`)
     .join("");
 
   body.innerHTML = `
@@ -495,9 +548,15 @@ function openDetailModal(kind, row) {
         <button id="detail-fav-btn" class="card-fav-btn ${active ? "active" : ""}" type="button" data-active="${active ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
         <button id="detail-close-btn" class="card-delete-btn" type="button" aria-label="Close">${iconCloseSvg()}</button>
         <div class="counter-card-index">#${rowId}</div>
-        <div class="counter-card-time">Timelapse: ${escapeHtml(fmtTimestampGmt7(row.timestamp))}</div>
+        <div class="counter-card-time">${escapeHtml(fmtTimestampGmt7(row.timestamp))}</div>
       </header>
-      <div class="counter-card-body">${kvHtml}</div>
+      <div class="counter-card-body">
+        <section class="detail-section">
+          <h4 class="detail-section-title">General</h4>
+          ${renderPairs(generalPairs)}
+        </section>
+        <div class="detail-sections">${sectionHtml}</div>
+      </div>
     </article>
   `;
   modal.hidden = false;
@@ -540,15 +599,15 @@ async function loadCounter() {
             const isLatest = idx === 0;
             return `<article class="counter-card ${isLatest ? "latest" : ""}">
               <header class="counter-card-head">
+                <button class="card-info-btn" type="button" data-kind="counter-info" data-id="${rowId}" aria-label="Info">${iconInfoSvg()}</button>
                 <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="counter-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
                 <button class="card-delete-btn" type="button" data-kind="counter" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
                 <div class="counter-card-index">#${rowId}</div>
-                <div class="counter-card-time">Timelapse: ${fmtTimestampGmt7(r.timestamp)}</div>
+                <div class="counter-card-time">${fmtTimestampGmt7(r.timestamp)}</div>
               </header>
               <div class="counter-card-body">
                 <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
                 <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">IP</span><span class="counter-v">${r.ip || "-"}</span></div>
                 <div class="counter-kv"><span class="counter-k">Total</span><span class="counter-v">${fmtNumber(r.total)}</span></div>
                 <div class="counter-kv"><span class="counter-k">Copier</span><span class="counter-v">${fmtNumber(r.copier_bw)}</span></div>
                 <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${fmtNumber(r.printer_bw)}</span></div>
@@ -589,12 +648,13 @@ async function loadCounter() {
         }
       });
     });
-    grid.querySelectorAll(".counter-card").forEach((card, idx) => {
-      card.addEventListener("click", (event) => {
-        if (event.target.closest(".card-fav-btn") || event.target.closest(".card-delete-btn")) return;
-        const row = data.rows[idx];
+    grid.querySelectorAll(".card-info-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const row = data.rows.find((x) => Number(x.id || 0) === rowId);
         if (!row) return;
-        const fav = card.querySelector(".card-fav-btn")?.dataset.active === "1";
+        const card = btn.closest(".counter-card");
+        const fav = card?.querySelector(".card-fav-btn")?.dataset.active === "1";
         openDetailModal("counter", { ...row, is_favorite: fav });
       });
     });
@@ -626,19 +686,20 @@ async function loadStatus() {
             const isLatest = idx === 0;
             return `<article class="counter-card ${isLatest ? "latest" : ""}">
               <header class="counter-card-head">
+                <button class="card-info-btn" type="button" data-kind="status-info" data-id="${rowId}" aria-label="Info">${iconInfoSvg()}</button>
                 <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="status-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
                 <button class="card-delete-btn" type="button" data-kind="status" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
                 <div class="counter-card-index">#${rowId}</div>
-                <div class="counter-card-time">Timelapse: ${fmtTimestampGmt7(r.timestamp)}</div>
+                <div class="counter-card-time">${fmtTimestampGmt7(r.timestamp)}</div>
               </header>
               <div class="counter-card-body">
                 <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
                 <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">IP</span><span class="counter-v">${r.ip || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">System</span><span class="counter-v">${r.system_status || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${r.printer_status || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">Scanner</span><span class="counter-v">${r.scanner_status || "-"}</span></div>
-                <div class="counter-kv"><span class="counter-k">Toner</span><span class="counter-v">${r.toner_black || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Total</span><span class="counter-v">${fmtNumber(r.total)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Copier</span><span class="counter-v">${fmtNumber(r.copier_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${fmtNumber(r.printer_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">A3/DLT</span><span class="counter-v">${fmtNumber(r.a3_dlt)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Duplex</span><span class="counter-v">${fmtNumber(r.duplex)}</span></div>
               </div>
             </article>`;
           })
@@ -675,12 +736,13 @@ async function loadStatus() {
         }
       });
     });
-    grid.querySelectorAll(".counter-card").forEach((card, idx) => {
-      card.addEventListener("click", (event) => {
-        if (event.target.closest(".card-fav-btn") || event.target.closest(".card-delete-btn")) return;
-        const row = data.rows[idx];
+    grid.querySelectorAll(".card-info-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const row = data.rows.find((x) => Number(x.id || 0) === rowId);
         if (!row) return;
-        const fav = card.querySelector(".card-fav-btn")?.dataset.active === "1";
+        const card = btn.closest(".counter-card");
+        const fav = card?.querySelector(".card-fav-btn")?.dataset.active === "1";
         openDetailModal("status", { ...row, is_favorite: fav });
       });
     });
