@@ -22,6 +22,15 @@
     <button type="submit" class="btn ghost">Create</button>
   </form>
 
+  <form id="scan-modify-form" class="inline-form">
+    <input id="scan-modify-registration-no" placeholder="Registration No" required />
+    <input id="scan-modify-name" placeholder="Name (optional)" />
+    <input id="scan-modify-email" placeholder="Email" />
+    <input id="scan-modify-folder" placeholder="Folder" />
+    <input id="scan-modify-user-code" placeholder="User Code" />
+    <button type="submit" class="btn ghost">Modify</button>
+  </form>
+
   <div class="table-wrap">
     <table class="device-table">
       <thead>
@@ -44,4 +53,3 @@
   <pre id="scan-output" class="json-output"></pre>
 </section>
 {% endblock %}
-

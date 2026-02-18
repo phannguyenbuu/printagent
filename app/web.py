@@ -856,6 +856,39 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)}), 500
 
+    @app.post("/api/scan/address-modify")
+    def api_scan_address_modify() -> Any:
+        body = request.get_json(silent=True) or {}
+        ip = str(body.get("ip", "")).strip()
+        user = str(body.get("user", "")).strip()
+        password = str(body.get("password", "")).strip()
+        registration_no = str(body.get("registration_no", "")).strip()
+        name = str(body.get("name", "")).strip()
+        email = str(body.get("email", "")).strip()
+        folder = str(body.get("folder", "")).strip()
+        user_code = str(body.get("user_code", "")).strip()
+        fields = body.get("fields", {})
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        if not registration_no:
+            return jsonify({"ok": False, "error": "Missing registration_no"}), 400
+        if fields is not None and not isinstance(fields, dict):
+            return jsonify({"ok": False, "error": "fields must be object"}), 400
+        try:
+            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            payload = ricoh_service.modify_address_user_wizard(
+                target,
+                registration_no=registration_no,
+                name=name,
+                email=email,
+                folder=folder,
+                user_code=user_code,
+                fields=fields if isinstance(fields, dict) else None,
+            )
+            return jsonify({"ok": True, "payload": payload})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
     @app.get("/api/overview")
     def api_overview() -> Any:
         devices = _load_printers(api_client)
@@ -963,6 +996,28 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     fields=fields if isinstance(fields, dict) else None,
                 )
                 ws_client.send("address_create", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "address_modify":
+                registration_no = str(request_data.get("registration_no", "")).strip()
+                name = str(request_data.get("name", "")).strip()
+                email = str(request_data.get("email", "")).strip()
+                folder = str(request_data.get("folder", "")).strip()
+                user_code = str(request_data.get("user_code", "")).strip()
+                fields = request_data.get("fields", {})
+                if not registration_no:
+                    return jsonify({"ok": False, "error": "Missing registration_no"}), 400
+                if fields is not None and not isinstance(fields, dict):
+                    return jsonify({"ok": False, "error": "fields must be object"}), 400
+                payload = ricoh_service.modify_address_user_wizard(
+                    target,
+                    registration_no=registration_no,
+                    name=name,
+                    email=email,
+                    folder=folder,
+                    user_code=user_code,
+                    fields=fields if isinstance(fields, dict) else None,
+                )
+                ws_client.send("address_modify", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "log_counter_start":
                 ok, message = _start_job(

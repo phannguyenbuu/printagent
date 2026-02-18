@@ -506,6 +506,86 @@ class RicohService:
             "timestamp": self._timestamp(),
         }
 
+    def modify_address_user_wizard(
+        self,
+        printer: Printer,
+        registration_no: str,
+        name: str = "",
+        email: str = "",
+        folder: str = "",
+        user_code: str = "",
+        fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        reg = str(registration_no or "").strip()
+        if not reg:
+            raise ValueError("registration_no is required")
+
+        session = self.create_http_client(printer)
+        get_url = f"/web/entry/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}"
+        set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
+        html = self.authenticate_and_get(session, printer, get_url)
+
+        defaults = self._extract_hidden_inputs(html)
+        token = defaults.get("wimToken", "")
+        if not token:
+            token = self._extract_wim_token(html)
+        defaults["wimToken"] = token
+
+        key_list = list(defaults.keys())
+        reg_key = self._pick_field_key(key_list, ["regiNoIn", "registrationNoIn", "entryNoIn"])
+        mode_key = self._pick_field_key(key_list, ["modeIn", "actionModeIn", "procModeIn"])
+        name_key = self._pick_field_key(key_list, ["nameIn", "userNameIn", "displayNameIn", "name"])
+        email_key = self._pick_field_key(key_list, ["emailAddressIn", "emailIn", "mailAddressIn", "email"])
+        folder_key = self._pick_field_key(key_list, ["folderPathIn", "folderIn", "pathIn", "folder"])
+        user_code_key = self._pick_field_key(key_list, ["userCodeIn", "userCode", "codeIn"])
+
+        defaults[reg_key or "regiNoIn"] = reg
+        defaults[mode_key or "modeIn"] = defaults.get(mode_key or "modeIn", "MOD")
+        if name:
+            defaults[name_key or "nameIn"] = str(name).strip()
+        if email:
+            defaults[email_key or "emailAddressIn"] = str(email).strip()
+        if folder:
+            defaults[folder_key or "folderPathIn"] = str(folder).strip()
+        if user_code:
+            defaults[user_code_key or "userCodeIn"] = str(user_code).strip()
+        if fields and isinstance(fields, dict):
+            for k, v in fields.items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                defaults[key] = "" if v is None else str(v)
+
+        defaults.setdefault("open", "")
+
+        resp = session.post(
+            f"http://{printer.ip}{set_url}",
+            data=defaults,
+            headers={"Referer": f"http://{printer.ip}{get_url}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        verify_raw = self.get_address_list_ajax_with_client(session, printer)
+        verify_entries = self.parse_ajax_address_list(verify_raw)
+        updated = next((e for e in verify_entries if str(e.registration_no or "").strip() == reg), None)
+        if updated is None:
+            raise RuntimeError(f"Modified entry not found after set: registration_no={reg}")
+
+        return {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "ok": True,
+            "endpoint": set_url,
+            "registration_no": reg,
+            "name": updated.name,
+            "email_address": updated.email_address,
+            "folder": updated.folder,
+            "user_code": updated.user_code,
+            "http_status": resp.status_code,
+            "timestamp": self._timestamp(),
+        }
+
     def delete_address_entries(self, printer: Printer, registration_numbers: list[str]) -> dict[str, Any]:
         regs = [str(x or "").strip() for x in registration_numbers if str(x or "").strip()]
         if not regs:

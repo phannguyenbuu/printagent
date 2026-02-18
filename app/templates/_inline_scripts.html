@@ -633,8 +633,9 @@ async function loadScanAddressList() {
 async function initScanPage() {
   const targetForm = document.getElementById("scan-target-form");
   const createForm = document.getElementById("scan-create-form");
+  const modifyForm = document.getElementById("scan-modify-form");
   const out = document.getElementById("scan-output");
-  if (!targetForm || !createForm) return;
+  if (!targetForm || !createForm || !modifyForm) return;
 
   if (!targetForm.dataset.bound) {
     targetForm.dataset.bound = "1";
@@ -667,6 +668,42 @@ async function initScanPage() {
       };
       try {
         const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+        await loadScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+  }
+
+  if (!modifyForm.dataset.bound) {
+    modifyForm.dataset.bound = "1";
+    modifyForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const target = getScanTarget();
+      if (!target.ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      const body = {
+        ...target,
+        registration_no: (document.getElementById("scan-modify-registration-no")?.value || "").trim(),
+        name: (document.getElementById("scan-modify-name")?.value || "").trim(),
+        email: (document.getElementById("scan-modify-email")?.value || "").trim(),
+        folder: (document.getElementById("scan-modify-folder")?.value || "").trim(),
+        user_code: (document.getElementById("scan-modify-user-code")?.value || "").trim(),
+        fields: {},
+      };
+      if (!body.registration_no) {
+        if (out) out.textContent = "Missing registration_no";
+        return;
+      }
+      try {
+        const data = await jsonFetch("/api/scan/address-modify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
