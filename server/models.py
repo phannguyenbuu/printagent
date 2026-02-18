@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -25,6 +25,8 @@ class CounterInfor(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     printer_name: Mapped[str] = mapped_column(String(255))
     ip: Mapped[str] = mapped_column(String(64), index=True)
+    begin_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     copier_bw: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -70,6 +72,8 @@ class StatusInfor(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     printer_name: Mapped[str] = mapped_column(String(255))
     ip: Mapped[str] = mapped_column(String(64), index=True)
+    begin_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     system_status: Mapped[str | None] = mapped_column(String(128), nullable=True)
     printer_status: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -115,3 +119,31 @@ class AgentNode(Base):
     local_mac: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
+class Printer(Base):
+    __tablename__ = "Printer"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enabled_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
+class PrinterEnableLog(Base):
+    __tablename__ = "PrinterEnableLog"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    printer_id: Mapped[int] = mapped_column(Integer, index=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)

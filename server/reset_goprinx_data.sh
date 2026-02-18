@@ -23,6 +23,8 @@ TRUNCATE TABLE
   "CounterInfor",
   "StatusInfor",
   "CounterBaseline",
+  "PrinterEnableLog",
+  "Printer",
   "AgentNode",
   "LanSite"
 RESTART IDENTITY CASCADE;

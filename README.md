@@ -1,3 +1,5 @@
+scp -r server/* root@31.97.76.62:goprinx
+@baoLong0511
 # Flask Printer Agent
 
 ## Run

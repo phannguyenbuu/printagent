@@ -9,9 +9,10 @@ from sqlalchemy import func, select
 
 from config import ServerConfig
 from db import create_session_factory
-from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, StatusInfor
+from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, Printer, PrinterEnableLog, StatusInfor
 
 LOGGER = logging.getLogger(__name__)
+UI_TZ = timezone(timedelta(hours=7))
 COUNTER_KEYS = [
     "total",
     "copier_bw",
@@ -67,6 +68,28 @@ def _to_page(value: Any, default: int) -> int:
         return default
 
 
+def _time_scope_start(scope: str) -> datetime | None:
+    now = datetime.now(timezone.utc)
+    key = (scope or "").strip().lower()
+    if key in {"hour", "1h"}:
+        return now - timedelta(hours=1)
+    if key in {"day", "1d"}:
+        return now - timedelta(days=1)
+    if key in {"7d", "7days", "week"}:
+        return now - timedelta(days=7)
+    if key in {"month", "1m"}:
+        return now - timedelta(days=30)
+    if key in {"3months", "3m"}:
+        return now - timedelta(days=90)
+    if key in {"6months", "6m"}:
+        return now - timedelta(days=180)
+    if key in {"year", "1y"}:
+        return now - timedelta(days=365)
+    if key in {"all", ""}:
+        return None
+    return None
+
+
 def _is_same_utc_minute(left: datetime | None, right: datetime | None) -> bool:
     if left is None or right is None:
         return False
@@ -111,6 +134,44 @@ def _apply_baseline(delta_value: int | None, baseline_payload: dict[str, Any], k
     if base is None:
         base = 0
     return base + delta_value
+
+
+def _apply_common_filters(
+    stmt: Any,
+    model: Any,
+    lead: str,
+    ip: str,
+    printer_name: str,
+    printer_type: str,
+    time_scope: str,
+    favorite_only: bool = False,
+) -> Any:
+    if lead:
+        stmt = stmt.where(model.lead == lead)
+    if ip:
+        stmt = stmt.where(model.ip == ip)
+    if printer_name:
+        stmt = stmt.where(model.printer_name == printer_name)
+    if printer_type in {"ricoh", "toshiba", "epson"}:
+        stmt = stmt.where(func.lower(model.printer_name).like(f"%{printer_type}%"))
+    scope_start = _time_scope_start(time_scope)
+    if scope_start:
+        stmt = stmt.where(model.timestamp >= scope_start)
+    if favorite_only:
+        stmt = stmt.where(model.is_favorite.is_(True))
+    return stmt
+
+
+def _resolve_day_window(page: int) -> tuple[datetime, datetime, datetime]:
+    now_local = datetime.now(UI_TZ)
+    today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_local = today_start_local - timedelta(days=max(0, page - 1))
+    day_end_local = day_start_local + timedelta(days=1)
+    return (
+        day_start_local.astimezone(timezone.utc),
+        day_end_local.astimezone(timezone.utc),
+        today_start_local,
+    )
 
 
 def _upsert_lan_and_agent(
@@ -164,6 +225,65 @@ def _upsert_lan_and_agent(
         agent.last_seen_at = datetime.now(timezone.utc)
 
 
+def _upsert_printer_from_polling(
+    session: Any,
+    lead: str,
+    lan_uid: str,
+    agent_uid: str,
+    printer_name: str,
+    ip: str,
+    event_time: datetime,
+) -> Printer:
+    printer_ip = _to_text(ip)
+    printer_name_value = _to_text(printer_name) or "Unknown Printer"
+    if printer_ip:
+        row = session.execute(
+            select(Printer).where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == printer_ip).limit(1)
+        ).scalar_one_or_none()
+    else:
+        row = session.execute(
+            select(Printer)
+            .where(
+                Printer.lead == lead,
+                Printer.lan_uid == lan_uid,
+                Printer.agent_uid == agent_uid,
+                Printer.printer_name == printer_name_value,
+                Printer.ip == "",
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+    if row is None:
+        row = Printer(
+            lead=lead,
+            lan_uid=lan_uid,
+            agent_uid=agent_uid,
+            printer_name=printer_name_value,
+            ip=printer_ip,
+            enabled=True,
+            enabled_changed_at=event_time,
+        )
+        session.add(row)
+        session.flush()
+        session.add(
+            PrinterEnableLog(
+                printer_id=row.id,
+                lead=lead,
+                lan_uid=lan_uid,
+                printer_name=row.printer_name,
+                ip=printer_ip,
+                enabled=True,
+                changed_at=event_time,
+            )
+        )
+        return row
+
+    row.agent_uid = agent_uid or row.agent_uid
+    row.printer_name = printer_name_value or row.printer_name
+    row.ip = printer_ip if printer_ip else row.ip
+    row.updated_at = datetime.now(timezone.utc)
+    return row
+
+
 def _parse_date(value: Any) -> date:
     text = _to_text(value)
     if not text:
@@ -174,8 +294,18 @@ def _parse_date(value: Any) -> date:
         return datetime.now(timezone.utc).date()
 
 
+def _validate_polling_auth(body: dict[str, Any], lead_key_map: dict[str, str], sent_token: str) -> tuple[bool, str, Any]:
+    lead = _to_text(body.get("lead"))
+    if not lead:
+        return False, "", (jsonify({"ok": False, "error": "Missing lead"}), 400)
+    expected_token = lead_key_map.get(lead)
+    if not expected_token or sent_token != expected_token:
+        return False, "", (jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401)
+    return True, lead, None
+
+
 def create_app() -> Flask:
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    app = Flask(__name__, template_folder="templates")
     cfg = ServerConfig()
     session_factory = create_session_factory(cfg)
     Base.metadata.create_all(bind=session_factory.kw["bind"])
@@ -188,7 +318,15 @@ def create_app() -> Flask:
 
     @app.get("/dashboard")
     def dashboard() -> Any:
-        return render_template("dashboard.html", active_tab="dashboard", page_title="Dashboard")
+        return render_template("dashboard.html", active_tab="dashboard", page_title="Configuration")
+
+    @app.get("/configs")
+    def configs_page() -> Any:
+        return render_template("configs.html", active_tab="configs", page_title="Display Configs")
+
+    @app.get("/devices")
+    def devices_page() -> Any:
+        return render_template("devices.html", active_tab="devices", page_title="Devices")
 
     @app.get("/counter")
     def counter_page() -> Any:
@@ -205,6 +343,18 @@ def create_app() -> Flask:
     @app.get("/health")
     def health() -> Any:
         return jsonify({"ok": True, "service": "GoPrinx Polling Server"})
+
+    @app.get("/api/leads")
+    def list_leads() -> Any:
+        with session_factory() as session:
+            leads: set[str] = set()
+            for model in (LanSite, CounterInfor, StatusInfor, AgentNode, Printer):
+                values = session.execute(select(func.distinct(model.lead))).scalars().all()
+                for value in values:
+                    text = _to_text(value)
+                    if text:
+                        leads.add(text)
+        return jsonify({"leads": sorted(leads, key=str.lower)})
 
     @app.post("/api/agent/register")
     def register_agent() -> Any:
@@ -262,13 +412,193 @@ def create_app() -> Flask:
 
     @app.get("/api/dashboard/summary")
     def dashboard_summary() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        ip = _to_text(request.args.get("ip"))
+        printer_name = _to_text(request.args.get("printer_name"))
+        printer_type = _to_text(request.args.get("printer_type")).lower()
+        time_scope = _to_text(request.args.get("time_scope")) or "month"
+        favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
         with session_factory() as session:
-            counter_count = session.scalar(select(func.count()).select_from(CounterInfor)) or 0
-            status_count = session.scalar(select(func.count()).select_from(StatusInfor)) or 0
-            lead_count = session.scalar(select(func.count(func.distinct(CounterInfor.lead)))) or 0
-            printer_count = session.scalar(select(func.count(func.distinct(CounterInfor.ip)))) or 0
-            latest_counter = session.scalar(select(func.max(CounterInfor.timestamp)))
-            latest_status = session.scalar(select(func.max(StatusInfor.timestamp)))
+            counter_count_stmt = _apply_common_filters(select(func.count()).select_from(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            status_count_stmt = _apply_common_filters(select(func.count()).select_from(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            lead_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.lead))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            printer_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.ip))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            latest_counter_stmt = _apply_common_filters(select(func.max(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            latest_status_stmt = _apply_common_filters(select(func.max(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+
+            counter_count = session.scalar(counter_count_stmt) or 0
+            status_count = session.scalar(status_count_stmt) or 0
+            lead_count = session.scalar(lead_count_stmt) or 0
+            printer_count = session.scalar(printer_count_stmt) or 0
+            latest_counter = session.scalar(latest_counter_stmt)
+            latest_status = session.scalar(latest_status_stmt)
+
+            latest_rows_stmt = _apply_common_filters(
+                select(CounterInfor).order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc()),
+                CounterInfor,
+                lead,
+                ip,
+                printer_name,
+                printer_type,
+                time_scope,
+                favorite_only,
+            )
+            latest_rows = session.execute(latest_rows_stmt).scalars().all()
+            latest_by_printer: dict[tuple[str, str, str], CounterInfor] = {}
+            for row in latest_rows:
+                key = (row.lead, row.lan_uid, row.ip)
+                if key in latest_by_printer:
+                    continue
+                latest_by_printer[key] = row
+
+            baseline_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+            if latest_by_printer:
+                leads = sorted({k[0] for k in latest_by_printer})
+                lans = sorted({k[1] for k in latest_by_printer})
+                ips = sorted({k[2] for k in latest_by_printer})
+                baseline_rows = session.execute(
+                    select(CounterBaseline).where(
+                        CounterBaseline.lead.in_(leads),
+                        CounterBaseline.lan_uid.in_(lans),
+                        CounterBaseline.ip.in_(ips),
+                    )
+                ).scalars().all()
+                for item in baseline_rows:
+                    baseline_map[(item.lead, item.lan_uid, item.ip)] = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+
+            latest_totals = {"total": 0, "copier_bw": 0, "printer_bw": 0, "scanner_send_bw": 0, "scanner_send_color": 0, "a3_dlt": 0, "duplex": 0}
+            for key, row in latest_by_printer.items():
+                base = baseline_map.get(key, {})
+                latest_totals["total"] += _apply_baseline(row.total, base, "total") or 0
+                latest_totals["copier_bw"] += _apply_baseline(row.copier_bw, base, "copier_bw") or 0
+                latest_totals["printer_bw"] += _apply_baseline(row.printer_bw, base, "printer_bw") or 0
+                latest_totals["scanner_send_bw"] += _apply_baseline(row.scanner_send_bw, base, "scanner_send_bw") or 0
+                latest_totals["scanner_send_color"] += _apply_baseline(row.scanner_send_color, base, "scanner_send_color") or 0
+                latest_totals["a3_dlt"] += _apply_baseline(row.a3_dlt, base, "a3_dlt") or 0
+                latest_totals["duplex"] += _apply_baseline(row.duplex, base, "duplex") or 0
+
+            trend_start = _time_scope_start(time_scope) or (datetime.now(timezone.utc) - timedelta(days=30))
+            trend_stmt = _apply_common_filters(
+                select(CounterInfor).where(CounterInfor.timestamp >= trend_start).order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
+                CounterInfor,
+                lead,
+                ip,
+                printer_name,
+                printer_type,
+                "",
+                favorite_only,
+            )
+            trend_rows = session.execute(trend_stmt).scalars().all()
+            day_printer_latest: dict[tuple[str, str], CounterInfor] = {}
+            for row in trend_rows:
+                day_key = row.timestamp.astimezone(timezone.utc).date().isoformat()
+                key = (day_key, row.ip)
+                day_printer_latest[key] = row
+            day_total: dict[str, int] = {}
+            for (day_key, _), row in day_printer_latest.items():
+                base = baseline_map.get((row.lead, row.lan_uid, row.ip), {})
+                abs_total = _apply_baseline(row.total, base, "total") or 0
+                day_total[day_key] = day_total.get(day_key, 0) + abs_total
+            labels = sorted(day_total.keys())
+            values = [day_total[k] for k in labels]
+
+            now_utc = datetime.now(timezone.utc)
+            day_from = now_utc - timedelta(days=1)
+            month_from = now_utc - timedelta(days=30)
+            day_rows_stmt = _apply_common_filters(
+                select(CounterInfor).where(CounterInfor.timestamp >= day_from).order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
+                CounterInfor,
+                lead,
+                ip,
+                printer_name,
+                printer_type,
+                "",
+                favorite_only,
+            )
+            month_rows_stmt = _apply_common_filters(
+                select(CounterInfor).where(CounterInfor.timestamp >= month_from).order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
+                CounterInfor,
+                lead,
+                ip,
+                printer_name,
+                printer_type,
+                "",
+                favorite_only,
+            )
+            day_rows = session.execute(day_rows_stmt).scalars().all()
+            month_rows = session.execute(month_rows_stmt).scalars().all()
+
+            hourly_latest: dict[tuple[str, str], CounterInfor] = {}
+            for row in day_rows:
+                local = row.timestamp.astimezone(UI_TZ)
+                hour_key = local.strftime("%Y-%m-%d %H:00")
+                hourly_latest[(hour_key, row.ip)] = row
+            hourly_total: dict[str, int] = {}
+            hourly_a3: dict[str, int] = {}
+            hourly_a4: dict[str, int] = {}
+            for (hour_key, _), row in hourly_latest.items():
+                base = baseline_map.get((row.lead, row.lan_uid, row.ip), {})
+                abs_total = _apply_baseline(row.total, base, "total") or 0
+                abs_a3 = _apply_baseline(row.a3_dlt, base, "a3_dlt") or 0
+                abs_a4 = max(abs_total - abs_a3, 0)
+                hourly_total[hour_key] = hourly_total.get(hour_key, 0) + abs_total
+                hourly_a3[hour_key] = hourly_a3.get(hour_key, 0) + abs_a3
+                hourly_a4[hour_key] = hourly_a4.get(hour_key, 0) + abs_a4
+
+            daily_latest: dict[tuple[str, str], CounterInfor] = {}
+            for row in month_rows:
+                local = row.timestamp.astimezone(UI_TZ)
+                day_key = local.strftime("%Y-%m-%d")
+                daily_latest[(day_key, row.ip)] = row
+            daily_total: dict[str, int] = {}
+            daily_copier: dict[str, int] = {}
+            daily_printer: dict[str, int] = {}
+            for (day_key, _), row in daily_latest.items():
+                base = baseline_map.get((row.lead, row.lan_uid, row.ip), {})
+                daily_total[day_key] = daily_total.get(day_key, 0) + (_apply_baseline(row.total, base, "total") or 0)
+                daily_copier[day_key] = daily_copier.get(day_key, 0) + (_apply_baseline(row.copier_bw, base, "copier_bw") or 0)
+                daily_printer[day_key] = daily_printer.get(day_key, 0) + (_apply_baseline(row.printer_bw, base, "printer_bw") or 0)
+
+            latest_counter_row = session.execute(
+                _apply_common_filters(
+                    select(CounterInfor).order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc()).limit(1),
+                    CounterInfor,
+                    lead,
+                    ip,
+                    printer_name,
+                    printer_type,
+                    time_scope,
+                    favorite_only,
+                )
+            ).scalar_one_or_none()
+            latest_status_row = session.execute(
+                _apply_common_filters(
+                    select(StatusInfor).order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc()).limit(1),
+                    StatusInfor,
+                    lead,
+                    ip,
+                    printer_name,
+                    printer_type,
+                    time_scope,
+                    favorite_only,
+                )
+            ).scalar_one_or_none()
+
+            a3 = max(int(latest_totals["a3_dlt"]), 0)
+            total_now = max(int(latest_totals["total"]), 0)
+            a4 = max(total_now - a3, 0)
+            duplex_now = max(int(latest_totals["duplex"]), 0)
+            single_side = max(a4 - duplex_now, 0)
+            printer_count_used = max(len(latest_by_printer), 1)
+            avg_values = {
+                "avg_total": total_now / printer_count_used,
+                "avg_copier": latest_totals["copier_bw"] / printer_count_used,
+                "avg_printer": latest_totals["printer_bw"] / printer_count_used,
+                "avg_scan_bw": latest_totals["scanner_send_bw"] / printer_count_used,
+                "avg_scan_color": latest_totals["scanner_send_color"] / printer_count_used,
+                "avg_a3": a3 / printer_count_used,
+                "avg_duplex": duplex_now / printer_count_used,
+            }
         return jsonify(
             {
                 "counter_rows": int(counter_count),
@@ -277,29 +607,171 @@ def create_app() -> Flask:
                 "printers": int(printer_count),
                 "latest_counter_at": latest_counter.isoformat() if latest_counter else "",
                 "latest_status_at": latest_status.isoformat() if latest_status else "",
+                "latest_totals": latest_totals,
+                "latest_counter_info": {
+                    "timestamp": latest_counter_row.timestamp.isoformat() if latest_counter_row else "",
+                    "printer_name": latest_counter_row.printer_name if latest_counter_row else "",
+                    "ip": latest_counter_row.ip if latest_counter_row else "",
+                    "begin_record_id": latest_counter_row.begin_record_id if latest_counter_row else None,
+                },
+                "latest_status_info": {
+                    "timestamp": latest_status_row.timestamp.isoformat() if latest_status_row else "",
+                    "printer_name": latest_status_row.printer_name if latest_status_row else "",
+                    "ip": latest_status_row.ip if latest_status_row else "",
+                    "system_status": latest_status_row.system_status if latest_status_row else "",
+                    "begin_record_id": latest_status_row.begin_record_id if latest_status_row else None,
+                },
+                "trend": {"labels": labels, "values": values},
+                "charts": {
+                    "pie_a3_a4": {"labels": ["A3", "A4"], "values": [a3, a4]},
+                    "pie_duplex_single": {"labels": ["Double side", "Single side / A4"], "values": [duplex_now, single_side]},
+                    "hourly_total": {"labels": sorted(hourly_total.keys()), "values": [hourly_total[k] for k in sorted(hourly_total.keys())]},
+                    "hourly_a3_a4": {
+                        "labels": sorted(hourly_a3.keys()),
+                        "a3": [hourly_a3[k] for k in sorted(hourly_a3.keys())],
+                        "a4": [hourly_a4.get(k, 0) for k in sorted(hourly_a3.keys())],
+                    },
+                    "daily_total_month": {"labels": sorted(daily_total.keys()), "values": [daily_total[k] for k in sorted(daily_total.keys())]},
+                    "daily_copier_printer": {
+                        "labels": sorted(daily_total.keys()),
+                        "copier": [daily_copier.get(k, 0) for k in sorted(daily_total.keys())],
+                        "printer": [daily_printer.get(k, 0) for k in sorted(daily_total.keys())],
+                    },
+                    "average_radar": {
+                        "labels": ["Total", "Copier", "Printer", "Scan BW", "Scan Color", "A3", "Duplex"],
+                        "values": [
+                            avg_values["avg_total"],
+                            avg_values["avg_copier"],
+                            avg_values["avg_printer"],
+                            avg_values["avg_scan_bw"],
+                            avg_values["avg_scan_color"],
+                            avg_values["avg_a3"],
+                            avg_values["avg_duplex"],
+                        ],
+                    },
+                    "distribution": {
+                        "labels": ["Copier", "Printer", "Scan BW", "Scan Color"],
+                        "values": [
+                            latest_totals["copier_bw"],
+                            latest_totals["printer_bw"],
+                            latest_totals["scanner_send_bw"],
+                            latest_totals["scanner_send_color"],
+                        ],
+                    },
+                },
             }
         )
+
+    @app.get("/api/devices/list")
+    def devices_list() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        with session_factory() as session:
+            stmt = select(Printer).order_by(Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc())
+            if lead:
+                stmt = stmt.where(Printer.lead == lead)
+            rows = session.execute(stmt).scalars().all()
+        return jsonify(
+            {
+                "rows": [
+                    {
+                        "id": int(r.id),
+                        "lead": r.lead,
+                        "lan_uid": r.lan_uid,
+                        "agent_uid": r.agent_uid,
+                        "printer_name": r.printer_name,
+                        "ip": r.ip,
+                        "enabled": bool(r.enabled),
+                        "enabled_changed_at": r.enabled_changed_at.isoformat() if r.enabled_changed_at else "",
+                        "label": f"{r.lan_uid} / {r.printer_name}",
+                    }
+                    for r in rows
+                ]
+            }
+        )
+
+    @app.get("/api/devices/<int:printer_id>/events")
+    def device_events(printer_id: int) -> Any:
+        with session_factory() as session:
+            printer = session.get(Printer, printer_id)
+            if printer is None:
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+            logs = session.execute(
+                select(PrinterEnableLog)
+                .where(PrinterEnableLog.printer_id == printer_id)
+                .order_by(PrinterEnableLog.changed_at.desc(), PrinterEnableLog.id.desc())
+            ).scalars().all()
+        return jsonify(
+            {
+                "printer": {
+                    "id": int(printer.id),
+                    "lead": printer.lead,
+                    "lan_uid": printer.lan_uid,
+                    "agent_uid": printer.agent_uid,
+                    "printer_name": printer.printer_name,
+                    "ip": printer.ip,
+                    "enabled": bool(printer.enabled),
+                    "enabled_changed_at": printer.enabled_changed_at.isoformat() if printer.enabled_changed_at else "",
+                },
+                "events": [
+                    {
+                        "id": int(e.id),
+                        "enabled": bool(e.enabled),
+                        "changed_at": e.changed_at.isoformat() if e.changed_at else "",
+                    }
+                    for e in logs
+                ],
+            }
+        )
+
+    @app.patch("/api/devices/<int:printer_id>/enable")
+    def device_set_enable(printer_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get("enabled", True))
+        at = datetime.now(timezone.utc)
+        with session_factory() as session:
+            printer = session.get(Printer, printer_id)
+            if printer is None:
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+            printer.enabled = enabled
+            printer.enabled_changed_at = at
+            session.add(
+                PrinterEnableLog(
+                    printer_id=printer.id,
+                    lead=printer.lead,
+                    lan_uid=printer.lan_uid,
+                    printer_name=printer.printer_name,
+                    ip=printer.ip,
+                    enabled=enabled,
+                    changed_at=at,
+                )
+            )
+            session.commit()
+        return jsonify({"ok": True, "id": printer_id, "enabled": enabled, "changed_at": at.isoformat()})
 
     @app.get("/api/counter/timelapse")
     def counter_timelapse() -> Any:
         page = _to_page(request.args.get("page"), 1)
-        page_size = min(200, _to_page(request.args.get("page_size"), 100))
         lead = _to_text(request.args.get("lead"))
         ip = _to_text(request.args.get("ip"))
+        printer_name = _to_text(request.args.get("printer_name"))
+        printer_type = _to_text(request.args.get("printer_type")).lower()
+        time_scope = _to_text(request.args.get("time_scope"))
+        favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
+        day_start_utc, day_end_utc, today_start_local = _resolve_day_window(page)
 
-        stmt = select(CounterInfor)
-        count_stmt = select(func.count()).select_from(CounterInfor)
-        if lead:
-            stmt = stmt.where(CounterInfor.lead == lead)
-            count_stmt = count_stmt.where(CounterInfor.lead == lead)
-        if ip:
-            stmt = stmt.where(CounterInfor.ip == ip)
-            count_stmt = count_stmt.where(CounterInfor.ip == ip)
-
-        stmt = stmt.order_by(CounterInfor.timestamp.desc()).offset((page - 1) * page_size).limit(page_size)
+        base_stmt = _apply_common_filters(select(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+        day_stmt = (
+            base_stmt.where(CounterInfor.timestamp >= day_start_utc, CounterInfor.timestamp < day_end_utc)
+            .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+        )
         with session_factory() as session:
-            total = int(session.scalar(count_stmt) or 0)
-            rows = session.execute(stmt).scalars().all()
+            rows = session.execute(day_stmt).scalars().all()
+            min_ts = session.scalar(_apply_common_filters(select(func.min(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only))
+            if min_ts:
+                min_local = min_ts.astimezone(UI_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+                total_pages = max(1, (today_start_local.date() - min_local.date()).days + 1)
+            else:
+                total_pages = 1
             baseline_keys = {(r.lead, r.lan_uid, r.ip) for r in rows}
             baselines: dict[tuple[str, str, str], dict[str, Any]] = {}
             if baseline_keys:
@@ -324,6 +796,8 @@ def create_app() -> Flask:
                         "timestamp": r.timestamp.isoformat() if r.timestamp else "",
                         "printer_name": r.printer_name,
                         "ip": r.ip,
+                        "begin_record_id": r.begin_record_id,
+                        "is_favorite": bool(r.is_favorite),
                         "total": _apply_baseline(r.total, baselines.get((r.lead, r.lan_uid, r.ip), {}), "total"),
                         "copier_bw": _apply_baseline(r.copier_bw, baselines.get((r.lead, r.lan_uid, r.ip), {}), "copier_bw"),
                         "printer_bw": _apply_baseline(r.printer_bw, baselines.get((r.lead, r.lan_uid, r.ip), {}), "printer_bw"),
@@ -374,32 +848,38 @@ def create_app() -> Flask:
                     for r in rows
                 ],
                 "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "page_size": len(rows),
+                "total": len(rows),
+                "total_pages": total_pages,
+                "day_start": day_start_utc.isoformat(),
+                "day_end": day_end_utc.isoformat(),
             }
         )
 
     @app.get("/api/status/timelapse")
     def status_timelapse() -> Any:
         page = _to_page(request.args.get("page"), 1)
-        page_size = min(200, _to_page(request.args.get("page_size"), 100))
         lead = _to_text(request.args.get("lead"))
         ip = _to_text(request.args.get("ip"))
+        printer_name = _to_text(request.args.get("printer_name"))
+        printer_type = _to_text(request.args.get("printer_type")).lower()
+        time_scope = _to_text(request.args.get("time_scope"))
+        favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
+        day_start_utc, day_end_utc, today_start_local = _resolve_day_window(page)
 
-        stmt = select(StatusInfor)
-        count_stmt = select(func.count()).select_from(StatusInfor)
-        if lead:
-            stmt = stmt.where(StatusInfor.lead == lead)
-            count_stmt = count_stmt.where(StatusInfor.lead == lead)
-        if ip:
-            stmt = stmt.where(StatusInfor.ip == ip)
-            count_stmt = count_stmt.where(StatusInfor.ip == ip)
-
-        stmt = stmt.order_by(StatusInfor.timestamp.desc()).offset((page - 1) * page_size).limit(page_size)
+        base_stmt = _apply_common_filters(select(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+        day_stmt = (
+            base_stmt.where(StatusInfor.timestamp >= day_start_utc, StatusInfor.timestamp < day_end_utc)
+            .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+        )
         with session_factory() as session:
-            total = int(session.scalar(count_stmt) or 0)
-            rows = session.execute(stmt).scalars().all()
+            rows = session.execute(day_stmt).scalars().all()
+            min_ts = session.scalar(_apply_common_filters(select(func.min(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only))
+            if min_ts:
+                min_local = min_ts.astimezone(UI_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+                total_pages = max(1, (today_start_local.date() - min_local.date()).days + 1)
+            else:
+                total_pages = 1
         return jsonify(
             {
                 "rows": [
@@ -409,6 +889,8 @@ def create_app() -> Flask:
                         "timestamp": r.timestamp.isoformat() if r.timestamp else "",
                         "printer_name": r.printer_name,
                         "ip": r.ip,
+                        "begin_record_id": r.begin_record_id,
+                        "is_favorite": bool(r.is_favorite),
                         "system_status": r.system_status,
                         "printer_status": r.printer_status,
                         "printer_alerts": r.printer_alerts,
@@ -425,11 +907,57 @@ def create_app() -> Flask:
                     for r in rows
                 ],
                 "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "page_size": len(rows),
+                "total": len(rows),
+                "total_pages": total_pages,
+                "day_start": day_start_utc.isoformat(),
+                "day_end": day_end_utc.isoformat(),
             }
         )
+
+    @app.delete("/api/counter/<int:row_id>")
+    def delete_counter_row(row_id: int) -> Any:
+        with session_factory() as session:
+            row = session.get(CounterInfor, row_id)
+            if row is None:
+                return jsonify({"ok": False, "error": "Counter row not found"}), 404
+            session.delete(row)
+            session.commit()
+        return jsonify({"ok": True, "id": row_id})
+
+    @app.patch("/api/counter/<int:row_id>/favorite")
+    def favorite_counter_row(row_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        is_favorite = bool(body.get("is_favorite", True))
+        with session_factory() as session:
+            row = session.get(CounterInfor, row_id)
+            if row is None:
+                return jsonify({"ok": False, "error": "Counter row not found"}), 404
+            row.is_favorite = is_favorite
+            session.commit()
+        return jsonify({"ok": True, "id": row_id, "is_favorite": is_favorite})
+
+    @app.delete("/api/status/<int:row_id>")
+    def delete_status_row(row_id: int) -> Any:
+        with session_factory() as session:
+            row = session.get(StatusInfor, row_id)
+            if row is None:
+                return jsonify({"ok": False, "error": "Status row not found"}), 404
+            session.delete(row)
+            session.commit()
+        return jsonify({"ok": True, "id": row_id})
+
+    @app.patch("/api/status/<int:row_id>/favorite")
+    def favorite_status_row(row_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        is_favorite = bool(body.get("is_favorite", True))
+        with session_factory() as session:
+            row = session.get(StatusInfor, row_id)
+            if row is None:
+                return jsonify({"ok": False, "error": "Status row not found"}), 404
+            row.is_favorite = is_favorite
+            session.commit()
+        return jsonify({"ok": True, "id": row_id, "is_favorite": is_favorite})
 
     @app.get("/api/counter/heatmap")
     def counter_heatmap() -> Any:
@@ -522,6 +1050,133 @@ def create_app() -> Flask:
             }
         )
 
+    @app.get("/api/polling/controls")
+    def polling_controls() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid")) or "legacy-lan"
+        agent_uid = _to_text(request.args.get("agent_uid"))
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, lead_valid, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+        with session_factory() as session:
+            stmt = select(Printer).where(Printer.lead == lead_valid, Printer.lan_uid == lan_uid).order_by(Printer.id.asc())
+            if agent_uid:
+                stmt = stmt.where(Printer.agent_uid == agent_uid)
+            rows = session.execute(stmt).scalars().all()
+        return jsonify(
+            {
+                "ok": True,
+                "lead": lead_valid,
+                "lan_uid": lan_uid,
+                "agent_uid": agent_uid,
+                "rows": [
+                    {
+                        "id": int(r.id),
+                        "ip": r.ip,
+                        "printer_name": r.printer_name,
+                        "enabled": bool(r.enabled),
+                        "enabled_changed_at": r.enabled_changed_at.isoformat() if r.enabled_changed_at else "",
+                    }
+                    for r in rows
+                ],
+            }
+        )
+
+    @app.post("/api/polling/inventory")
+    def ingest_inventory() -> Any:
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            LOGGER.warning("inventory: invalid json body from %s", request.remote_addr)
+            return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, lead, auth_error = _validate_polling_auth(body, lead_key_map, sent_token)
+        if not ok_auth:
+            LOGGER.warning("inventory: unauthorized lead=%s ip=%s", _to_text(body.get("lead")), request.remote_addr)
+            return auth_error
+
+        lan_uid = _to_text(body.get("lan_uid")) or "legacy-lan"
+        agent_uid = _to_text(body.get("agent_uid")) or "legacy-agent"
+        hostname = _to_text(body.get("hostname"))
+        local_ip = _to_text(body.get("local_ip"))
+        local_mac = _to_text(body.get("local_mac"))
+        timestamp = _parse_timestamp(body.get("timestamp"))
+        devices = body.get("devices") if isinstance(body.get("devices"), list) else []
+        inserted = 0
+        updated = 0
+
+        with session_factory() as session:
+            _upsert_lan_and_agent(
+                session=session,
+                lead=lead,
+                lan_uid=lan_uid,
+                agent_uid=agent_uid,
+                lan_name="",
+                subnet_cidr="",
+                gateway_ip="",
+                gateway_mac="",
+                hostname=hostname,
+                local_ip=local_ip,
+                local_mac=local_mac,
+            )
+            for item in devices:
+                if not isinstance(item, dict):
+                    continue
+                printer_name = _to_text(item.get("printer_name")) or _to_text(item.get("name"))
+                ip = _to_text(item.get("ip"))
+                existed = None
+                if ip:
+                    existed = session.execute(
+                        select(Printer).where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == ip).limit(1)
+                    ).scalar_one_or_none()
+                elif printer_name:
+                    existed = session.execute(
+                        select(Printer)
+                        .where(
+                            Printer.lead == lead,
+                            Printer.lan_uid == lan_uid,
+                            Printer.agent_uid == agent_uid,
+                            Printer.printer_name == printer_name,
+                            Printer.ip == "",
+                        )
+                        .limit(1)
+                    ).scalar_one_or_none()
+                _upsert_printer_from_polling(
+                    session=session,
+                    lead=lead,
+                    lan_uid=lan_uid,
+                    agent_uid=agent_uid,
+                    printer_name=printer_name,
+                    ip=ip,
+                    event_time=timestamp,
+                )
+                if existed is None:
+                    inserted += 1
+                else:
+                    updated += 1
+            session.commit()
+
+        LOGGER.info(
+            "inventory: lead=%s lan=%s agent=%s devices=%s inserted=%s updated=%s",
+            lead,
+            lan_uid,
+            agent_uid,
+            len(devices),
+            inserted,
+            updated,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "lead": lead,
+                "lan_uid": lan_uid,
+                "agent_uid": agent_uid,
+                "devices": len(devices),
+                "inserted": inserted,
+                "updated": updated,
+            }
+        )
+
     @app.post("/api/polling")
     def ingest_polling() -> Any:
         body = request.get_json(silent=True) or {}
@@ -529,16 +1184,11 @@ def create_app() -> Flask:
             LOGGER.warning("polling: invalid json body from %s", request.remote_addr)
             return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
 
-        lead = _to_text(body.get("lead"))
-        if not lead:
-            LOGGER.warning("polling: missing lead from %s", request.remote_addr)
-            return jsonify({"ok": False, "error": "Missing lead"}), 400
-
         sent_token = _to_text(request.headers.get("X-Lead-Token"))
-        expected_token = lead_key_map.get(lead)
-        if not expected_token or sent_token != expected_token:
+        ok_auth, lead, auth_error = _validate_polling_auth(body, lead_key_map, sent_token)
+        if not ok_auth:
             LOGGER.warning("polling: unauthorized lead=%s ip=%s", lead, request.remote_addr)
-            return jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401
+            return auth_error
 
         printer_name = _to_text(body.get("printer_name"))
         ip = _to_text(body.get("ip"))
@@ -570,6 +1220,7 @@ def create_app() -> Flask:
         inserted_status = 0
         skipped_counter = 0
         skipped_status = 0
+        skipped_disabled = 0
         with session_factory() as session:
             _upsert_lan_and_agent(
                 session=session,
@@ -584,8 +1235,32 @@ def create_app() -> Flask:
                 local_ip=local_ip,
                 local_mac=local_mac,
             )
-            if counter_data:
+            printer_row = None
+            if ip or printer_name:
+                printer_row = _upsert_printer_from_polling(
+                    session=session,
+                    lead=lead,
+                    lan_uid=lan_uid,
+                    agent_uid=agent_uid,
+                    printer_name=printer_name,
+                    ip=ip,
+                    event_time=timestamp,
+                )
+            device_enabled = True if printer_row is None else bool(printer_row.enabled)
+            if not device_enabled:
+                skipped_disabled = 1
+
+            if counter_data and device_enabled:
                 normalized_counter = _normalize_counter_payload(counter_data)
+                begin_record_id_for_counter: int | None = None
+                latest_begin_row = session.execute(
+                    select(CounterInfor.begin_record_id)
+                    .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
+                    .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if isinstance(latest_begin_row, int):
+                    begin_record_id_for_counter = latest_begin_row
                 baseline_row = session.execute(
                     select(CounterBaseline).where(CounterBaseline.lead == lead, CounterBaseline.lan_uid == lan_uid, CounterBaseline.ip == ip)
                 ).scalar_one_or_none()
@@ -611,6 +1286,7 @@ def create_app() -> Flask:
                         baseline_row.agent_uid = agent_uid
                         baseline_row.printer_name = printer_name or baseline_row.printer_name
                         delta_counter = {k: 0 for k in normalized_counter}
+                        begin_record_id_for_counter = None
 
                 latest_counter_row = session.execute(
                     select(CounterInfor.timestamp, CounterInfor.raw_payload)
@@ -627,14 +1303,14 @@ def create_app() -> Flask:
                 ):
                     skipped_counter = 1
                 else:
-                    session.add(
-                        CounterInfor(
+                    row = CounterInfor(
                             lead=lead,
                             lan_uid=lan_uid,
                             agent_uid=agent_uid,
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
+                            begin_record_id=begin_record_id_for_counter,
                             total=delta_counter.get("total"),
                             copier_bw=delta_counter.get("copier_bw"),
                             printer_bw=delta_counter.get("printer_bw"),
@@ -651,10 +1327,22 @@ def create_app() -> Flask:
                             duplex=delta_counter.get("duplex"),
                             raw_payload=delta_counter,
                         )
-                    )
+                    session.add(row)
+                    session.flush()
+                    if row.begin_record_id is None:
+                        row.begin_record_id = row.id
                     inserted_counter = 1
 
-            if status_data:
+            if status_data and device_enabled:
+                begin_record_id_for_status: int | None = None
+                latest_status_begin = session.execute(
+                    select(StatusInfor.begin_record_id)
+                    .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
+                    .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if isinstance(latest_status_begin, int):
+                    begin_record_id_for_status = latest_status_begin
                 latest_status_row = session.execute(
                     select(StatusInfor.timestamp, StatusInfor.raw_payload)
                     .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
@@ -670,14 +1358,14 @@ def create_app() -> Flask:
                 ):
                     skipped_status = 1
                 else:
-                    session.add(
-                        StatusInfor(
+                    row = StatusInfor(
                             lead=lead,
                             lan_uid=lan_uid,
                             agent_uid=agent_uid,
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
+                            begin_record_id=begin_record_id_for_status,
                             system_status=_to_text(status_data.get("system_status")),
                             printer_status=_to_text(status_data.get("printer_status")),
                             printer_alerts=_to_text(status_data.get("printer_alerts")),
@@ -693,11 +1381,14 @@ def create_app() -> Flask:
                             other_info=_to_text(status_data.get("other_info")),
                             raw_payload=status_data,
                         )
-                    )
+                    session.add(row)
+                    session.flush()
+                    if row.begin_record_id is None:
+                        row.begin_record_id = row.id
                     inserted_status = 1
             session.commit()
         LOGGER.info(
-            "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s)",
+            "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s)",
             lead,
             lan_uid,
             agent_uid,
@@ -707,6 +1398,7 @@ def create_app() -> Flask:
             inserted_status,
             skipped_counter,
             skipped_status,
+            skipped_disabled,
         )
 
         return jsonify(
@@ -722,6 +1414,7 @@ def create_app() -> Flask:
                 "inserted_status": inserted_status,
                 "skipped_counter": skipped_counter,
                 "skipped_status": skipped_status,
+                "skipped_disabled": skipped_disabled,
             }
         )
 

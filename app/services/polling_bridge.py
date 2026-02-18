@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import socket
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -15,6 +18,7 @@ from app.services.api_client import APIClient, Printer
 
 
 LOGGER = logging.getLogger(__name__)
+CONTROL_LOG_FILE = Path("storage/data/control_actions.csv")
 
 
 class PollingBridge:
@@ -32,6 +36,10 @@ class PollingBridge:
         self._last_cycle_ricoh_printers = 0
         self._last_cycle_sent = 0
         self._last_cycle_failed = 0
+        self._last_control_pull_at = ""
+        self._last_control_total = 0
+        self._last_control_apply_error = ""
+        self._applied_controls: dict[str, bool] = {}
 
     def is_configured(self) -> bool:
         return bool(self._config.get_string("polling.url").strip()) and bool(self._config.get_string("polling.lead").strip()) and bool(
@@ -60,12 +68,12 @@ class PollingBridge:
             return ""
 
     def interval_seconds(self) -> int:
-        raw = self._config.get_string("polling.interval_seconds", "60").strip()
+        raw = self._config.get_string("polling.interval_seconds", "15").strip()
         try:
             value = int(raw)
             return max(10, value)
         except Exception:  # noqa: BLE001
-            return 60
+            return 15
 
     def start(self) -> tuple[bool, str]:
         if not self._config.get_bool("polling.enabled", True):
@@ -112,6 +120,9 @@ class PollingBridge:
             "last_cycle_ricoh_printers": self._last_cycle_ricoh_printers,
             "last_cycle_sent": self._last_cycle_sent,
             "last_cycle_failed": self._last_cycle_failed,
+            "last_control_pull_at": self._last_control_pull_at,
+            "last_control_total": self._last_control_total,
+            "last_control_apply_error": self._last_control_apply_error,
         }
 
     def _load_printers(self) -> list[Printer]:
@@ -143,6 +154,122 @@ class PollingBridge:
         if last_exc is not None:
             raise last_exc
 
+    def _polling_base_url(self) -> str:
+        raw = self._config.get_string("polling.url").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _pull_device_controls(self) -> dict[str, bool]:
+        base_url = self._polling_base_url()
+        if not base_url:
+            return {}
+        token = self._config.get_string("polling.token").strip()
+        lead = self._config.get_string("polling.lead").strip()
+        lan_uid = self._config.get_string("polling.lan_uid", "").strip() or "legacy-lan"
+        agent_uid = self._config.get_string("polling.agent_uid", "").strip()
+        params = {"lead": lead, "lan_uid": lan_uid}
+        if agent_uid:
+            params["agent_uid"] = agent_uid
+        headers = {"Accept": "application/json", "X-Lead-Token": token}
+        url = f"{base_url}/api/polling/controls"
+        response = self._api_client.session.get(url, params=params, headers=headers, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        rows = payload.get("rows", []) if isinstance(payload, dict) else []
+        mapping: dict[str, bool] = {}
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ip = str(row.get("ip", "") or "").strip()
+                if not ip:
+                    continue
+                mapping[ip] = bool(row.get("enabled", True))
+        self._last_control_pull_at = self._now_iso()
+        self._last_control_total = len(mapping)
+        return mapping
+
+    def _push_inventory(self, printers: list[Printer], hostname: str, local_ip: str) -> None:
+        base_url = self._polling_base_url()
+        if not base_url:
+            return
+        token = self._config.get_string("polling.token").strip()
+        lead = self._config.get_string("polling.lead").strip()
+        lan_uid = self._config.get_string("polling.lan_uid", "").strip() or "legacy-lan"
+        agent_uid = self._config.get_string("polling.agent_uid", "").strip() or hostname
+        devices: list[dict[str, str]] = []
+        for printer in printers:
+            devices.append(
+                {
+                    "printer_name": str(printer.name or "").strip(),
+                    "ip": str(printer.ip or "").strip(),
+                    "printer_type": str(printer.printer_type or "").strip(),
+                    "status": str(printer.status or "").strip(),
+                    "user": str(printer.user or "").strip(),
+                }
+            )
+        payload = {
+            "lead": lead,
+            "lan_uid": lan_uid,
+            "agent_uid": agent_uid,
+            "hostname": hostname,
+            "local_ip": local_ip,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "devices": devices,
+        }
+        headers = {"Content-Type": "application/json", "X-Lead-Token": token}
+        url = f"{base_url}/api/polling/inventory"
+        response = self._api_client.session.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+
+    def _log_control_event(self, printer: Printer, enabled: bool, result: str, detail: str = "") -> None:
+        CONTROL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        is_new = not CONTROL_LOG_FILE.exists()
+        with CONTROL_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
+            writer = csv.writer(fp)
+            if is_new:
+                writer.writerow(["timestamp_utc", "printer_name", "ip", "enabled", "action", "result", "detail"])
+            writer.writerow(
+                [
+                    datetime.now(timezone.utc).isoformat(),
+                    str(printer.name or ""),
+                    str(printer.ip or ""),
+                    str(bool(enabled)).lower(),
+                    "enable" if enabled else "lock",
+                    result,
+                    detail,
+                ]
+            )
+
+    def _apply_machine_control(self, printer: Printer, enabled: bool) -> None:
+        ip = str(printer.ip or "").strip()
+        if not ip:
+            return
+        current = self._applied_controls.get(ip)
+        if current is enabled:
+            return
+        if not str(printer.user or "").strip():
+            printer.user = self._config.get_string("test.user", "").strip()
+        if not str(printer.password or "").strip():
+            printer.password = self._config.get_string("test.password", "").strip()
+        action = "enable" if enabled else "lock"
+        LOGGER.info("Applying machine control: action=%s name=%s ip=%s", action, printer.name, ip)
+        try:
+            if enabled:
+                self._ricoh_service.enable_machine(printer)
+            else:
+                self._ricoh_service.lock_machine(printer)
+            self._applied_controls[ip] = enabled
+            self._last_control_apply_error = ""
+            self._log_control_event(printer, enabled, "ok", "")
+        except Exception as exc:  # noqa: BLE001
+            self._log_control_event(printer, enabled, "error", str(exc))
+            raise
+
     def _worker(self) -> None:
         interval = self.interval_seconds()
         lead = self._config.get_string("polling.lead").strip()
@@ -153,6 +280,36 @@ class PollingBridge:
             cycle_started_at = self._now_iso()
             self._last_cycle_at = self._now_iso()
             printers = self._load_printers()
+            try:
+                self._push_inventory(printers, hostname=hostname, local_ip=local_ip)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Polling inventory sync failed: %s", exc)
+            controls: dict[str, bool] = {}
+            try:
+                controls = self._pull_device_controls()
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Polling control pull failed: %s", exc)
+                controls = {}
+            if controls:
+                for printer in printers:
+                    ip = str(printer.ip or "").strip()
+                    if not ip or ip not in controls:
+                        continue
+                    printer_type = str(printer.printer_type or "").strip().lower()
+                    printer_name = str(printer.name or "").strip().lower()
+                    if "ricoh" not in printer_type and "ricoh" not in printer_name:
+                        continue
+                    try:
+                        self._apply_machine_control(printer, controls[ip])
+                    except Exception as exc:  # noqa: BLE001
+                        self._last_control_apply_error = str(exc)
+                        LOGGER.warning(
+                            "Polling control apply failed: name=%s ip=%s enabled=%s error=%s",
+                            printer.name,
+                            ip,
+                            controls[ip],
+                            exc,
+                        )
             self._last_cycle_total_printers = len(printers)
             self._last_cycle_ricoh_printers = 0
             self._last_cycle_sent = 0
@@ -167,6 +324,9 @@ class PollingBridge:
                 if self._stop_event.is_set():
                     break
                 if not str(printer.ip or "").strip():
+                    continue
+                if controls and not controls.get(str(printer.ip or "").strip(), True):
+                    LOGGER.info("Polling skipped (disabled): name=%s ip=%s", printer.name, printer.ip)
                     continue
                 printer_type = str(printer.printer_type or "").strip().lower()
                 printer_name = str(printer.name or "").strip().lower()

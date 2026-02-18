@@ -70,6 +70,8 @@ check_table "StatusInfor"
 check_table "CounterBaseline"
 check_table "LanSite"
 check_table "AgentNode"
+check_table "Printer"
+check_table "PrinterEnableLog"
 
 echo
 echo "Checking CounterInfor columns..."
@@ -99,6 +101,18 @@ echo
 echo "Checking AgentNode columns..."
 for col in id lead lan_uid agent_uid hostname local_ip local_mac created_at last_seen_at; do
   check_column "AgentNode" "${col}"
+done
+
+echo
+echo "Checking Printer columns..."
+for col in id lead lan_uid agent_uid printer_name ip enabled enabled_changed_at created_at updated_at; do
+  check_column "Printer" "${col}"
+done
+
+echo
+echo "Checking PrinterEnableLog columns..."
+for col in id printer_id lead lan_uid printer_name ip enabled changed_at; do
+  check_column "PrinterEnableLog" "${col}"
 done
 
 echo

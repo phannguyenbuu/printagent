@@ -5,11 +5,24 @@
     <input id="heatmap-date" type="date" />
     <input id="heatmap-lead" placeholder="lead" />
     <button id="heatmap-apply">Apply</button>
-    <button id="heatmap-mode-day" class="active">Day 1440</button>
-    <button id="heatmap-mode-hour">Hour 60</button>
-    <select id="heatmap-hour"></select>
+    <select id="heatmap-palette">
+      <option value="option1" selected>Heatmap option 1</option>
+      <option value="option2">Heatmap option 2</option>
+      <option value="option3">Heatmap option 3</option>
+      <option value="none">Don't show heatmap</option>
+    </select>
   </div>
-  <div id="heatmap-wrap" class="heatmap-wrap">Loading...</div>
+  <section class="heatmap-top-panel">
+    <h4>Top Activity</h4>
+    <div id="heatmap-top-list" class="heatmap-top-list">-</div>
+    <h4>Legend</h4>
+    <div id="heatmap-legend" class="heatmap-legend"></div>
+  </section>
+  <div class="heatmap-dashboard">
+    <div class="heatmap-main">
+      <div id="heatmap-wrap" class="heatmap-wrap">Loading...</div>
+    </div>
+  </div>
   <div class="pager">
     <button id="heatmap-prev">Prev</button>
     <span id="heatmap-page">1 / 1</span>

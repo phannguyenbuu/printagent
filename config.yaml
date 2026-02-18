@@ -28,4 +28,4 @@ polling:
   token: "change-me"
   lan_uid: "lan-default"
   agent_uid: "agent-pc-01"
-  interval_seconds: 60
+  interval_seconds: 15

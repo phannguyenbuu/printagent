@@ -1,6 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
+<section class="panel panel-neon-analytics">
+  <h3>Analytics</h3>
+  <div class="chart-grid">
+    <div class="chart-card"><h4>Daily Total (1 Month)</h4><canvas id="chart-daily-total"></canvas></div>
+    <div class="chart-card"><h4>Daily Copier vs Printer</h4><canvas id="chart-daily-cp"></canvas></div>
+    <div class="chart-card"><h4>A3 / A4</h4><canvas id="chart-a3-a4"></canvas></div>
+    <div class="chart-card"><h4>Double vs Single / A4</h4><canvas id="chart-duplex"></canvas></div>
+    <div class="chart-card"><h4>Hourly Total (1 Day)</h4><canvas id="chart-hourly-total"></canvas></div>
+    <div class="chart-card"><h4>Hourly A3 / A4</h4><canvas id="chart-hourly-a3a4"></canvas></div>
+    <div class="chart-card"><h4>Average Radar</h4><canvas id="chart-radar"></canvas></div>
+    <div class="chart-card"><h4>Distribution</h4><canvas id="chart-distribution"></canvas></div>
+  </div>
+</section>
 <section class="cards" id="summary-cards">
   <div class="card">Loading...</div>
+</section>
+<section class="panel">
+  <h3>Last Counter Infor</h3>
+  <div id="last-counter-info" class="meta-line">Loading...</div>
+</section>
+<section class="panel">
+  <h3>Last Status Infor</h3>
+  <div id="last-status-info" class="meta-line">Loading...</div>
 </section>
 {% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel devices-panel">
+  <div class="devices-layout">
+    <aside class="devices-nav">
+      <h3>Devices</h3>
+      <div id="devices-tabs" class="devices-tabs">
+        <div class="meta-line">Loading devices...</div>
+      </div>
+    </aside>
+    <section class="devices-content">
+      <div id="devices-head" class="devices-head"></div>
+      <div class="table-wrap">
+        <table id="devices-events-table" class="devices-events-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Enable</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="2">No data</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</section>
+{% endblock %}

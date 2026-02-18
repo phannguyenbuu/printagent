@@ -4,16 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ page_title }} | GoPrinx</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+    {% include "_app_styles.html" %}
   </head>
   <body data-page="{{ active_tab }}">
     <div class="shell">
       <aside class="sidebar">
         <h2>GoPrinx</h2>
-        <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
-        <a class="link {% if active_tab == 'counter' %}active{% endif %}" href="{{ url_for('counter_page') }}">Counter</a>
-        <a class="link {% if active_tab == 'status' %}active{% endif %}" href="{{ url_for('status_page') }}">Status</a>
-        <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}">Heatmap</a>
+        <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="link-ico">&bull;</span><span>Dashboard</span></a>
+        <a class="link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices_page') }}"><span class="link-ico">&bull;</span><span>Devices</span></a>
+        <a class="link {% if active_tab == 'counter' %}active{% endif %}" href="{{ url_for('counter_page') }}"><span class="link-ico">&bull;</span><span>Counter</span></a>
+        <a class="link {% if active_tab == 'status' %}active{% endif %}" href="{{ url_for('status_page') }}"><span class="link-ico">&bull;</span><span>Status</span></a>
+        <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}"><span class="link-ico">&bull;</span><span>Heatmap</span></a>
+        <a class="link {% if active_tab == 'configs' %}active{% endif %}" href="{{ url_for('configs_page') }}"><span class="link-ico">&bull;</span><span>Configs</span></a>
       </aside>
       <main class="content">
         <header class="topbar">
@@ -25,17 +27,87 @@
             </label>
             <select id="auto-refresh-interval">
               <option value="5000">5s</option>
-              <option value="10000" selected>10s</option>
+              <option value="10000">10s</option>
               <option value="30000">30s</option>
-              <option value="60000">60s</option>
+              <option value="60000" selected>60s</option>
             </select>
             <span id="auto-refresh-state">Auto refresh: ON</span>
             <button id="refresh-btn">Refresh</button>
           </div>
         </header>
+        {% if active_tab != 'configs' and active_tab != 'devices' %}
+          <section class="floating-filter">
+            <div class="floating-filter-row">
+              <div class="filter-pill-group">
+                <label class="filter-pill">
+                  <span>Lead</span>
+                  <select id="global-filter-lead">
+                    <option value="">loading leads...</option>
+                  </select>
+                </label>
+                <label class="filter-pill">
+                  <span>Printer</span>
+                  <input id="global-filter-printer-name" placeholder="printer name" />
+                </label>
+                <label class="filter-pill">
+                  <span>Type</span>
+                  <select id="global-filter-printer-type">
+                    <option value="">all</option>
+                    <option value="ricoh">ricoh</option>
+                    <option value="toshiba">toshiba</option>
+                    <option value="epson">epson</option>
+                  </select>
+                </label>
+                <label class="filter-pill">
+                  <span>Favorite</span>
+                  <select id="global-filter-favorite">
+                    <option value="">all</option>
+                    <option value="1">favorite only</option>
+                  </select>
+                </label>
+                <label class="filter-pill">
+                  <span>Period</span>
+                  <select id="global-filter-time-scope">
+                    <option value="hour">last hour</option>
+                    <option value="day">last day</option>
+                    <option value="7d">7 days</option>
+                    <option value="month" selected>1 month</option>
+                    <option value="3months">3 months</option>
+                    <option value="6months">6 months</option>
+                    <option value="year">1 year</option>
+                    <option value="">all time</option>
+                  </select>
+                </label>
+              </div>
+              <div class="filter-actions">
+                <button id="global-filter-reset" class="filter-btn ghost" type="button">Reset</button>
+                <button id="global-filter-apply" class="filter-btn" type="button">Search</button>
+              </div>
+            </div>
+          </section>
+        {% endif %}
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <div id="confirm-modal" class="confirm-modal" hidden>
+      <div class="confirm-backdrop"></div>
+      <div class="confirm-dialog">
+        <h3>Confirm Delete</h3>
+        <p>Are you sure to delete?</p>
+        <div class="confirm-actions">
+          <button id="confirm-no" type="button">No</button>
+          <button id="confirm-yes" type="button">Yes</button>
+        </div>
+      </div>
+    </div>
+    <div id="detail-modal" class="detail-modal" hidden>
+      <div class="detail-backdrop"></div>
+      <div class="detail-dialog">
+        <div id="detail-modal-body"></div>
+      </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    {% include "_app_scripts.html" %}
   </body>
 </html>
+

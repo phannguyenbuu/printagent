@@ -1,0 +1,903 @@
+<script>
+async function jget(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+function qs(id) { return document.getElementById(id); }
+function getGlobalFilters() {
+  return {
+    lead: (qs("global-filter-lead")?.value || "").trim(),
+    printer_name: (qs("global-filter-printer-name")?.value || "").trim(),
+    printer_type: (qs("global-filter-printer-type")?.value || "").trim(),
+    favorite: (qs("global-filter-favorite")?.value || "").trim(),
+    time_scope: (qs("global-filter-time-scope")?.value || "").trim(),
+  };
+}
+function saveGlobalFilters() {
+  try { localStorage.setItem("goprinx_filters", JSON.stringify(getGlobalFilters())); } catch (_) {}
+}
+function restoreGlobalFilters() {
+  try {
+    const raw = localStorage.getItem("goprinx_filters");
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return;
+    if (qs("global-filter-lead")) qs("global-filter-lead").value = data.lead || "default";
+    if (qs("global-filter-printer-name")) qs("global-filter-printer-name").value = data.printer_name || "";
+    if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = data.printer_type || "";
+    if (qs("global-filter-favorite")) qs("global-filter-favorite").value = data.favorite || "";
+    if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = data.time_scope || "month";
+  } catch (_) {}
+}
+
+async function loadLeadOptions(preferredLead = "") {
+  const select = qs("global-filter-lead");
+  if (!select) return;
+  let dbLeads = [];
+  try {
+    const data = await jget("/api/leads");
+    if (data && Array.isArray(data.leads)) dbLeads = data.leads;
+  } catch (_) {
+    dbLeads = [];
+  }
+  const uniqueLeads = Array.from(
+    new Set(
+      dbLeads
+        .map((x) => String(x || "").trim())
+        .filter((x) => Boolean(x))
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const finalLeads = ["default", ...uniqueLeads.filter((x) => x !== "default")];
+  select.innerHTML = "";
+  finalLeads.forEach((lead) => {
+    const option = document.createElement("option");
+    option.value = lead;
+    option.textContent = lead;
+    select.appendChild(option);
+  });
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "all";
+  select.appendChild(allOption);
+
+  const preferred = String(preferredLead || "").trim();
+  if (preferred === "" || finalLeads.includes(preferred)) {
+    select.value = preferred;
+  } else {
+    select.value = "default";
+  }
+}
+function defaultUiConfig() {
+  return { chart_columns: 2, card_columns: 5, card_rows: 4, pages_window: 30, paging_per_day: 1, auto_refresh_seconds: 60 };
+}
+function loadUiConfig() {
+  try {
+    const raw = localStorage.getItem("goprinx_ui_config");
+    if (!raw) return defaultUiConfig();
+    return { ...defaultUiConfig(), ...JSON.parse(raw) };
+  } catch (_) {
+    return defaultUiConfig();
+  }
+}
+function saveUiConfig(cfg) {
+  localStorage.setItem("goprinx_ui_config", JSON.stringify(cfg));
+}
+function applyUiConfig(cfg) {
+  document.documentElement.style.setProperty("--chart-columns", String(cfg.chart_columns || 2));
+  document.documentElement.style.setProperty("--timelapse-card-columns", String(cfg.card_columns || 5));
+  state.autoRefresh.intervalMs = Math.max(5000, Number(cfg.auto_refresh_seconds || 60) * 1000);
+}
+function fmtNumber(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toLocaleString("en-US");
+}
+function fmtTimestampGmt7(value) {
+  if (!value) return "-";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  const shifted = new Date(dt.getTime() + 7 * 60 * 60 * 1000);
+  const iso = shifted.toISOString().replace("T", " ");
+  return `${iso.slice(0, 19)} GMT+7`;
+}
+
+function fmtCompact(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? "");
+  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n)}`;
+}
+
+function iconStarSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 14.75 8.82 21 9.72l-4.52 4.42 1.07 6.25L12 17.45 6.45 20.39l1.07-6.25L3 9.72l6.25-.9z"></path></svg>';
+}
+
+function iconCloseSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"></path></svg>';
+}
+
+function setFavoriteButtonState(btn, isActive) {
+  btn.dataset.active = isActive ? "1" : "0";
+  btn.classList.toggle("active", isActive);
+}
+
+const CHART_THEME = {
+  text: "#f3f7ff",
+  mutedText: "#cedcff",
+  grid: "rgba(123, 158, 243, 0.28)",
+  tooltipBg: "rgba(8, 14, 36, 0.96)",
+  lineA: "#22e8ff",
+  lineAFill: "rgba(34, 232, 255, 0.24)",
+  lineB: "#ff37c7",
+  lineBFill: "rgba(255, 55, 199, 0.18)",
+  barA: "#1ee7ff",
+  barB: "#8756ff",
+  barC: "#ff7a1f",
+  pieA: "#33e9ff",
+  pieB: "#ff43cc",
+  pieC: "#9d7bff",
+  pieD: "#ff8c2a",
+  radarBorder: "#9a5dff",
+  radarFill: "rgba(154, 93, 255, 0.24)",
+  radarPoint: "#f8fbff",
+  neonSeries: ["#1ee7ff", "#ff43cc", "#9d7bff", "#ff8c2a", "#31ffa4"],
+};
+
+function upsertChart(id, type, data, options) {
+  const canvas = qs(id);
+  if (!canvas || typeof Chart === "undefined") return;
+  if (state.charts[id]) state.charts[id].destroy();
+  const isCircle = type === "pie" || type === "doughnut" || type === "polarArea" || type === "radar";
+  canvas.classList.toggle("chart-circle", isCircle);
+  canvas.classList.toggle("chart-rect", !isCircle);
+  const baseOptions = {
+    maintainAspectRatio: isCircle,
+    aspectRatio: isCircle ? 1 : 2,
+    plugins: {
+      legend: { labels: { color: CHART_THEME.text, font: { size: 10 } } },
+      tooltip: {
+        enabled: true,
+        backgroundColor: CHART_THEME.tooltipBg,
+        titleColor: CHART_THEME.text,
+        bodyColor: CHART_THEME.mutedText,
+        borderColor: "rgba(132, 163, 240, 0.55)",
+        borderWidth: 1,
+      },
+    },
+    elements: {
+      line: { borderWidth: 2.4 },
+      point: { radius: 2.4, hoverRadius: 4.5 },
+      arc: { borderWidth: 0 },
+    },
+  };
+  if (type === "radar") {
+    baseOptions.scales = {
+      r: {
+        ticks: { color: CHART_THEME.mutedText, backdropColor: "rgba(0, 0, 0, 0)", callback: (v) => fmtCompact(v) },
+        angleLines: { color: CHART_THEME.grid },
+        grid: { color: CHART_THEME.grid },
+        pointLabels: { color: CHART_THEME.text, font: { size: 10 } },
+      },
+    };
+  } else if (!isCircle) {
+    baseOptions.scales = {
+      x: { ticks: { color: CHART_THEME.text, font: { size: 10 }, maxRotation: 0, autoSkip: true }, grid: { color: CHART_THEME.grid } },
+      y: { ticks: { color: CHART_THEME.text, font: { size: 10 }, callback: (v) => fmtCompact(v), maxTicksLimit: 7 }, grid: { color: CHART_THEME.grid } },
+    };
+  }
+  state.charts[id] = new Chart(canvas, { type, data, options: { ...baseOptions, ...(options || {}) }, plugins: [valueLabelPlugin] });
+}
+
+const valueLabelPlugin = {
+  id: "valueLabelPlugin",
+  afterDatasetsDraw(chart) {
+    if (chart.config.type === "radar" || chart.config.type === "polarArea") return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.fillStyle = "#eefdff";
+    ctx.font = "10px Arial";
+    chart.data.datasets.forEach((dataset, i) => {
+      const meta = chart.getDatasetMeta(i);
+      if (!meta || meta.hidden) return;
+      meta.data.forEach((elem, idx) => {
+        const value = dataset.data[idx];
+        if (value === null || value === undefined) return;
+        const pos = elem.tooltipPosition();
+        ctx.textAlign = "center";
+        ctx.fillText(fmtNumber(value), pos.x, pos.y - 8);
+      });
+    });
+    ctx.restore();
+  },
+};
+
+async function loadSummary() {
+  const query = new URLSearchParams(getGlobalFilters());
+  const data = await jget(`/api/dashboard/summary?${query.toString()}`);
+  qs("summary-cards").innerHTML = `
+    <div class="card"><div>Counter Rows</div><h3>${fmtNumber(data.counter_rows)}</h3></div>
+    <div class="card"><div>Status Rows</div><h3>${fmtNumber(data.status_rows)}</h3></div>
+    <div class="card"><div>Printers / Leads</div><h3>${fmtNumber(data.printers)} / ${fmtNumber(data.leads)}</h3></div>
+    <div class="card"><div>Latest Counter Time</div><div>${fmtTimestampGmt7(data.latest_counter_at)}</div></div>
+    <div class="card"><div>Latest Status Time</div><div>${fmtTimestampGmt7(data.latest_status_at)}</div></div>
+    <div class="card"><div>Latest Total</div><h3>${fmtNumber(data.latest_totals?.total || 0)}</h3></div>
+    <div class="card"><div>Latest Copier</div><h3>${fmtNumber(data.latest_totals?.copier_bw || 0)}</h3></div>
+    <div class="card"><div>Latest Printer</div><h3>${fmtNumber(data.latest_totals?.printer_bw || 0)}</h3></div>
+    <div class="card"><div>Latest Scan BW/Color</div><h3>${fmtNumber(data.latest_totals?.scanner_send_bw || 0)} / ${fmtNumber(data.latest_totals?.scanner_send_color || 0)}</h3></div>
+  `;
+  if (qs("last-counter-info")) {
+    const c = data.latest_counter_info || {};
+    qs("last-counter-info").textContent = `${c.printer_name || "-"} | ${c.ip || "-"} | ${fmtTimestampGmt7(c.timestamp)} | begin_id=${c.begin_record_id ?? "-"}`;
+  }
+  if (qs("last-status-info")) {
+    const s = data.latest_status_info || {};
+    qs("last-status-info").textContent = `${s.printer_name || "-"} | ${s.ip || "-"} | ${fmtTimestampGmt7(s.timestamp)} | ${s.system_status || "-"} | begin_id=${s.begin_record_id ?? "-"}`;
+  }
+  const charts = data.charts || {};
+  const lineStyle = { borderWidth: 2.8, pointRadius: 2.4, pointHoverRadius: 4.5 };
+  upsertChart("chart-daily-total", "line", {
+    labels: charts.daily_total_month?.labels || [],
+    datasets: [{ label: "Total", data: charts.daily_total_month?.values || [], borderColor: CHART_THEME.lineA, backgroundColor: CHART_THEME.lineAFill, fill: true, tension: 0.35, ...lineStyle }],
+  });
+  upsertChart("chart-daily-cp", "bar", {
+    labels: charts.daily_copier_printer?.labels || [],
+    datasets: [
+      { label: "Copier", data: charts.daily_copier_printer?.copier || [], backgroundColor: CHART_THEME.barA, borderRadius: 8 },
+      { label: "Printer", data: charts.daily_copier_printer?.printer || [], backgroundColor: CHART_THEME.barB, borderRadius: 8 },
+    ],
+  });
+  upsertChart("chart-a3-a4", "doughnut", {
+    labels: charts.pie_a3_a4?.labels || [],
+    datasets: [{ data: charts.pie_a3_a4?.values || [], backgroundColor: [CHART_THEME.pieA, CHART_THEME.pieB], borderWidth: 0, hoverOffset: 14 }],
+  }, { plugins: { legend: { position: "bottom" } }, cutout: "52%", radius: "84%" });
+  upsertChart("chart-duplex", "pie", {
+    labels: charts.pie_duplex_single?.labels || [],
+    datasets: [{ data: charts.pie_duplex_single?.values || [], backgroundColor: [CHART_THEME.pieC, CHART_THEME.pieD], borderWidth: 0 }],
+  }, { plugins: { legend: { position: "bottom" } }, radius: "84%" });
+  upsertChart("chart-hourly-total", "bar", {
+    labels: charts.hourly_total?.labels || [],
+    datasets: [{
+      label: "Hourly Total",
+      data: charts.hourly_total?.values || [],
+      backgroundColor: (charts.hourly_total?.values || []).map((_, i) => CHART_THEME.neonSeries[i % CHART_THEME.neonSeries.length]),
+      borderRadius: 8,
+    }],
+  });
+  upsertChart("chart-hourly-a3a4", "line", {
+    labels: charts.hourly_a3_a4?.labels || [],
+    datasets: [
+      { label: "A3", data: charts.hourly_a3_a4?.a3 || [], borderColor: CHART_THEME.lineB, backgroundColor: CHART_THEME.lineBFill, fill: true, tension: 0.3, ...lineStyle },
+      { label: "A4", data: charts.hourly_a3_a4?.a4 || [], borderColor: CHART_THEME.lineA, backgroundColor: CHART_THEME.lineAFill, fill: true, tension: 0.3, ...lineStyle },
+    ],
+  });
+  upsertChart("chart-radar", "radar", {
+    labels: charts.average_radar?.labels || [],
+    datasets: [{ label: "Average", data: charts.average_radar?.values || [], borderColor: CHART_THEME.radarBorder, backgroundColor: CHART_THEME.radarFill, pointBackgroundColor: CHART_THEME.radarPoint }],
+  });
+  upsertChart("chart-distribution", "polarArea", {
+    labels: charts.distribution?.labels || [],
+    datasets: [{
+      data: charts.distribution?.values || [],
+      backgroundColor: (charts.distribution?.values || []).map((_, i) => CHART_THEME.neonSeries[i % CHART_THEME.neonSeries.length]),
+    }],
+  });
+}
+
+const state = {
+  counter: { page: 1, totalPages: 1 },
+  status: { page: 1, totalPages: 1 },
+  heatmap: { page: 1, totalPages: 1, mode: "day", hour: 0 },
+  devices: { rows: [], selectedId: 0 },
+  autoRefresh: { enabled: true, intervalMs: 60000, timerId: null },
+  charts: {},
+  pendingDelete: null,
+  detail: null,
+};
+
+function currentPage() {
+  return document.body.dataset.page;
+}
+
+function refreshCurrentPage() {
+  const page = currentPage();
+  if (page === "dashboard") return loadSummary();
+  if (page === "devices") return loadDevicesPage();
+  if (page === "counter") return loadCounter();
+  if (page === "status") return loadStatus();
+  if (page === "heatmap") return loadHeatmap();
+  return Promise.resolve();
+}
+
+function updateAutoRefreshStateText() {
+  const el = qs("auto-refresh-state");
+  if (!el) return;
+  el.textContent = state.autoRefresh.enabled
+    ? `Auto refresh: ON (${Math.round(state.autoRefresh.intervalMs / 1000)}s)`
+    : "Auto refresh: OFF";
+}
+
+function stopAutoRefresh() {
+  if (state.autoRefresh.timerId) {
+    window.clearInterval(state.autoRefresh.timerId);
+    state.autoRefresh.timerId = null;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!state.autoRefresh.enabled) {
+    updateAutoRefreshStateText();
+    return;
+  }
+  state.autoRefresh.timerId = window.setInterval(() => {
+    if (document.hidden) return;
+    refreshCurrentPage().catch(() => {});
+  }, state.autoRefresh.intervalMs);
+  updateAutoRefreshStateText();
+}
+
+function openDeleteConfirm(onYes) {
+  state.pendingDelete = onYes;
+  const modal = qs("confirm-modal");
+  if (modal) modal.hidden = false;
+}
+
+function closeDeleteConfirm() {
+  state.pendingDelete = null;
+  const modal = qs("confirm-modal");
+  if (modal) modal.hidden = true;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function closeDetailModal() {
+  state.detail = null;
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (body) body.innerHTML = "";
+  if (modal) modal.hidden = true;
+}
+
+function renderDeviceTabs() {
+  const host = qs("devices-tabs");
+  if (!host) return;
+  if (!state.devices.rows.length) {
+    host.innerHTML = `<div class="meta-line">No devices from agent yet.</div>`;
+    return;
+  }
+  host.innerHTML = state.devices.rows
+    .map((r) => `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(r.label || `${r.lan_uid} / ${r.printer_name}`)}</button>`)
+    .join("");
+  host.querySelectorAll(".device-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.devices.selectedId = Number(btn.dataset.id || 0);
+      renderDeviceTabs();
+      loadDeviceEvents(state.devices.selectedId).catch(() => {});
+    });
+  });
+}
+
+async function loadDeviceEvents(printerId) {
+  if (!printerId) return;
+  const data = await jget(`/api/devices/${printerId}/events`);
+  const p = data.printer || {};
+  const head = qs("devices-head");
+  if (head) {
+    head.innerHTML = `
+      <div>
+        <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
+        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")}</div>
+      </div>
+      <label class="device-enable-wrap">
+        <input id="device-enable-toggle" type="checkbox" ${p.enabled ? "checked" : ""} />
+        <span>Enable</span>
+      </label>
+    `;
+    qs("device-enable-toggle")?.addEventListener("change", async (event) => {
+      const next = Boolean(event.target.checked);
+      try {
+        await fetch(`/api/devices/${printerId}/enable`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: next }),
+        });
+        await loadDevicesPage();
+      } catch (_) {
+        event.target.checked = !next;
+      }
+    });
+  }
+  const tbody = qs("devices-events-table")?.querySelector("tbody");
+  if (!tbody) return;
+  const events = Array.isArray(data.events) ? data.events : [];
+  tbody.innerHTML = events.length
+    ? events.map((e) => `<tr><td>${escapeHtml(fmtTimestampGmt7(e.changed_at))}</td><td>${e.enabled ? "Enabled" : "Disabled"}</td></tr>`).join("")
+    : `<tr><td colspan="2">No status history</td></tr>`;
+}
+
+async function loadDevicesPage() {
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const query = new URLSearchParams({ lead });
+  const data = await jget(`/api/devices/list?${query.toString()}`);
+  state.devices.rows = Array.isArray(data.rows) ? data.rows : [];
+  if (!state.devices.rows.length) {
+    state.devices.selectedId = 0;
+  } else if (!state.devices.rows.some((x) => x.id === state.devices.selectedId)) {
+    state.devices.selectedId = state.devices.rows[0].id;
+  }
+  renderDeviceTabs();
+  if (state.devices.selectedId) {
+    await loadDeviceEvents(state.devices.selectedId);
+  } else {
+    const head = qs("devices-head");
+    if (head) head.innerHTML = `<div class="meta-line">No device selected.</div>`;
+    const tbody = qs("devices-events-table")?.querySelector("tbody");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="2">No data</td></tr>`;
+  }
+}
+
+function syncFavoriteButtonOnGrid(kind, rowId, isActive) {
+  const btn = document.querySelector(`.card-fav-btn[data-kind="${kind}-fav"][data-id="${rowId}"]`);
+  if (btn) setFavoriteButtonState(btn, isActive);
+}
+
+async function updateFavorite(kind, rowId, isActive) {
+  const res = await fetch(`/api/${kind}/${rowId}/favorite`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_favorite: isActive }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+function openDetailModal(kind, row) {
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (!modal || !body || !row) return;
+  const rowId = Number(row.id || 0);
+  const active = Boolean(row.is_favorite);
+  const kvPairs = kind === "counter"
+    ? [
+        ["Lead", row.lead || "-"],
+        ["Name", row.printer_name || "-"],
+        ["IP", row.ip || "-"],
+        ["Total", fmtNumber(row.total)],
+        ["Copier", fmtNumber(row.copier_bw)],
+        ["Printer", fmtNumber(row.printer_bw)],
+      ]
+    : [
+        ["Lead", row.lead || "-"],
+        ["Name", row.printer_name || "-"],
+        ["IP", row.ip || "-"],
+        ["System", row.system_status || "-"],
+        ["Printer", row.printer_status || "-"],
+        ["Scanner", row.scanner_status || "-"],
+      ];
+  const kvHtml = kvPairs
+    .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(k)}</span><span class="counter-v">${escapeHtml(v)}</span></div>`)
+    .join("");
+
+  body.innerHTML = `
+    <article class="counter-card detail-card">
+      <header class="counter-card-head">
+        <button id="detail-fav-btn" class="card-fav-btn ${active ? "active" : ""}" type="button" data-active="${active ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+        <button id="detail-close-btn" class="card-delete-btn" type="button" aria-label="Close">${iconCloseSvg()}</button>
+        <div class="counter-card-index">#${rowId}</div>
+        <div class="counter-card-time">Timelapse: ${escapeHtml(fmtTimestampGmt7(row.timestamp))}</div>
+      </header>
+      <div class="counter-card-body">${kvHtml}</div>
+    </article>
+  `;
+  modal.hidden = false;
+  state.detail = { kind, rowId };
+
+  qs("detail-close-btn")?.addEventListener("click", closeDetailModal);
+  qs("detail-fav-btn")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    const prev = btn.dataset.active === "1";
+    const next = !prev;
+    setFavoriteButtonState(btn, next);
+    syncFavoriteButtonOnGrid(kind, rowId, next);
+    try {
+      await updateFavorite(kind, rowId, next);
+      if (getGlobalFilters().favorite === "1" && !next) {
+        document.querySelector(`.card-delete-btn[data-kind="${kind}"][data-id="${rowId}"]`)?.closest(".counter-card")?.remove();
+        closeDetailModal();
+      }
+    } catch (_) {
+      setFavoriteButtonState(btn, prev);
+      syncFavoriteButtonOnGrid(kind, rowId, prev);
+    }
+  });
+}
+
+async function loadCounter() {
+  const global = getGlobalFilters();
+  const p = state.counter.page;
+  const query = new URLSearchParams({ page: String(p), page_size: "120", lead: global.lead, printer_name: global.printer_name, printer_type: global.printer_type, favorite: global.favorite, time_scope: global.time_scope || "month" });
+  const data = await jget(`/api/counter/timelapse?${query.toString()}`);
+  state.counter.totalPages = data.total_pages;
+  qs("counter-page").textContent = `${data.page} / ${data.total_pages}`;
+  const grid = qs("counter-grid");
+  if (grid) {
+    grid.innerHTML = data.rows.length
+      ? data.rows
+          .map((r, idx) => {
+            const beginId = Number(r.begin_record_id || 0);
+            const rowId = Number(r.id || 0);
+            const isLatest = idx === 0;
+            return `<article class="counter-card ${isLatest ? "latest" : ""}">
+              <header class="counter-card-head">
+                <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="counter-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+                <button class="card-delete-btn" type="button" data-kind="counter" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
+                <div class="counter-card-index">#${rowId}</div>
+                <div class="counter-card-time">Timelapse: ${fmtTimestampGmt7(r.timestamp)}</div>
+              </header>
+              <div class="counter-card-body">
+                <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">IP</span><span class="counter-v">${r.ip || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Total</span><span class="counter-v">${fmtNumber(r.total)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Copier</span><span class="counter-v">${fmtNumber(r.copier_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${fmtNumber(r.printer_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Scan BW/C</span><span class="counter-v">${fmtNumber(r.scanner_send_bw)} / ${fmtNumber(r.scanner_send_color)}</span></div>
+              </div>
+            </article>`;
+          })
+          .join("")
+      : `<div class="counter-card loading">No data</div>`;
+    grid.querySelectorAll(".card-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        openDeleteConfirm(async () => {
+          await fetch(`/api/counter/${rowId}`, { method: "DELETE" });
+          closeDeleteConfirm();
+          await loadCounter();
+        });
+      });
+    });
+    grid.querySelectorAll(".card-fav-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const prev = btn.dataset.active === "1";
+        const next = !prev;
+        setFavoriteButtonState(btn, next);
+        try {
+          const res = await fetch(`/api/counter/${rowId}/favorite`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_favorite: next }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (getGlobalFilters().favorite === "1" && !next) {
+            btn.closest(".counter-card")?.remove();
+          }
+        } catch (_) {
+          setFavoriteButtonState(btn, prev);
+        }
+      });
+    });
+    grid.querySelectorAll(".counter-card").forEach((card, idx) => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest(".card-fav-btn") || event.target.closest(".card-delete-btn")) return;
+        const row = data.rows[idx];
+        if (!row) return;
+        const fav = card.querySelector(".card-fav-btn")?.dataset.active === "1";
+        openDetailModal("counter", { ...row, is_favorite: fav });
+      });
+    });
+  }
+  const meta = qs("counter-meta");
+  if (meta) {
+    const latest = data.rows.length ? fmtTimestampGmt7(data.rows[0].timestamp) : "-";
+    const dayStart = fmtTimestampGmt7(data.day_start);
+    const dayEnd = fmtTimestampGmt7(data.day_end);
+    const fetchedAt = new Date().toLocaleTimeString();
+    meta.textContent = `Day window: ${dayStart} -> ${dayEnd} | Rows: ${fmtNumber(data.total)} | Latest row: ${latest} | Fetched: ${fetchedAt}`;
+  }
+}
+
+async function loadStatus() {
+  const global = getGlobalFilters();
+  const p = state.status.page;
+  const query = new URLSearchParams({ page: String(p), page_size: "120", lead: global.lead, printer_name: global.printer_name, printer_type: global.printer_type, favorite: global.favorite, time_scope: global.time_scope || "month" });
+  const data = await jget(`/api/status/timelapse?${query.toString()}`);
+  state.status.totalPages = data.total_pages;
+  qs("status-page").textContent = `${data.page} / ${data.total_pages}`;
+  const grid = qs("status-grid");
+  if (grid) {
+    grid.innerHTML = data.rows.length
+      ? data.rows
+          .map((r, idx) => {
+            const beginId = Number(r.begin_record_id || 0);
+            const rowId = Number(r.id || 0);
+            const isLatest = idx === 0;
+            return `<article class="counter-card ${isLatest ? "latest" : ""}">
+              <header class="counter-card-head">
+                <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="status-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+                <button class="card-delete-btn" type="button" data-kind="status" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
+                <div class="counter-card-index">#${rowId}</div>
+                <div class="counter-card-time">Timelapse: ${fmtTimestampGmt7(r.timestamp)}</div>
+              </header>
+              <div class="counter-card-body">
+                <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">IP</span><span class="counter-v">${r.ip || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">System</span><span class="counter-v">${r.system_status || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${r.printer_status || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Scanner</span><span class="counter-v">${r.scanner_status || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Toner</span><span class="counter-v">${r.toner_black || "-"}</span></div>
+              </div>
+            </article>`;
+          })
+          .join("")
+      : `<div class="counter-card loading">No data</div>`;
+    grid.querySelectorAll(".card-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        openDeleteConfirm(async () => {
+          await fetch(`/api/status/${rowId}`, { method: "DELETE" });
+          closeDeleteConfirm();
+          await loadStatus();
+        });
+      });
+    });
+    grid.querySelectorAll(".card-fav-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const prev = btn.dataset.active === "1";
+        const next = !prev;
+        setFavoriteButtonState(btn, next);
+        try {
+          const res = await fetch(`/api/status/${rowId}/favorite`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_favorite: next }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (getGlobalFilters().favorite === "1" && !next) {
+            btn.closest(".counter-card")?.remove();
+          }
+        } catch (_) {
+          setFavoriteButtonState(btn, prev);
+        }
+      });
+    });
+    grid.querySelectorAll(".counter-card").forEach((card, idx) => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest(".card-fav-btn") || event.target.closest(".card-delete-btn")) return;
+        const row = data.rows[idx];
+        if (!row) return;
+        const fav = card.querySelector(".card-fav-btn")?.dataset.active === "1";
+        openDetailModal("status", { ...row, is_favorite: fav });
+      });
+    });
+  }
+  const meta = qs("status-meta");
+  if (meta) {
+    const latest = data.rows.length ? fmtTimestampGmt7(data.rows[0].timestamp) : "-";
+    const dayStart = fmtTimestampGmt7(data.day_start);
+    const dayEnd = fmtTimestampGmt7(data.day_end);
+    const fetchedAt = new Date().toLocaleTimeString();
+    meta.textContent = `Day window: ${dayStart} -> ${dayEnd} | Rows: ${fmtNumber(data.total)} | Latest row: ${latest} | Fetched: ${fetchedAt}`;
+  }
+}
+
+function renderHeatmapRows(rows) {
+  const wrap = qs("heatmap-wrap");
+  if (!wrap) return;
+  if (!rows.length) {
+    wrap.textContent = "No data";
+    const top = qs("heatmap-top-list");
+    if (top) top.textContent = "-";
+    return;
+  }
+  const palette = (qs("heatmap-palette")?.value || "option1").trim();
+  const palettes = {
+    option1: ["#192b57", "#25448a", "#2e63c2", "#1fe0ff", "#8be5ff"],
+    option2: ["#2b1849", "#4f2586", "#8d3cff", "#ff4fd2", "#ffa0df"],
+    option3: ["#2f1f30", "#61343b", "#a45626", "#ff7f2a", "#ffbd70"],
+    none: ["#1c2750", "#1c2750", "#1c2750", "#1c2750", "#1c2750"],
+  };
+  const colors = palettes[palette] || palettes.option1;
+  const colorAt = (v) => {
+    if (palette === "none") return colors[0];
+    const idx = Math.max(0, Math.min(4, Math.floor((Number(v || 0) / 100) * 5)));
+    return colors[idx];
+  };
+
+  const hourLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
+  const bodyRows = rows.map((r) => {
+    const mins = Array.isArray(r.minutes) ? r.minutes : [];
+    const hourRates = Array.from({ length: 24 }, (_, h) => {
+      const segment = mins.slice(h * 60, h * 60 + 60);
+      const active = segment.reduce((a, b) => a + (b ? 1 : 0), 0);
+      return Math.round((active / 60) * 100);
+    });
+    const cells = hourRates
+      .map((rate) => `<td class="heatmap-cell" style="background:${colorAt(rate)}">${rate}%</td>`)
+      .join("");
+    return `<tr><td class="heatmap-printer">${r.printer_name || "-"}<div class="meta-line">${r.ip || "-"} | samples ${r.samples || 0}</div></td>${cells}</tr>`;
+  });
+  wrap.innerHTML = `
+    <table class="heatmap-table">
+      <thead><tr><th class="heatmap-printer">Printer</th>${hourLabels.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>${bodyRows.join("")}</tbody>
+    </table>
+  `;
+
+  const top = qs("heatmap-top-list");
+  if (top) {
+    const topItems = rows
+      .map((r) => {
+        const mins = Array.isArray(r.minutes) ? r.minutes : [];
+        const active = mins.reduce((a, b) => a + (b ? 1 : 0), 0);
+        const ratio = Math.round((active / 1440) * 100);
+        return { name: r.printer_name || "-", ratio };
+      })
+      .sort((a, b) => b.ratio - a.ratio)
+      .slice(0, 5);
+    const max = Math.max(1, ...topItems.map((x) => x.ratio));
+    top.innerHTML = topItems
+      .map((x) => `<div class="heatmap-top-item"><div><div class="heatmap-top-name">${x.name}</div><div class="heatmap-top-bar" style="width:${Math.max(8, Math.round((x.ratio / max) * 100))}%"></div></div><div class="heatmap-top-val">${x.ratio}%</div></div>`)
+      .join("");
+  }
+
+  const legend = qs("heatmap-legend");
+  if (legend) {
+    legend.innerHTML = colors
+      .map((c, i) => `<span class="heatmap-legend-swatch" style="background:${c}" title="Level ${i + 1}"></span>`)
+      .join("") + `<span class="meta-line">Min -> Max</span>`;
+  }
+}
+
+async function loadHeatmap() {
+  const dateValue = qs("heatmap-date")?.value || new Date().toISOString().slice(0, 10);
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const p = state.heatmap.page;
+  const query = new URLSearchParams({ page: String(p), page_size: "12", date: dateValue, lead });
+  const data = await jget(`/api/counter/heatmap?${query.toString()}`);
+  state.heatmap.totalPages = data.total_pages;
+  qs("heatmap-page").textContent = `${data.page} / ${data.total_pages}`;
+  renderHeatmapRows(data.rows || []);
+}
+
+async function bind() {
+  const page = currentPage();
+  restoreGlobalFilters();
+  const restoredLead = (qs("global-filter-lead")?.value || "").trim();
+  await loadLeadOptions(restoredLead || "default");
+  const uiConfig = loadUiConfig();
+  applyUiConfig(uiConfig);
+  qs("global-filter-apply")?.addEventListener("click", () => {
+    saveGlobalFilters();
+    if (page === "counter") state.counter.page = 1;
+    if (page === "status") state.status.page = 1;
+    if (page === "heatmap") state.heatmap.page = 1;
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("global-filter-reset")?.addEventListener("click", () => {
+    if (qs("global-filter-lead")) qs("global-filter-lead").value = "default";
+    if (qs("global-filter-printer-name")) qs("global-filter-printer-name").value = "";
+    if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = "";
+    if (qs("global-filter-favorite")) qs("global-filter-favorite").value = "";
+    if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = "month";
+    saveGlobalFilters();
+    if (page === "counter") state.counter.page = 1;
+    if (page === "status") state.status.page = 1;
+    if (page === "heatmap") state.heatmap.page = 1;
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("refresh-btn")?.addEventListener("click", () => {
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("confirm-no")?.addEventListener("click", closeDeleteConfirm);
+  qs("confirm-yes")?.addEventListener("click", async () => {
+    const fn = state.pendingDelete;
+    if (!fn) return closeDeleteConfirm();
+    try {
+      await fn();
+    } catch (_) {
+      closeDeleteConfirm();
+    }
+  });
+  qs("confirm-modal")?.addEventListener("click", (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains("confirm-backdrop")) {
+      closeDeleteConfirm();
+    }
+  });
+  qs("detail-modal")?.addEventListener("click", (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains("detail-backdrop")) {
+      closeDetailModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeDetailModal();
+  });
+  qs("auto-refresh-toggle")?.addEventListener("change", (event) => {
+    state.autoRefresh.enabled = Boolean(event.target?.checked);
+    startAutoRefresh();
+  });
+  qs("auto-refresh-interval")?.addEventListener("change", (event) => {
+    const raw = Number(event.target?.value || 60000);
+    state.autoRefresh.intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 60000;
+    startAutoRefresh();
+  });
+
+  if (page === "dashboard") loadSummary().catch(() => {});
+  if (page === "devices") loadDevicesPage().catch(() => {});
+  if (page === "configs") {
+    qs("cfg-chart-columns").value = String(uiConfig.chart_columns);
+    qs("cfg-card-columns").value = String(uiConfig.card_columns);
+    qs("cfg-card-rows").value = String(uiConfig.card_rows);
+    qs("cfg-pages-window").value = String(uiConfig.pages_window);
+    qs("cfg-paging-per-day").value = String(uiConfig.paging_per_day);
+    qs("cfg-auto-refresh").value = String(uiConfig.auto_refresh_seconds);
+    qs("cfg-save")?.addEventListener("click", () => {
+      const next = {
+        chart_columns: Number(qs("cfg-chart-columns")?.value || 2),
+        card_columns: Number(qs("cfg-card-columns")?.value || 5),
+        card_rows: Number(qs("cfg-card-rows")?.value || 4),
+        pages_window: Number(qs("cfg-pages-window")?.value || 30),
+        paging_per_day: Number(qs("cfg-paging-per-day")?.value || 1),
+        auto_refresh_seconds: Number(qs("cfg-auto-refresh")?.value || 60),
+      };
+      saveUiConfig(next);
+      applyUiConfig(next);
+      qs("cfg-note").textContent = "Saved.";
+      startAutoRefresh();
+    });
+    qs("cfg-reset")?.addEventListener("click", () => {
+      const d = defaultUiConfig();
+      saveUiConfig(d);
+      applyUiConfig(d);
+      qs("cfg-chart-columns").value = String(d.chart_columns);
+      qs("cfg-card-columns").value = String(d.card_columns);
+      qs("cfg-card-rows").value = String(d.card_rows);
+      qs("cfg-pages-window").value = String(d.pages_window);
+      qs("cfg-paging-per-day").value = String(d.paging_per_day);
+      qs("cfg-auto-refresh").value = String(d.auto_refresh_seconds);
+      qs("cfg-note").textContent = "Reset to default.";
+      startAutoRefresh();
+    });
+  }
+  if (page === "counter") {
+    qs("counter-prev")?.addEventListener("click", () => { state.counter.page = Math.max(1, state.counter.page - 1); loadCounter(); });
+    qs("counter-next")?.addEventListener("click", () => { state.counter.page = Math.min(state.counter.totalPages, state.counter.page + 1); loadCounter(); });
+    loadCounter().catch(() => {});
+  }
+  if (page === "status") {
+    qs("status-prev")?.addEventListener("click", () => { state.status.page = Math.max(1, state.status.page - 1); loadStatus(); });
+    qs("status-next")?.addEventListener("click", () => { state.status.page = Math.min(state.status.totalPages, state.status.page + 1); loadStatus(); });
+    loadStatus().catch(() => {});
+  }
+  if (page === "heatmap") {
+    const dateInput = qs("heatmap-date");
+    if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
+    qs("heatmap-apply")?.addEventListener("click", () => { state.heatmap.page = 1; loadHeatmap(); });
+    qs("heatmap-prev")?.addEventListener("click", () => { state.heatmap.page = Math.max(1, state.heatmap.page - 1); loadHeatmap(); });
+    qs("heatmap-next")?.addEventListener("click", () => { state.heatmap.page = Math.min(state.heatmap.totalPages, state.heatmap.page + 1); loadHeatmap(); });
+    qs("heatmap-palette")?.addEventListener("change", () => loadHeatmap());
+    loadHeatmap().catch(() => {});
+  }
+  startAutoRefresh();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  bind().catch(() => {});
+});
+
+</script>
+
