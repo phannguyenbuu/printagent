@@ -337,13 +337,21 @@ def _scan_devices_payload(
     ignored_prefixes: list[str],
     filter_mode: str = "all",
 ) -> list[dict[str, Any]]:
+    def dedupe_key(item: dict[str, Any]) -> str:
+        ip_val = str(item.get("ip", "") or "").strip()
+        if ip_val:
+            return f"ip:{ip_val}"
+        name_val = str(item.get("name", "") or "").strip().lower()
+        port_val = str(item.get("port_name", "") or "").strip().lower()
+        return f"name:{name_val}|port:{port_val}"
+
     valid_only = str(filter_mode or "").strip().lower() == "valid_only"
     api_devices = _load_printers(api_client)
     local_devices = _load_local_windows_printers()
     neighbor_mac_map = _load_neighbor_mac_map()
     machine_id_map = _resolve_device_machine_ids(ricoh_service, api_devices)
 
-    payload = [
+    api_payload = [
         {
             "id": p.id,
             "name": p.name or "Printer",
@@ -362,9 +370,19 @@ def _scan_devices_payload(
         if p.ip and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
     ]
 
-    existing_keys = {(d.get("name", ""), d.get("port_name", ""), d.get("ip", "")) for d in payload}
+    payload: list[dict[str, Any]] = []
+    existing_keys: set[str] = set()
+
+    # Keep API rows first and unique (prefer API over local for same IP/name).
+    for row in api_payload:
+        key = dedupe_key(row)
+        if key in existing_keys:
+            continue
+        payload.append(row)
+        existing_keys.add(key)
+
     for local in local_devices:
-        key = (local.get("name", ""), local.get("port_name", ""), local.get("ip", ""))
+        key = dedupe_key(local)
         if key in existing_keys:
             continue
         if valid_only and _should_ignore_device(str(local.get("name", "")), ignored_prefixes):
