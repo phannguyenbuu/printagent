@@ -779,6 +779,13 @@ class RicohService:
         self._append_address_debug(
             f"address_list:start ip={printer.ip} name={printer.name} html_len={len(html)} entries_html={len(entries)}"
         )
+        LOGGER.info(
+            "Address list start: ip=%s name=%s html_len=%s entries_html=%s",
+            printer.ip,
+            printer.name,
+            len(html),
+            len(entries),
+        )
         ajax_raw = ""
         ajax_entries: list[AddressEntry] = []
         try:
@@ -789,13 +796,21 @@ class RicohService:
                 f"ip={printer.ip} ajax_len={len(ajax_raw)} ajax_entries={len(ajax_entries)} "
                 f"ajax_excerpt={repr(ajax_raw[:300])}"
             )
+            LOGGER.info(
+                "Address list ajax: ip=%s ajax_len=%s ajax_entries=%s",
+                printer.ip,
+                len(ajax_raw),
+                len(ajax_entries),
+            )
             if ajax_entries and entries:
                 entries = [entries[0], *ajax_entries]
         except Exception:  # noqa: BLE001
             self._append_address_debug(f"address_list:ajax_error ip={printer.ip}")
+            LOGGER.exception("Address list ajax error: ip=%s", printer.ip)
         self._append_address_debug(
             f"address_list:final ip={printer.ip} total_entries={len(entries)} first_entries={repr([asdict(x) for x in entries[:3]])}"
         )
+        LOGGER.info("Address list final: ip=%s total_entries=%s", printer.ip, len(entries))
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
