@@ -1,3 +1,4 @@
+﻿<script>
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -402,7 +403,33 @@ async function loadDevices(forceRefresh = false) {
     </tr>`;
   const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
   const data = await jsonFetch(url);
-  const devices = data.devices || [];
+  const rawDevices = Array.isArray(data.devices) ? data.devices : [];
+  const rankSource = (source) => {
+    const s = String(source || "").toLowerCase();
+    if (s === "api") return 3;
+    if (s === "test") return 2;
+    return 1;
+  };
+  const keyOf = (d) => {
+    const ip = String(d?.ip || "").trim();
+    if (ip) return `ip:${ip}`;
+    const name = String(d?.name || "").trim().toLowerCase();
+    const port = String(d?.port_name || "").trim().toLowerCase();
+    return `name:${name}|port:${port}`;
+  };
+  const dedupMap = new Map();
+  for (const row of rawDevices) {
+    const key = keyOf(row);
+    const prev = dedupMap.get(key);
+    if (!prev) {
+      dedupMap.set(key, row);
+      continue;
+    }
+    if (rankSource(row?.source) > rankSource(prev?.source)) {
+      dedupMap.set(key, row);
+    }
+  }
+  const devices = Array.from(dedupMap.values());
   if (!devices.length) {
     body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
     return;
@@ -974,3 +1001,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
+
+</script>
+

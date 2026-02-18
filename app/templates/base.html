@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+    {% include "_inline_styles.html" %}
   </head>
   <body data-page="{{ active_tab }}">
     <div class="layout-shell" id="layout-shell">
@@ -49,6 +49,6 @@
       </main>
     </div>
     <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="Close menu"></button>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% include "_inline_scripts.html" %}
   </body>
 </html>
