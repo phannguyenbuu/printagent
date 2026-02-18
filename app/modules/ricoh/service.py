@@ -20,6 +20,7 @@ from app.services.api_client import APIClient, Printer
 
 
 LOGGER = logging.getLogger(__name__)
+ADDRESS_DEBUG_LOG_FILE = Path("storage/data/address_list_debug.log")
 
 
 @dataclass(slots=True)
@@ -81,6 +82,16 @@ class RicohService:
     @staticmethod
     def _timestamp() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _append_address_debug(message: str) -> None:
+        try:
+            ADDRESS_DEBUG_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).isoformat()
+            with ADDRESS_DEBUG_LOG_FILE.open("a", encoding="utf-8") as fp:
+                fp.write(f"[{ts}] {message}\n")
+        except Exception:  # noqa: BLE001
+            return
 
     @staticmethod
     def _http_get(url: str, timeout: int = 10, session: requests.Session | None = None) -> str:
@@ -765,17 +776,39 @@ class RicohService:
         session = self.create_http_client(printer)
         html = self.read_address_list_with_client(session, printer)
         entries = self.parse_address_list(html)
+        self._append_address_debug(
+            f"address_list:start ip={printer.ip} name={printer.name} html_len={len(html)} entries_html={len(entries)}"
+        )
+        ajax_raw = ""
+        ajax_entries: list[AddressEntry] = []
         try:
-            ajax_entries = self.parse_ajax_address_list(self.get_address_list_ajax_with_client(session, printer))
+            ajax_raw = self.get_address_list_ajax_with_client(session, printer)
+            ajax_entries = self.parse_ajax_address_list(ajax_raw)
+            self._append_address_debug(
+                "address_list:ajax "
+                f"ip={printer.ip} ajax_len={len(ajax_raw)} ajax_entries={len(ajax_entries)} "
+                f"ajax_excerpt={repr(ajax_raw[:300])}"
+            )
             if ajax_entries and entries:
                 entries = [entries[0], *ajax_entries]
         except Exception:  # noqa: BLE001
-            pass
+            self._append_address_debug(f"address_list:ajax_error ip={printer.ip}")
+        self._append_address_debug(
+            f"address_list:final ip={printer.ip} total_entries={len(entries)} first_entries={repr([asdict(x) for x in entries[:3]])}"
+        )
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "html": html,
             "address_list": [asdict(item) for item in entries],
+            "debug": {
+                "html_len": len(html),
+                "html_entries": len(self.parse_address_list(html)),
+                "ajax_len": len(ajax_raw),
+                "ajax_entries": len(ajax_entries),
+                "ajax_excerpt": ajax_raw[:300],
+                "debug_log_file": str(ADDRESS_DEBUG_LOG_FILE),
+            },
             "timestamp": self._timestamp(),
         }
         return payload
