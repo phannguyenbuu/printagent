@@ -594,7 +594,7 @@ def _status_worker(service: RicohService, printer: Printer, stop_event: threadin
 def _start_job(jobs: dict[str, dict[str, Any]], key: str, target: Any) -> tuple[bool, str]:
     existing = jobs.get(key)
     if existing and existing["thread"].is_alive():
-        return False, "Job already running"
+        return True, "Job already running"
     stop_event = threading.Event()
     thread = threading.Thread(target=target, args=(stop_event,), daemon=True)
     jobs[key] = {"thread": thread, "stop": stop_event, "started_at": datetime.now().isoformat(timespec="seconds")}
