@@ -321,9 +321,12 @@ if ($r) { $r }
             "signature": signature,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        LAN_FINGER_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAN_FINGER_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-        self._best_effort_hide_file(LAN_FINGER_FILE)
+        try:
+            LAN_FINGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAN_FINGER_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+            self._best_effort_hide_file(LAN_FINGER_FILE)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Cannot persist lan finger file (%s): %s", LAN_FINGER_FILE, exc)
         self._resolved_lan_uid = lan_uid
         return lan_uid
 

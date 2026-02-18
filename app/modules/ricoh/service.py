@@ -725,9 +725,20 @@ class RicohService:
 
     def parse_ajax_address_list(self, data: str) -> list[AddressEntry]:
         entries: list[AddressEntry] = []
-        data = data.strip()
-        if not data.startswith("[") or not data.endswith("]"):
+        raw = str(data or "").strip()
+        if not raw:
             return entries
+
+        # Some Ricoh models wrap array payload in JS callbacks/vars.
+        data = raw
+        if not (data.startswith("[") and data.endswith("]")):
+            first = data.find("[")
+            last = data.rfind("]")
+            if first < 0 or last <= first:
+                return entries
+            data = data[first : last + 1]
+
+        # Keep existing parser behavior for entry chunks inside top-level array.
         raw_entries = re.findall(r"\[([^\]]+)\]", data)
         for raw in raw_entries:
             fields = self.parse_javascript_array_fields(raw)
