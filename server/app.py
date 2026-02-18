@@ -67,6 +67,14 @@ def _to_page(value: Any, default: int) -> int:
         return default
 
 
+def _is_same_utc_minute(left: datetime | None, right: datetime | None) -> bool:
+    if left is None or right is None:
+        return False
+    l = left.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    r = right.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    return l == r
+
+
 def _normalize_counter_payload(counter_data: dict[str, Any]) -> dict[str, int]:
     result: dict[str, int] = {}
     for key in COUNTER_KEYS:
@@ -94,6 +102,15 @@ def _compute_delta_payload(current: dict[str, int], baseline: dict[str, int]) ->
             continue
         delta[key] = diff
     return delta, has_reset
+
+
+def _apply_baseline(delta_value: int | None, baseline_payload: dict[str, Any], key: str) -> int | None:
+    if delta_value is None:
+        return None
+    base = _to_int(baseline_payload.get(key))
+    if base is None:
+        base = 0
+    return base + delta_value
 
 
 def _upsert_lan_and_agent(
@@ -283,6 +300,21 @@ def create_app() -> Flask:
         with session_factory() as session:
             total = int(session.scalar(count_stmt) or 0)
             rows = session.execute(stmt).scalars().all()
+            baseline_keys = {(r.lead, r.lan_uid, r.ip) for r in rows}
+            baselines: dict[tuple[str, str, str], dict[str, Any]] = {}
+            if baseline_keys:
+                leads = sorted({item[0] for item in baseline_keys})
+                lans = sorted({item[1] for item in baseline_keys})
+                ips = sorted({item[2] for item in baseline_keys})
+                baseline_rows = session.execute(
+                    select(CounterBaseline).where(
+                        CounterBaseline.lead.in_(leads),
+                        CounterBaseline.lan_uid.in_(lans),
+                        CounterBaseline.ip.in_(ips),
+                    )
+                ).scalars().all()
+                for b in baseline_rows:
+                    baselines[(b.lead, b.lan_uid, b.ip)] = b.raw_payload if isinstance(b.raw_payload, dict) else {}
         return jsonify(
             {
                 "rows": [
@@ -292,20 +324,52 @@ def create_app() -> Flask:
                         "timestamp": r.timestamp.isoformat() if r.timestamp else "",
                         "printer_name": r.printer_name,
                         "ip": r.ip,
-                        "total": r.total,
-                        "copier_bw": r.copier_bw,
-                        "printer_bw": r.printer_bw,
-                        "fax_bw": r.fax_bw,
-                        "send_tx_total_bw": r.send_tx_total_bw,
-                        "send_tx_total_color": r.send_tx_total_color,
-                        "fax_transmission_total": r.fax_transmission_total,
-                        "scanner_send_bw": r.scanner_send_bw,
-                        "scanner_send_color": r.scanner_send_color,
-                        "coverage_copier_bw": r.coverage_copier_bw,
-                        "coverage_printer_bw": r.coverage_printer_bw,
-                        "coverage_fax_bw": r.coverage_fax_bw,
-                        "a3_dlt": r.a3_dlt,
-                        "duplex": r.duplex,
+                        "total": _apply_baseline(r.total, baselines.get((r.lead, r.lan_uid, r.ip), {}), "total"),
+                        "copier_bw": _apply_baseline(r.copier_bw, baselines.get((r.lead, r.lan_uid, r.ip), {}), "copier_bw"),
+                        "printer_bw": _apply_baseline(r.printer_bw, baselines.get((r.lead, r.lan_uid, r.ip), {}), "printer_bw"),
+                        "fax_bw": _apply_baseline(r.fax_bw, baselines.get((r.lead, r.lan_uid, r.ip), {}), "fax_bw"),
+                        "send_tx_total_bw": _apply_baseline(
+                            r.send_tx_total_bw,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "send_tx_total_bw",
+                        ),
+                        "send_tx_total_color": _apply_baseline(
+                            r.send_tx_total_color,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "send_tx_total_color",
+                        ),
+                        "fax_transmission_total": _apply_baseline(
+                            r.fax_transmission_total,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "fax_transmission_total",
+                        ),
+                        "scanner_send_bw": _apply_baseline(
+                            r.scanner_send_bw,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "scanner_send_bw",
+                        ),
+                        "scanner_send_color": _apply_baseline(
+                            r.scanner_send_color,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "scanner_send_color",
+                        ),
+                        "coverage_copier_bw": _apply_baseline(
+                            r.coverage_copier_bw,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "coverage_copier_bw",
+                        ),
+                        "coverage_printer_bw": _apply_baseline(
+                            r.coverage_printer_bw,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "coverage_printer_bw",
+                        ),
+                        "coverage_fax_bw": _apply_baseline(
+                            r.coverage_fax_bw,
+                            baselines.get((r.lead, r.lan_uid, r.ip), {}),
+                            "coverage_fax_bw",
+                        ),
+                        "a3_dlt": _apply_baseline(r.a3_dlt, baselines.get((r.lead, r.lan_uid, r.ip), {}), "a3_dlt"),
+                        "duplex": _apply_baseline(r.duplex, baselines.get((r.lead, r.lan_uid, r.ip), {}), "duplex"),
                     }
                     for r in rows
                 ],
@@ -490,6 +554,17 @@ def create_app() -> Flask:
         timestamp = _parse_timestamp(body.get("timestamp"))
         counter_data = body.get("counter_data") if isinstance(body.get("counter_data"), dict) else {}
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
+        LOGGER.info(
+            "polling request: lead=%s lan=%s agent=%s printer=%s ip=%s ts=%s counter_keys=%s status_keys=%s",
+            lead,
+            lan_uid,
+            agent_uid,
+            printer_name or "-",
+            ip or "-",
+            timestamp.isoformat(),
+            len(counter_data.keys()) if isinstance(counter_data, dict) else 0,
+            len(status_data.keys()) if isinstance(status_data, dict) else 0,
+        )
 
         inserted_counter = 0
         inserted_status = 0
@@ -537,13 +612,19 @@ def create_app() -> Flask:
                         baseline_row.printer_name = printer_name or baseline_row.printer_name
                         delta_counter = {k: 0 for k in normalized_counter}
 
-                latest_counter_payload = session.execute(
-                    select(CounterInfor.raw_payload)
+                latest_counter_row = session.execute(
+                    select(CounterInfor.timestamp, CounterInfor.raw_payload)
                     .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
                     .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
                     .limit(1)
-                ).scalar_one_or_none()
-                if isinstance(latest_counter_payload, dict) and latest_counter_payload == delta_counter:
+                ).first()
+                latest_counter_ts = latest_counter_row[0] if latest_counter_row else None
+                latest_counter_payload = latest_counter_row[1] if latest_counter_row else None
+                if (
+                    isinstance(latest_counter_payload, dict)
+                    and latest_counter_payload == delta_counter
+                    and _is_same_utc_minute(latest_counter_ts, timestamp)
+                ):
                     skipped_counter = 1
                 else:
                     session.add(
@@ -574,13 +655,19 @@ def create_app() -> Flask:
                     inserted_counter = 1
 
             if status_data:
-                latest_status_payload = session.execute(
-                    select(StatusInfor.raw_payload)
+                latest_status_row = session.execute(
+                    select(StatusInfor.timestamp, StatusInfor.raw_payload)
                     .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
                     .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
                     .limit(1)
-                ).scalar_one_or_none()
-                if isinstance(latest_status_payload, dict) and latest_status_payload == status_data:
+                ).first()
+                latest_status_ts = latest_status_row[0] if latest_status_row else None
+                latest_status_payload = latest_status_row[1] if latest_status_row else None
+                if (
+                    isinstance(latest_status_payload, dict)
+                    and latest_status_payload == status_data
+                    and _is_same_utc_minute(latest_status_ts, timestamp)
+                ):
                     skipped_status = 1
                 else:
                     session.add(

@@ -4,6 +4,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -120,12 +121,27 @@ class PollingBridge:
             LOGGER.warning("Polling bridge cannot load printers: %s", exc)
             return []
 
-    def _post_payload(self, payload: dict) -> None:
+    def _post_payload(self, payload: dict) -> dict:
         url = self._config.get_string("polling.url").strip()
         token = self._config.get_string("polling.token").strip()
         headers = {"Content-Type": "application/json", "X-Lead-Token": token}
-        resp = requests.post(url, json=payload, headers=headers, timeout=25)
-        resp.raise_for_status()
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=(5, 30))
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                    return data if isinstance(data, dict) else {"status_code": resp.status_code}
+                except Exception:  # noqa: BLE001
+                    return {"status_code": resp.status_code}
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt < 3:
+                    LOGGER.warning("Polling post failed (attempt %s/3): %s", attempt, exc)
+                    time.sleep(2)
+        if last_exc is not None:
+            raise last_exc
 
     def _worker(self) -> None:
         interval = self.interval_seconds()
@@ -134,12 +150,19 @@ class PollingBridge:
         local_ip = self._resolve_local_ip()
         LOGGER.info("Polling worker loop running: hostname=%s local_ip=%s", hostname, local_ip)
         while not self._stop_event.is_set():
+            cycle_started_at = self._now_iso()
             self._last_cycle_at = self._now_iso()
             printers = self._load_printers()
             self._last_cycle_total_printers = len(printers)
             self._last_cycle_ricoh_printers = 0
             self._last_cycle_sent = 0
             self._last_cycle_failed = 0
+            LOGGER.info(
+                "Polling cycle start: ts=%s total_printers=%s interval=%ss",
+                cycle_started_at,
+                self._last_cycle_total_printers,
+                interval,
+            )
             for printer in printers:
                 if self._stop_event.is_set():
                     break
@@ -152,6 +175,7 @@ class PollingBridge:
                     continue
                 self._last_cycle_ricoh_printers += 1
                 try:
+                    LOGGER.info("Polling collect: name=%s ip=%s type=%s", printer.name, printer.ip, printer.printer_type)
                     counter_payload = self._ricoh_service.process_counter(printer, should_post=False)
                     status_payload = self._ricoh_service.process_status(printer, should_post=False)
                     payload = {
@@ -167,10 +191,17 @@ class PollingBridge:
                         "status_data": status_payload.get("status_data", {}),
                     }
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
-                    self._post_payload(payload)
+                    ack = self._post_payload(payload)
                     self._last_cycle_sent += 1
                     self._last_success_at = self._now_iso()
                     self._last_error = ""
+                    LOGGER.info(
+                        "Polling ack <- inserted(counter=%s,status=%s) skipped(counter=%s,status=%s)",
+                        ack.get("inserted_counter", "?"),
+                        ack.get("inserted_status", "?"),
+                        ack.get("skipped_counter", "?"),
+                        ack.get("skipped_status", "?"),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     self._last_cycle_failed += 1
                     self._last_error = str(exc)

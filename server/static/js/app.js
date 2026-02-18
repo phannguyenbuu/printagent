@@ -5,6 +5,12 @@ async function jget(url) {
 }
 
 function qs(id) { return document.getElementById(id); }
+function fmtNumber(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toLocaleString("en-US");
+}
 
 async function loadSummary() {
   const data = await jget("/api/dashboard/summary");
@@ -76,9 +82,15 @@ async function loadCounter() {
   qs("counter-table").querySelector("tbody").innerHTML = data.rows.length
     ? data.rows.map((r) => `<tr>
       <td>${r.timestamp || "-"}</td><td>${r.lead || "-"}</td><td>${r.printer_name || "-"}</td><td>${r.ip || "-"}</td>
-      <td>${r.total ?? "-"}</td><td>${r.copier_bw ?? "-"}</td><td>${r.printer_bw ?? "-"}</td><td>${r.scanner_send_bw ?? "-"}</td><td>${r.scanner_send_color ?? "-"}</td><td>${r.a3_dlt ?? "-"}</td><td>${r.duplex ?? "-"}</td>
+      <td>${fmtNumber(r.total)}</td><td>${fmtNumber(r.copier_bw)}</td><td>${fmtNumber(r.printer_bw)}</td><td>${fmtNumber(r.scanner_send_bw)}</td><td>${fmtNumber(r.scanner_send_color)}</td><td>${fmtNumber(r.a3_dlt)}</td><td>${fmtNumber(r.duplex)}</td>
     </tr>`).join("")
     : `<tr><td colspan="11">No data</td></tr>`;
+  const meta = qs("counter-meta");
+  if (meta) {
+    const latest = data.rows.length ? data.rows[0].timestamp : "-";
+    const fetchedAt = new Date().toLocaleTimeString();
+    meta.textContent = `DB rows: ${fmtNumber(data.total)} | Latest row: ${latest} | Fetched: ${fetchedAt}`;
+  }
 }
 
 async function loadStatus() {
