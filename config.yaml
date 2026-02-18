@@ -1,4 +1,4 @@
-api_url: "http://localhost:8080/api"
+api_url: "http://192.168.1.80:5000/api"
 user_token: ""
 database_url: "sqlite:///storage/data/agent_config.db"
 
