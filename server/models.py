@@ -45,6 +45,21 @@ class CounterInfor(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
+class CounterBaseline(Base):
+    __tablename__ = "CounterBaseline"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-lan")
+    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    baseline_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, default=utc_now)
+    raw_payload: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
 class StatusInfor(Base):
     __tablename__ = "StatusInfor"
 

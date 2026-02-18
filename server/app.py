@@ -9,9 +9,25 @@ from sqlalchemy import func, select
 
 from config import ServerConfig
 from db import create_session_factory
-from models import AgentNode, Base, CounterInfor, LanSite, StatusInfor
+from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, StatusInfor
 
 LOGGER = logging.getLogger(__name__)
+COUNTER_KEYS = [
+    "total",
+    "copier_bw",
+    "printer_bw",
+    "fax_bw",
+    "send_tx_total_bw",
+    "send_tx_total_color",
+    "fax_transmission_total",
+    "scanner_send_bw",
+    "scanner_send_color",
+    "coverage_copier_bw",
+    "coverage_printer_bw",
+    "coverage_fax_bw",
+    "a3_dlt",
+    "duplex",
+]
 
 
 def _to_int(value: Any) -> int | None:
@@ -49,6 +65,35 @@ def _to_page(value: Any, default: int) -> int:
         return max(1, int(str(value)))
     except Exception:  # noqa: BLE001
         return default
+
+
+def _normalize_counter_payload(counter_data: dict[str, Any]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for key in COUNTER_KEYS:
+        value = _to_int(counter_data.get(key))
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _compute_delta_payload(current: dict[str, int], baseline: dict[str, int]) -> tuple[dict[str, int], bool]:
+    delta: dict[str, int] = {}
+    has_reset = False
+    for key in COUNTER_KEYS:
+        cur = current.get(key)
+        base = baseline.get(key)
+        if cur is None:
+            continue
+        if base is None:
+            delta[key] = cur
+            continue
+        diff = cur - base
+        if diff < 0:
+            has_reset = True
+            delta[key] = 0
+            continue
+        delta[key] = diff
+    return delta, has_reset
 
 
 def _upsert_lan_and_agent(
@@ -465,13 +510,40 @@ def create_app() -> Flask:
                 local_mac=local_mac,
             )
             if counter_data:
+                normalized_counter = _normalize_counter_payload(counter_data)
+                baseline_row = session.execute(
+                    select(CounterBaseline).where(CounterBaseline.lead == lead, CounterBaseline.lan_uid == lan_uid, CounterBaseline.ip == ip)
+                ).scalar_one_or_none()
+                if baseline_row is None:
+                    baseline_row = CounterBaseline(
+                        lead=lead,
+                        lan_uid=lan_uid,
+                        agent_uid=agent_uid,
+                        printer_name=printer_name or "Unknown Printer",
+                        ip=ip,
+                        baseline_timestamp=timestamp,
+                        raw_payload=normalized_counter,
+                    )
+                    session.add(baseline_row)
+                    delta_counter = {k: 0 for k in normalized_counter}
+                else:
+                    baseline_payload = baseline_row.raw_payload if isinstance(baseline_row.raw_payload, dict) else {}
+                    normalized_baseline = _normalize_counter_payload(baseline_payload)
+                    delta_counter, has_reset = _compute_delta_payload(normalized_counter, normalized_baseline)
+                    if has_reset:
+                        baseline_row.baseline_timestamp = timestamp
+                        baseline_row.raw_payload = normalized_counter
+                        baseline_row.agent_uid = agent_uid
+                        baseline_row.printer_name = printer_name or baseline_row.printer_name
+                        delta_counter = {k: 0 for k in normalized_counter}
+
                 latest_counter_payload = session.execute(
                     select(CounterInfor.raw_payload)
                     .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
                     .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
                     .limit(1)
                 ).scalar_one_or_none()
-                if isinstance(latest_counter_payload, dict) and latest_counter_payload == counter_data:
+                if isinstance(latest_counter_payload, dict) and latest_counter_payload == delta_counter:
                     skipped_counter = 1
                 else:
                     session.add(
@@ -482,21 +554,21 @@ def create_app() -> Flask:
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
-                            total=_to_int(counter_data.get("total")),
-                            copier_bw=_to_int(counter_data.get("copier_bw")),
-                            printer_bw=_to_int(counter_data.get("printer_bw")),
-                            fax_bw=_to_int(counter_data.get("fax_bw")),
-                            send_tx_total_bw=_to_int(counter_data.get("send_tx_total_bw")),
-                            send_tx_total_color=_to_int(counter_data.get("send_tx_total_color")),
-                            fax_transmission_total=_to_int(counter_data.get("fax_transmission_total")),
-                            scanner_send_bw=_to_int(counter_data.get("scanner_send_bw")),
-                            scanner_send_color=_to_int(counter_data.get("scanner_send_color")),
-                            coverage_copier_bw=_to_int(counter_data.get("coverage_copier_bw")),
-                            coverage_printer_bw=_to_int(counter_data.get("coverage_printer_bw")),
-                            coverage_fax_bw=_to_int(counter_data.get("coverage_fax_bw")),
-                            a3_dlt=_to_int(counter_data.get("a3_dlt")),
-                            duplex=_to_int(counter_data.get("duplex")),
-                            raw_payload=counter_data,
+                            total=delta_counter.get("total"),
+                            copier_bw=delta_counter.get("copier_bw"),
+                            printer_bw=delta_counter.get("printer_bw"),
+                            fax_bw=delta_counter.get("fax_bw"),
+                            send_tx_total_bw=delta_counter.get("send_tx_total_bw"),
+                            send_tx_total_color=delta_counter.get("send_tx_total_color"),
+                            fax_transmission_total=delta_counter.get("fax_transmission_total"),
+                            scanner_send_bw=delta_counter.get("scanner_send_bw"),
+                            scanner_send_color=delta_counter.get("scanner_send_color"),
+                            coverage_copier_bw=delta_counter.get("coverage_copier_bw"),
+                            coverage_printer_bw=delta_counter.get("coverage_printer_bw"),
+                            coverage_fax_bw=delta_counter.get("coverage_fax_bw"),
+                            a3_dlt=delta_counter.get("a3_dlt"),
+                            duplex=delta_counter.get("duplex"),
+                            raw_payload=delta_counter,
                         )
                     )
                     inserted_counter = 1

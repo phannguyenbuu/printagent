@@ -67,6 +67,7 @@ echo
 echo "Checking tables..."
 check_table "CounterInfor"
 check_table "StatusInfor"
+check_table "CounterBaseline"
 check_table "LanSite"
 check_table "AgentNode"
 
@@ -80,6 +81,12 @@ echo
 echo "Checking StatusInfor columns..."
 for col in id lead lan_uid agent_uid timestamp printer_name ip system_status printer_status printer_alerts copier_status copier_alerts scanner_status scanner_alerts toner_black tray_1_status tray_2_status tray_3_status bypass_tray_status other_info raw_payload created_at; do
   check_column "StatusInfor" "${col}"
+done
+
+echo
+echo "Checking CounterBaseline columns..."
+for col in id lead lan_uid agent_uid printer_name ip baseline_timestamp raw_payload created_at updated_at; do
+  check_column "CounterBaseline" "${col}"
 done
 
 echo

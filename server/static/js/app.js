@@ -21,7 +21,49 @@ const state = {
   counter: { page: 1, totalPages: 1 },
   status: { page: 1, totalPages: 1 },
   heatmap: { page: 1, totalPages: 1, mode: "day", hour: 0 },
+  autoRefresh: { enabled: true, intervalMs: 10000, timerId: null },
 };
+
+function currentPage() {
+  return document.body.dataset.page;
+}
+
+function refreshCurrentPage() {
+  const page = currentPage();
+  if (page === "dashboard") return loadSummary();
+  if (page === "counter") return loadCounter();
+  if (page === "status") return loadStatus();
+  if (page === "heatmap") return loadHeatmap();
+  return Promise.resolve();
+}
+
+function updateAutoRefreshStateText() {
+  const el = qs("auto-refresh-state");
+  if (!el) return;
+  el.textContent = state.autoRefresh.enabled
+    ? `Auto refresh: ON (${Math.round(state.autoRefresh.intervalMs / 1000)}s)`
+    : "Auto refresh: OFF";
+}
+
+function stopAutoRefresh() {
+  if (state.autoRefresh.timerId) {
+    window.clearInterval(state.autoRefresh.timerId);
+    state.autoRefresh.timerId = null;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!state.autoRefresh.enabled) {
+    updateAutoRefreshStateText();
+    return;
+  }
+  state.autoRefresh.timerId = window.setInterval(() => {
+    if (document.hidden) return;
+    refreshCurrentPage().catch(() => {});
+  }, state.autoRefresh.intervalMs);
+  updateAutoRefreshStateText();
+}
 
 async function loadCounter() {
   const lead = (qs("counter-lead")?.value || "").trim();
@@ -97,11 +139,18 @@ async function loadHeatmap() {
 }
 
 function bind() {
-  const page = document.body.dataset.page;
+  const page = currentPage();
   qs("refresh-btn")?.addEventListener("click", () => {
-    if (page === "dashboard") loadSummary();
-    if (page === "counter") loadCounter();
-    if (page === "status") loadStatus();
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("auto-refresh-toggle")?.addEventListener("change", (event) => {
+    state.autoRefresh.enabled = Boolean(event.target?.checked);
+    startAutoRefresh();
+  });
+  qs("auto-refresh-interval")?.addEventListener("change", (event) => {
+    const raw = Number(event.target?.value || 10000);
+    state.autoRefresh.intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 10000;
+    startAutoRefresh();
   });
 
   if (page === "dashboard") loadSummary().catch(() => {});
@@ -146,6 +195,7 @@ function bind() {
     });
     loadHeatmap().catch(() => {});
   }
+  startAutoRefresh();
 }
 
 document.addEventListener("DOMContentLoaded", bind);
