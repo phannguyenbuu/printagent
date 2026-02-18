@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import socket
 import threading
@@ -165,6 +166,7 @@ class PollingBridge:
                         "counter_data": counter_payload.get("counter_data", {}),
                         "status_data": status_payload.get("status_data", {}),
                     }
+                    LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
                     self._post_payload(payload)
                     self._last_cycle_sent += 1
                     self._last_success_at = self._now_iso()

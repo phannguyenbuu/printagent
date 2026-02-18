@@ -36,15 +36,11 @@ class APIClient:
         response.raise_for_status()
 
     def get_printers(self, url: str | None = None) -> list[Printer]:
-        target = url or f"{self.config.api_url}/printers"
+        target = url or f"{self.config.api_url}/devices"
         if not self.config.api_url and url is None:
             raise ValueError("api_url is not configured")
         payload: Any
         response = self.session.get(target, timeout=30, headers={"Accept": "application/json"})
-        if response.status_code == 404 and url is None:
-            # Local web app exposes /api/devices, not /api/printers.
-            fallback_target = f"{self.config.api_url}/devices"
-            response = self.session.get(fallback_target, timeout=30, headers={"Accept": "application/json"})
         response.raise_for_status()
         payload = response.json()
 
