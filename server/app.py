@@ -11,7 +11,18 @@ from sqlalchemy import func, select
 
 from config import ServerConfig
 from db import create_session_factory
-from models import AgentNode, Base, CounterBaseline, CounterInfor, LanSite, Printer, PrinterEnableLog, PrinterOnlineLog, StatusInfor
+from models import (
+    AgentNode,
+    Base,
+    CounterBaseline,
+    CounterInfor,
+    LanSite,
+    Printer,
+    PrinterControlCommand,
+    PrinterEnableLog,
+    PrinterOnlineLog,
+    StatusInfor,
+)
 
 LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
@@ -76,6 +87,22 @@ def _parse_timestamp(value: Any) -> datetime:
         return dt.astimezone(timezone.utc)
     except Exception:  # noqa: BLE001
         return datetime.now(timezone.utc)
+
+
+def _parse_query_datetime(value: Any, end_of_minute: bool = False) -> datetime | None:
+    text = _to_text(value)
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except Exception:  # noqa: BLE001
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UI_TZ)
+    if end_of_minute and len(text) <= 16:
+        dt = dt.replace(second=59, microsecond=999999)
+    return dt.astimezone(timezone.utc)
 
 
 def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
@@ -197,6 +224,8 @@ def _apply_common_filters(
     printer_type: str,
     time_scope: str,
     favorite_only: bool = False,
+    datetime_from: str = "",
+    datetime_to: str = "",
 ) -> Any:
     if lead:
         stmt = stmt.where(model.lead == lead)
@@ -206,9 +235,16 @@ def _apply_common_filters(
         stmt = stmt.where(model.printer_name == printer_name)
     if printer_type in {"ricoh", "toshiba", "epson"}:
         stmt = stmt.where(func.lower(model.printer_name).like(f"%{printer_type}%"))
-    scope_start = _time_scope_start(time_scope)
-    if scope_start:
-        stmt = stmt.where(model.timestamp >= scope_start)
+    from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
+    to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
+    if from_dt:
+        stmt = stmt.where(model.timestamp >= from_dt)
+    if to_dt:
+        stmt = stmt.where(model.timestamp <= to_dt)
+    if not from_dt and not to_dt:
+        scope_start = _time_scope_start(time_scope)
+        if scope_start:
+            stmt = stmt.where(model.timestamp >= scope_start)
     if favorite_only:
         stmt = stmt.where(model.is_favorite.is_(True))
     return stmt
@@ -384,6 +420,25 @@ def _set_printer_online_state(session: Any, printer: Printer, is_online: bool, c
     )
 
 
+def _apply_printer_enabled_state(session: Any, printer: Printer, enabled: bool, at: datetime) -> None:
+    next_state = bool(enabled)
+    if bool(printer.enabled) == next_state:
+        return
+    printer.enabled = next_state
+    printer.enabled_changed_at = at
+    session.add(
+        PrinterEnableLog(
+            printer_id=printer.id,
+            lead=printer.lead,
+            lan_uid=printer.lan_uid,
+            printer_name=printer.printer_name,
+            ip=printer.ip,
+            enabled=next_state,
+            changed_at=at,
+        )
+    )
+
+
 def _refresh_stale_offline(session: Any, lead: str = "", lan_uid: str = "", agent_uid: str = "") -> None:
     stale_before = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_STALE_SECONDS)
     stmt = select(Printer).where(Printer.is_online.is_(True), Printer.updated_at < stale_before)
@@ -534,14 +589,16 @@ def create_app() -> Flask:
         printer_name = _to_text(request.args.get("printer_name"))
         printer_type = _to_text(request.args.get("printer_type")).lower()
         time_scope = _to_text(request.args.get("time_scope")) or "month"
+        datetime_from = _to_text(request.args.get("datetime_from"))
+        datetime_to = _to_text(request.args.get("datetime_to"))
         favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
         with session_factory() as session:
-            counter_count_stmt = _apply_common_filters(select(func.count()).select_from(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-            status_count_stmt = _apply_common_filters(select(func.count()).select_from(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-            lead_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.lead))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-            printer_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.ip))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-            latest_counter_stmt = _apply_common_filters(select(func.max(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-            latest_status_stmt = _apply_common_filters(select(func.max(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
+            counter_count_stmt = _apply_common_filters(select(func.count()).select_from(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+            status_count_stmt = _apply_common_filters(select(func.count()).select_from(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+            lead_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.lead))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+            printer_count_stmt = _apply_common_filters(select(func.count(func.distinct(CounterInfor.ip))), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+            latest_counter_stmt = _apply_common_filters(select(func.max(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+            latest_status_stmt = _apply_common_filters(select(func.max(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
 
             counter_count = session.scalar(counter_count_stmt) or 0
             status_count = session.scalar(status_count_stmt) or 0
@@ -559,6 +616,8 @@ def create_app() -> Flask:
                 printer_type,
                 time_scope,
                 favorite_only,
+                datetime_from,
+                datetime_to,
             )
             latest_rows = session.execute(latest_rows_stmt).scalars().all()
             latest_by_printer: dict[tuple[str, str, str], CounterInfor] = {}
@@ -594,9 +653,13 @@ def create_app() -> Flask:
                 latest_totals["a3_dlt"] += _apply_baseline(row.a3_dlt, base, "a3_dlt") or 0
                 latest_totals["duplex"] += _apply_baseline(row.duplex, base, "duplex") or 0
 
-            trend_start = _time_scope_start(time_scope) or (datetime.now(timezone.utc) - timedelta(days=30))
+            trend_start = _parse_query_datetime(datetime_from) or _time_scope_start(time_scope) or (datetime.now(timezone.utc) - timedelta(days=30))
+            trend_end = _parse_query_datetime(datetime_to, end_of_minute=True)
+            trend_base = select(CounterInfor).where(CounterInfor.timestamp >= trend_start)
+            if trend_end is not None:
+                trend_base = trend_base.where(CounterInfor.timestamp <= trend_end)
             trend_stmt = _apply_common_filters(
-                select(CounterInfor).where(CounterInfor.timestamp >= trend_start).order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
+                trend_base.order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
                 CounterInfor,
                 lead,
                 ip,
@@ -604,6 +667,8 @@ def create_app() -> Flask:
                 printer_type,
                 "",
                 favorite_only,
+                datetime_from,
+                datetime_to,
             )
             trend_rows = session.execute(trend_stmt).scalars().all()
             day_printer_latest: dict[tuple[str, str], CounterInfor] = {}
@@ -631,6 +696,8 @@ def create_app() -> Flask:
                 printer_type,
                 "",
                 favorite_only,
+                datetime_from,
+                datetime_to,
             )
             month_rows_stmt = _apply_common_filters(
                 select(CounterInfor).where(CounterInfor.timestamp >= month_from).order_by(CounterInfor.timestamp.asc(), CounterInfor.id.asc()),
@@ -641,6 +708,8 @@ def create_app() -> Flask:
                 printer_type,
                 "",
                 favorite_only,
+                datetime_from,
+                datetime_to,
             )
             day_rows = session.execute(day_rows_stmt).scalars().all()
             month_rows = session.execute(month_rows_stmt).scalars().all()
@@ -686,6 +755,8 @@ def create_app() -> Flask:
                     printer_type,
                     time_scope,
                     favorite_only,
+                    datetime_from,
+                    datetime_to,
                 )
             ).scalar_one_or_none()
             latest_status_row = session.execute(
@@ -698,6 +769,8 @@ def create_app() -> Flask:
                     printer_type,
                     time_scope,
                     favorite_only,
+                    datetime_from,
+                    datetime_to,
                 )
             ).scalar_one_or_none()
 
@@ -890,6 +963,8 @@ def create_app() -> Flask:
                     "is_online": bool(printer.is_online),
                     "online_changed_at": printer.online_changed_at.isoformat() if printer.online_changed_at else "",
                     "last_seen_at": printer.updated_at.isoformat() if printer.updated_at else "",
+                    "auth_user": printer.auth_user or "",
+                    "auth_password": printer.auth_password or "",
                 },
                 "events": events,
             }
@@ -899,26 +974,102 @@ def create_app() -> Flask:
     def device_set_enable(printer_id: int) -> Any:
         body = request.get_json(silent=True) or {}
         enabled = bool(body.get("enabled", True))
-        at = datetime.now(timezone.utc)
+        auth_user = _to_text(body.get("auth_user"))
+        auth_password = _to_text(body.get("auth_password"))
+        requested_at = datetime.now(timezone.utc)
         with session_factory() as session:
             printer = session.get(Printer, printer_id)
             if printer is None:
                 return jsonify({"ok": False, "error": "Printer not found"}), 404
-            printer.enabled = enabled
-            printer.enabled_changed_at = at
-            session.add(
-                PrinterEnableLog(
-                    printer_id=printer.id,
-                    lead=printer.lead,
-                    lan_uid=printer.lan_uid,
-                    printer_name=printer.printer_name,
-                    ip=printer.ip,
-                    enabled=enabled,
-                    changed_at=at,
+            if auth_user:
+                printer.auth_user = auth_user
+            if auth_password:
+                printer.auth_password = auth_password
+            if not _to_text(printer.auth_user):
+                return jsonify({"ok": False, "error": "Missing auth_user"}), 400
+            if not _to_text(printer.auth_password):
+                return jsonify({"ok": False, "error": "Missing auth_password"}), 400
+
+            pending = session.execute(
+                select(PrinterControlCommand).where(
+                    PrinterControlCommand.printer_id == printer.id,
+                    PrinterControlCommand.status == "pending",
                 )
+            ).scalars().all()
+            for cmd in pending:
+                cmd.status = "failed"
+                cmd.error_message = "Superseded by newer command"
+                cmd.responded_at = requested_at
+
+            command = PrinterControlCommand(
+                printer_id=printer.id,
+                lead=printer.lead,
+                lan_uid=printer.lan_uid,
+                agent_uid=printer.agent_uid,
+                printer_name=printer.printer_name,
+                ip=printer.ip,
+                desired_enabled=enabled,
+                auth_user=printer.auth_user,
+                auth_password=printer.auth_password,
+                status="pending",
+                error_message="",
+                requested_at=requested_at,
+                responded_at=None,
             )
+            session.add(command)
             session.commit()
-        return jsonify({"ok": True, "id": printer_id, "enabled": enabled, "changed_at": at.isoformat()})
+            command_id = int(command.id)
+
+        timeout_seconds = 25
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+        while datetime.now(timezone.utc) < deadline:
+            with session_factory() as session:
+                current = session.get(PrinterControlCommand, command_id)
+                if current is None:
+                    break
+                if current.status == "success":
+                    changed_at = current.responded_at or datetime.now(timezone.utc)
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "id": printer_id,
+                            "enabled": enabled,
+                            "changed_at": changed_at.isoformat(),
+                            "command_id": command_id,
+                        }
+                    )
+                if current.status == "failed":
+                    return (
+                        jsonify(
+                            {
+                                "ok": False,
+                                "error": current.error_message or "Control command failed",
+                                "command_id": command_id,
+                            }
+                        ),
+                        409,
+                    )
+            import time as _time
+
+            _time.sleep(0.5)
+
+        with session_factory() as session:
+            timeout_cmd = session.get(PrinterControlCommand, command_id)
+            if timeout_cmd is not None and timeout_cmd.status == "pending":
+                timeout_cmd.status = "failed"
+                timeout_cmd.error_message = "Timeout waiting agent lock/unlock result"
+                timeout_cmd.responded_at = datetime.now(timezone.utc)
+                session.commit()
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Timeout waiting agent lock/unlock result",
+                    "command_id": command_id,
+                }
+            ),
+            504,
+        )
 
     @app.get("/api/counter/timelapse")
     def counter_timelapse() -> Any:
@@ -928,18 +1079,30 @@ def create_app() -> Flask:
         printer_name = _to_text(request.args.get("printer_name"))
         printer_type = _to_text(request.args.get("printer_type")).lower()
         time_scope = _to_text(request.args.get("time_scope"))
+        datetime_from = _to_text(request.args.get("datetime_from"))
+        datetime_to = _to_text(request.args.get("datetime_to"))
         favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
         day_start_utc, day_end_utc, today_start_local = _resolve_day_window(page)
+        from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
+        to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
+        using_specified = (time_scope == "specified") and (from_dt is not None) and (to_dt is not None)
 
-        base_stmt = _apply_common_filters(select(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-        day_stmt = (
-            base_stmt.where(CounterInfor.timestamp >= day_start_utc, CounterInfor.timestamp < day_end_utc)
-            .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
-        )
+        base_stmt = _apply_common_filters(select(CounterInfor), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+        if using_specified:
+            day_stmt = base_stmt.order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+        else:
+            day_stmt = (
+                base_stmt.where(CounterInfor.timestamp >= day_start_utc, CounterInfor.timestamp < day_end_utc)
+                .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+            )
         with session_factory() as session:
             rows = session.execute(day_stmt).scalars().all()
-            min_ts = session.scalar(_apply_common_filters(select(func.min(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only))
-            if min_ts:
+            min_ts = session.scalar(_apply_common_filters(select(func.min(CounterInfor.timestamp)), CounterInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to))
+            if using_specified:
+                total_pages = 1
+                day_start_utc = from_dt or day_start_utc
+                day_end_utc = to_dt or day_end_utc
+            elif min_ts:
                 min_local = min_ts.astimezone(UI_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
                 total_pages = max(1, (today_start_local.date() - min_local.date()).days + 1)
             else:
@@ -1036,18 +1199,30 @@ def create_app() -> Flask:
         printer_name = _to_text(request.args.get("printer_name"))
         printer_type = _to_text(request.args.get("printer_type")).lower()
         time_scope = _to_text(request.args.get("time_scope"))
+        datetime_from = _to_text(request.args.get("datetime_from"))
+        datetime_to = _to_text(request.args.get("datetime_to"))
         favorite_only = _to_text(request.args.get("favorite")).lower() in {"1", "true", "yes", "on"}
         day_start_utc, day_end_utc, today_start_local = _resolve_day_window(page)
+        from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
+        to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
+        using_specified = (time_scope == "specified") and (from_dt is not None) and (to_dt is not None)
 
-        base_stmt = _apply_common_filters(select(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only)
-        day_stmt = (
-            base_stmt.where(StatusInfor.timestamp >= day_start_utc, StatusInfor.timestamp < day_end_utc)
-            .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
-        )
+        base_stmt = _apply_common_filters(select(StatusInfor), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to)
+        if using_specified:
+            day_stmt = base_stmt.order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+        else:
+            day_stmt = (
+                base_stmt.where(StatusInfor.timestamp >= day_start_utc, StatusInfor.timestamp < day_end_utc)
+                .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+            )
         with session_factory() as session:
             rows = session.execute(day_stmt).scalars().all()
-            min_ts = session.scalar(_apply_common_filters(select(func.min(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only))
-            if min_ts:
+            min_ts = session.scalar(_apply_common_filters(select(func.min(StatusInfor.timestamp)), StatusInfor, lead, ip, printer_name, printer_type, time_scope, favorite_only, datetime_from, datetime_to))
+            if using_specified:
+                total_pages = 1
+                day_start_utc = from_dt or day_start_utc
+                day_end_utc = to_dt or day_end_utc
+            elif min_ts:
                 min_local = min_ts.astimezone(UI_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
                 total_pages = max(1, (today_start_local.date() - min_local.date()).days + 1)
             else:
@@ -1193,8 +1368,10 @@ def create_app() -> Flask:
         page_size = min(50, _to_page(request.args.get("page_size"), 15))
         lead = _to_text(request.args.get("lead"))
         day = _parse_date(request.args.get("date"))
-        start_dt = datetime.combine(day, time.min, tzinfo=timezone.utc)
-        end_dt = start_dt + timedelta(days=1)
+        start_local = datetime.combine(day, time.min, tzinfo=UI_TZ)
+        end_local = start_local + timedelta(days=1)
+        start_dt = start_local.astimezone(timezone.utc)
+        end_dt = end_local.astimezone(timezone.utc)
 
         printers_stmt = select(CounterInfor.ip, CounterInfor.printer_name).where(
             CounterInfor.timestamp >= start_dt, CounterInfor.timestamp < end_dt
@@ -1244,7 +1421,8 @@ def create_app() -> Flask:
                         }
                     row = grouped[ip_key]
                     if isinstance(ts, datetime):
-                        delta = ts - start_dt
+                        local_ts = ts.astimezone(UI_TZ)
+                        delta = local_ts - start_local
                         minute_idx = int(delta.total_seconds() // 60)
                         if 0 <= minute_idx < 1440:
                             row["minutes"][minute_idx] = 1
@@ -1302,6 +1480,20 @@ def create_app() -> Flask:
             if agent_uid:
                 stmt = stmt.where(Printer.agent_uid == agent_uid)
             rows = session.execute(stmt).scalars().all()
+            pending_cmds = session.execute(
+                select(PrinterControlCommand)
+                .where(
+                    PrinterControlCommand.lead == lead_valid,
+                    PrinterControlCommand.lan_uid == lan_uid,
+                    PrinterControlCommand.status == "pending",
+                )
+                .order_by(PrinterControlCommand.requested_at.asc(), PrinterControlCommand.id.asc())
+            ).scalars().all()
+            pending_by_printer: dict[int, PrinterControlCommand] = {}
+            for cmd in pending_cmds:
+                if cmd.printer_id in pending_by_printer:
+                    continue
+                pending_by_printer[int(cmd.printer_id)] = cmd
         return jsonify(
             {
                 "ok": True,
@@ -1315,9 +1507,73 @@ def create_app() -> Flask:
                         "printer_name": r.printer_name,
                         "enabled": bool(r.enabled),
                         "enabled_changed_at": r.enabled_changed_at.isoformat() if r.enabled_changed_at else "",
+                        "command": (
+                            {
+                                "id": int(pending_by_printer[int(r.id)].id),
+                                "desired_enabled": bool(pending_by_printer[int(r.id)].desired_enabled),
+                                "auth_user": pending_by_printer[int(r.id)].auth_user or "",
+                                "auth_password": pending_by_printer[int(r.id)].auth_password or "",
+                            }
+                            if int(r.id) in pending_by_printer
+                            else None
+                        ),
                     }
                     for r in rows
                 ],
+            }
+        )
+
+    @app.post("/api/polling/control-result")
+    def polling_control_result() -> Any:
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, lead, auth_error = _validate_polling_auth(body, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+
+        command_id = _to_int(body.get("command_id"))
+        if command_id is None or command_id <= 0:
+            return jsonify({"ok": False, "error": "Missing command_id"}), 400
+        ok_value = bool(body.get("ok", False))
+        error_message = _to_text(body.get("error"))
+        responded_at = datetime.now(timezone.utc)
+
+        with session_factory() as session:
+            command = session.get(PrinterControlCommand, int(command_id))
+            if command is None:
+                return jsonify({"ok": False, "error": "Command not found"}), 404
+            if command.lead != lead:
+                return jsonify({"ok": False, "error": "Lead mismatch"}), 400
+            if command.status != "pending":
+                return jsonify({"ok": True, "status": command.status, "id": int(command.id)})
+
+            printer = session.get(Printer, int(command.printer_id))
+            if printer is None:
+                command.status = "failed"
+                command.error_message = "Printer not found"
+                command.responded_at = responded_at
+                session.commit()
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+
+            if ok_value:
+                command.status = "success"
+                command.error_message = ""
+                command.responded_at = responded_at
+                _apply_printer_enabled_state(session, printer, bool(command.desired_enabled), responded_at)
+            else:
+                command.status = "failed"
+                command.error_message = error_message or "Agent lock/unlock failed"
+                command.responded_at = responded_at
+            session.commit()
+
+        return jsonify(
+            {
+                "ok": True,
+                "id": int(command_id),
+                "status": "success" if ok_value else "failed",
+                "responded_at": responded_at.isoformat(),
             }
         )
 

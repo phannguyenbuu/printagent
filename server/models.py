@@ -130,6 +130,8 @@ class Printer(Base):
     agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
     printer_name: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), index=True)
+    auth_user: Mapped[str] = mapped_column(String(128), default="")
+    auth_password: Mapped[str] = mapped_column(String(255), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     enabled_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -162,3 +164,22 @@ class PrinterOnlineLog(Base):
     ip: Mapped[str] = mapped_column(String(64), index=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class PrinterControlCommand(Base):
+    __tablename__ = "PrinterControlCommand"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    printer_id: Mapped[int] = mapped_column(Integer, index=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    desired_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    auth_user: Mapped[str] = mapped_column(String(128), default="")
+    auth_password: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

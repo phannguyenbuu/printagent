@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -46,6 +46,7 @@ class PollingBridge:
         self._last_control_total = 0
         self._last_control_apply_error = ""
         self._applied_controls: dict[str, bool] = {}
+        self._control_retry_after: dict[str, datetime] = {}
         self._resolved_lan_uid = ""
 
     def is_configured(self) -> bool:
@@ -287,7 +288,7 @@ if ($r) { $r }
             return ""
         return f"{parsed.scheme}://{parsed.netloc}"
 
-    def _pull_device_controls(self, lan_uid: str) -> dict[str, bool]:
+    def _pull_device_controls(self, lan_uid: str) -> dict[str, dict[str, object]]:
         base_url = self._polling_base_url()
         if not base_url:
             return {}
@@ -303,7 +304,7 @@ if ($r) { $r }
         response.raise_for_status()
         payload = response.json()
         rows = payload.get("rows", []) if isinstance(payload, dict) else []
-        mapping: dict[str, bool] = {}
+        mapping: dict[str, dict[str, object]] = {}
         if isinstance(rows, list):
             for row in rows:
                 if not isinstance(row, dict):
@@ -311,7 +312,11 @@ if ($r) { $r }
                 ip = str(row.get("ip", "") or "").strip()
                 if not ip:
                     continue
-                mapping[ip] = bool(row.get("enabled", True))
+                command = row.get("command") if isinstance(row.get("command"), dict) else None
+                mapping[ip] = {
+                    "enabled": bool(row.get("enabled", True)),
+                    "command": command,
+                }
         self._last_control_pull_at = self._now_iso()
         self._last_control_total = len(mapping)
         return mapping
@@ -371,6 +376,9 @@ if ($r) { $r }
         ip = str(printer.ip or "").strip()
         if not ip:
             return
+        retry_after = self._control_retry_after.get(ip)
+        if retry_after and retry_after > datetime.now(timezone.utc):
+            return
         current = self._applied_controls.get(ip)
         if current is enabled:
             return
@@ -386,10 +394,55 @@ if ($r) { $r }
             else:
                 self._ricoh_service.lock_machine(printer)
             self._applied_controls[ip] = enabled
+            self._control_retry_after.pop(ip, None)
             self._last_control_apply_error = ""
             self._log_control_event(printer, enabled, "ok", "")
         except Exception as exc:  # noqa: BLE001
+            cooldown_seconds = 300
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
+            self._control_retry_after[ip] = retry_at
             self._log_control_event(printer, enabled, "error", str(exc))
+            LOGGER.warning(
+                "Control apply cooldown: name=%s ip=%s retry_after=%s",
+                printer.name,
+                ip,
+                retry_at.isoformat(),
+            )
+            raise
+
+    def _post_control_result(self, command_id: int, ok: bool, error: str = "") -> None:
+        base_url = self._polling_base_url()
+        if not base_url:
+            return
+        token = self._config.get_string("polling.token").strip()
+        lead = self._config.get_string("polling.lead").strip()
+        url = f"{base_url}/api/polling/control-result"
+        payload = {
+            "lead": lead,
+            "command_id": int(command_id),
+            "ok": bool(ok),
+            "error": str(error or ""),
+        }
+        headers = {"Content-Type": "application/json", "X-Lead-Token": token}
+        response = self._api_client.session.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+
+    def _apply_command(self, printer: Printer, command: dict[str, object]) -> None:
+        command_id = int(command.get("id", 0) or 0)
+        desired_enabled = bool(command.get("desired_enabled", True))
+        if command_id <= 0:
+            return
+        auth_user = str(command.get("auth_user", "") or "").strip()
+        auth_password = str(command.get("auth_password", "") or "").strip()
+        if auth_user:
+            printer.user = auth_user
+        if auth_password:
+            printer.password = auth_password
+        try:
+            self._apply_machine_control(printer, desired_enabled)
+            self._post_control_result(command_id=command_id, ok=True, error="")
+        except Exception as exc:  # noqa: BLE001
+            self._post_control_result(command_id=command_id, ok=False, error=str(exc))
             raise
 
     def _worker(self) -> None:
@@ -407,7 +460,7 @@ if ($r) { $r }
                 self._push_inventory(printers, hostname=hostname, local_ip=local_ip, lan_uid=lan_uid)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("Polling inventory sync failed: %s", exc)
-            controls: dict[str, bool] = {}
+            controls: dict[str, dict[str, object]] = {}
             try:
                 controls = self._pull_device_controls(lan_uid=lan_uid)
             except Exception as exc:  # noqa: BLE001
@@ -423,14 +476,17 @@ if ($r) { $r }
                     if "ricoh" not in printer_type and "ricoh" not in printer_name:
                         continue
                     try:
-                        self._apply_machine_control(printer, controls[ip])
+                        command = controls[ip].get("command")
+                        if isinstance(command, dict):
+                            self._apply_command(printer, command)
+                        self._applied_controls[ip] = bool(controls[ip].get("enabled", True))
                     except Exception as exc:  # noqa: BLE001
                         self._last_control_apply_error = str(exc)
                         LOGGER.warning(
                             "Polling control apply failed: name=%s ip=%s enabled=%s error=%s",
                             printer.name,
                             ip,
-                            controls[ip],
+                            controls[ip].get("enabled", True),
                             exc,
                         )
             self._last_cycle_total_printers = len(printers)
@@ -448,7 +504,7 @@ if ($r) { $r }
                     break
                 if not str(printer.ip or "").strip():
                     continue
-                if controls and not controls.get(str(printer.ip or "").strip(), True):
+                if controls and not bool((controls.get(str(printer.ip or "").strip(), {}) or {}).get("enabled", True)):
                     LOGGER.info("Polling skipped (disabled): name=%s ip=%s", printer.name, printer.ip)
                     continue
                 printer_type = str(printer.printer_type or "").strip().lower()

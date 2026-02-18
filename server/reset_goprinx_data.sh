@@ -23,6 +23,7 @@ TRUNCATE TABLE
   "CounterInfor",
   "StatusInfor",
   "CounterBaseline",
+  "PrinterControlCommand",
   "PrinterOnlineLog",
   "PrinterEnableLog",
   "Printer",

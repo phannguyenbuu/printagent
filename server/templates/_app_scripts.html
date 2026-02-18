@@ -13,6 +13,8 @@ function getGlobalFilters() {
     printer_type: (qs("global-filter-printer-type")?.value || "").trim(),
     favorite: (qs("global-filter-favorite")?.value || "").trim(),
     time_scope: (qs("global-filter-time-scope")?.value || "").trim(),
+    datetime_from: (qs("global-filter-datetime-from")?.value || "").trim(),
+    datetime_to: (qs("global-filter-datetime-to")?.value || "").trim(),
   };
 }
 function saveGlobalFilters() {
@@ -29,7 +31,18 @@ function restoreGlobalFilters() {
     if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = data.printer_type || "";
     if (qs("global-filter-favorite")) qs("global-filter-favorite").value = data.favorite || "";
     if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = data.time_scope || "month";
+    if (qs("global-filter-datetime-from")) qs("global-filter-datetime-from").value = data.datetime_from || "";
+    if (qs("global-filter-datetime-to")) qs("global-filter-datetime-to").value = data.datetime_to || "";
   } catch (_) {}
+}
+
+function updateSpecifiedRangeVisibility() {
+  const scope = (qs("global-filter-time-scope")?.value || "").trim();
+  const isSpecified = scope === "specified";
+  const fromWrap = qs("global-filter-datetime-from-wrap");
+  const toWrap = qs("global-filter-datetime-to-wrap");
+  if (fromWrap) fromWrap.hidden = !isSpecified;
+  if (toWrap) toWrap.hidden = !isSpecified;
 }
 
 async function loadLeadOptions(preferredLead = "") {
@@ -381,7 +394,15 @@ function renderDeviceTabs() {
     host.innerHTML = `<div class="meta-line">No devices from agent yet.</div>`;
     return;
   }
-  host.innerHTML = state.devices.rows
+  const sortedRows = [...state.devices.rows].sort((a, b) => {
+    const ao = a?.is_online ? 1 : 0;
+    const bo = b?.is_online ? 1 : 0;
+    if (ao !== bo) return bo - ao; // online first
+    const an = String(a?.printer_name || "").toLowerCase();
+    const bn = String(b?.printer_name || "").toLowerCase();
+    return an.localeCompare(bn);
+  });
+  host.innerHTML = sortedRows
     .map((r) => {
       const live = r.is_online ? "Online" : "Offline";
       return `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(r.label || `${r.lan_uid} / ${r.printer_name}`)} <span class="device-live ${r.is_online ? "online" : "offline"}">(${live})</span></button>`;
@@ -408,6 +429,12 @@ async function loadDeviceEvents(printerId) {
         <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
         <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
       </div>
+      <label class="device-auth-wrap">
+        <span>User</span>
+        <input id="device-auth-user" type="text" value="${escapeHtml(p.auth_user || "")}" placeholder="admin" />
+        <span>Password</span>
+        <input id="device-auth-password" type="password" value="${escapeHtml(p.auth_password || "")}" placeholder="password" />
+      </label>
       <label class="device-enable-wrap">
         <input id="device-enable-toggle" type="checkbox" ${p.enabled ? "checked" : ""} />
         <span>Enable</span>
@@ -415,15 +442,23 @@ async function loadDeviceEvents(printerId) {
     `;
     qs("device-enable-toggle")?.addEventListener("change", async (event) => {
       const next = Boolean(event.target.checked);
+      const authUser = (qs("device-auth-user")?.value || "").trim();
+      const authPassword = (qs("device-auth-password")?.value || "").trim();
       try {
-        await fetch(`/api/devices/${printerId}/enable`, {
+        const res = await fetch(`/api/devices/${printerId}/enable`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: next }),
+          body: JSON.stringify({ enabled: next, auth_user: authUser, auth_password: authPassword }),
         });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          throw new Error(payload.error || `HTTP ${res.status}`);
+        }
         await loadDevicesPage();
-      } catch (_) {
+      } catch (err) {
         event.target.checked = !next;
+        const msg = err && err.message ? err.message : "Lock/Unlock failed";
+        window.alert(msg);
       }
     });
   }
@@ -585,7 +620,17 @@ function openDetailModal(kind, row) {
 async function loadCounter() {
   const global = getGlobalFilters();
   const p = state.counter.page;
-  const query = new URLSearchParams({ page: String(p), page_size: "120", lead: global.lead, printer_name: global.printer_name, printer_type: global.printer_type, favorite: global.favorite, time_scope: global.time_scope || "month" });
+  const query = new URLSearchParams({
+    page: String(p),
+    page_size: "120",
+    lead: global.lead,
+    printer_name: global.printer_name,
+    printer_type: global.printer_type,
+    favorite: global.favorite,
+    time_scope: global.time_scope || "month",
+    datetime_from: global.datetime_from || "",
+    datetime_to: global.datetime_to || "",
+  });
   const data = await jget(`/api/counter/timelapse?${query.toString()}`);
   state.counter.totalPages = data.total_pages;
   qs("counter-page").textContent = `${data.page} / ${data.total_pages}`;
@@ -672,7 +717,17 @@ async function loadCounter() {
 async function loadStatus() {
   const global = getGlobalFilters();
   const p = state.status.page;
-  const query = new URLSearchParams({ page: String(p), page_size: "120", lead: global.lead, printer_name: global.printer_name, printer_type: global.printer_type, favorite: global.favorite, time_scope: global.time_scope || "month" });
+  const query = new URLSearchParams({
+    page: String(p),
+    page_size: "120",
+    lead: global.lead,
+    printer_name: global.printer_name,
+    printer_type: global.printer_type,
+    favorite: global.favorite,
+    time_scope: global.time_scope || "month",
+    datetime_from: global.datetime_from || "",
+    datetime_to: global.datetime_to || "",
+  });
   const data = await jget(`/api/status/timelapse?${query.toString()}`);
   state.status.totalPages = data.total_pages;
   qs("status-page").textContent = `${data.page} / ${data.total_pages}`;
@@ -795,7 +850,7 @@ function renderHeatmapRows(rows) {
   });
   wrap.innerHTML = `
     <table class="heatmap-table">
-      <thead><tr><th class="heatmap-printer">Printer</th>${hourLabels.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <thead><tr><th class="heatmap-printer">Hour</th>${hourLabels.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
       <tbody>${bodyRows.join("")}</tbody>
     </table>
   `;
@@ -839,11 +894,25 @@ async function loadHeatmap() {
 async function bind() {
   const page = currentPage();
   restoreGlobalFilters();
+  updateSpecifiedRangeVisibility();
   const restoredLead = (qs("global-filter-lead")?.value || "").trim();
   await loadLeadOptions(restoredLead || "default");
   const uiConfig = loadUiConfig();
   applyUiConfig(uiConfig);
   qs("global-filter-apply")?.addEventListener("click", () => {
+    const scope = (qs("global-filter-time-scope")?.value || "").trim();
+    const fromValue = (qs("global-filter-datetime-from")?.value || "").trim();
+    const toValue = (qs("global-filter-datetime-to")?.value || "").trim();
+    if (scope === "specified") {
+      if (!fromValue || !toValue) {
+        window.alert("Please select both Datetime From and Datetime To.");
+        return;
+      }
+      if (fromValue > toValue) {
+        window.alert("Datetime From must be earlier than Datetime To.");
+        return;
+      }
+    }
     saveGlobalFilters();
     if (page === "counter") state.counter.page = 1;
     if (page === "status") state.status.page = 1;
@@ -856,6 +925,9 @@ async function bind() {
     if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = "";
     if (qs("global-filter-favorite")) qs("global-filter-favorite").value = "";
     if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = "month";
+    if (qs("global-filter-datetime-from")) qs("global-filter-datetime-from").value = "";
+    if (qs("global-filter-datetime-to")) qs("global-filter-datetime-to").value = "";
+    updateSpecifiedRangeVisibility();
     saveGlobalFilters();
     if (page === "counter") state.counter.page = 1;
     if (page === "status") state.status.page = 1;
@@ -896,6 +968,9 @@ async function bind() {
     const raw = Number(event.target?.value || 60000);
     state.autoRefresh.intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 60000;
     startAutoRefresh();
+  });
+  qs("global-filter-time-scope")?.addEventListener("change", () => {
+    updateSpecifiedRangeVisibility();
   });
 
   if (page === "dashboard") loadSummary().catch(() => {});

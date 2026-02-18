@@ -73,6 +73,7 @@ check_table "AgentNode"
 check_table "Printer"
 check_table "PrinterEnableLog"
 check_table "PrinterOnlineLog"
+check_table "PrinterControlCommand"
 
 echo
 echo "Checking CounterInfor columns..."
@@ -106,7 +107,7 @@ done
 
 echo
 echo "Checking Printer columns..."
-for col in id lead lan_uid agent_uid printer_name ip enabled enabled_changed_at is_online online_changed_at created_at updated_at; do
+for col in id lead lan_uid agent_uid printer_name ip auth_user auth_password enabled enabled_changed_at is_online online_changed_at created_at updated_at; do
   check_column "Printer" "${col}"
 done
 
@@ -120,6 +121,12 @@ echo
 echo "Checking PrinterOnlineLog columns..."
 for col in id printer_id lead lan_uid printer_name ip is_online changed_at; do
   check_column "PrinterOnlineLog" "${col}"
+done
+
+echo
+echo "Checking PrinterControlCommand columns..."
+for col in id printer_id lead lan_uid agent_uid printer_name ip desired_enabled auth_user auth_password status error_message requested_at responded_at; do
+  check_column "PrinterControlCommand" "${col}"
 done
 
 echo
