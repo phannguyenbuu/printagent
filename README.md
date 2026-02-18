@@ -1,8 +1,10 @@
 scp -r server/* root@31.97.76.62:goprinx
 @baoLong0511
 # Flask Printer Agent
+bash server/migrate_printer_control.sh
 
 ## Run
+http://192.168.1.222/web/entry/en/address/adrsDeleteEntries.cgi
 
 ```powershell
 cd d:\Projects\agent
@@ -11,6 +13,7 @@ python -m venv .venv
 pip install -e .[dev]
 python -m app.main
 ```
+bash server/migrate_printer_control.sh
 
 Web UI (mac dinh):
 
@@ -93,23 +96,6 @@ Update APIs:
 - `POST /api/update/check` with body `{"version":"0.1.1","command":"git pull --ff-only"}`
 - `POST /api/update/receive-text` with body `{"text":"UPDATE 0.1.1|git pull --ff-only"}`
   - Optional header: `X-Update-Token` if `UPDATE_WEBHOOK_TOKEN` is set.
-
-## Scan Watcher Upload (Agent -> VPS)
-
-Agent now supports a dedicated scan thread (independent from counter polling):
-
-- Scan loop interval default: `1s`
-- Detect new files from configured scan directories
-- Wait until file is stable, then upload to VPS endpoint `POST /api/polling/scan-upload`
-
-Config keys in `config.yaml` or `.env`:
-
-```dotenv
-POLLING_SCAN_ENABLED=true
-POLLING_SCAN_INTERVAL_SECONDS=1
-POLLING_SCAN_DIRS=storage/scans/inbox
-POLLING_SCAN_RECURSIVE=true
-```
 
 ## Notes
 

@@ -23,6 +23,7 @@
         <nav class="side-nav">
           <a class="side-link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a class="side-link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="side-link {% if active_tab == 'scan' %}active{% endif %}" href="{{ url_for('scan') }}">Scan</a>
           <a class="side-link {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Analytics</a>
         </nav>
       </aside>
@@ -42,6 +43,7 @@
         <div class="nav-tabs">
           <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Device Manager</a>
+          <a class="tab {% if active_tab == 'scan' %}active{% endif %}" href="{{ url_for('scan') }}">Scan</a>
           <a class="tab {% if active_tab == 'analytics' %}active{% endif %}" href="{{ url_for('analytics') }}">Counter Trend</a>
         </div>
 

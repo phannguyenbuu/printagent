@@ -580,6 +580,134 @@ async function initDevicesPage() {
   await loadDevices();
 }
 
+function getScanTarget() {
+  const ip = (document.getElementById("scan-ip")?.value || "").trim();
+  const user = (document.getElementById("scan-user")?.value || "").trim();
+  const password = (document.getElementById("scan-password")?.value || "").trim();
+  return { ip, user, password };
+}
+
+function renderScanAddressRows(entries) {
+  const body = document.getElementById("scan-address-table-body");
+  if (!body) return;
+  const rows = Array.isArray(entries) ? entries.filter((x) => x && x.type !== "Summary") : [];
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7">No address entries.</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map((row) => {
+      const type = row.type || "-";
+      const reg = row.registration_no || "";
+      const name = row.name || "-";
+      const userCode = row.user_code || "-";
+      const email = row.email_address || "-";
+      const folder = row.folder || "-";
+      return `
+        <tr>
+          <td>${type}</td>
+          <td>${reg}</td>
+          <td>${name}</td>
+          <td>${userCode}</td>
+          <td>${email}</td>
+          <td>${folder}</td>
+          <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+async function loadScanAddressList() {
+  const out = document.getElementById("scan-output");
+  const target = getScanTarget();
+  if (!target.ip) throw new Error("Missing printer IP");
+  const query = new URLSearchParams(target).toString();
+  const data = await jsonFetch(`/api/scan/address-list?${query}`);
+  const payload = data.payload || {};
+  const entries = payload.address_list || [];
+  renderScanAddressRows(entries);
+  if (out) out.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function initScanPage() {
+  const targetForm = document.getElementById("scan-target-form");
+  const createForm = document.getElementById("scan-create-form");
+  const out = document.getElementById("scan-output");
+  if (!targetForm || !createForm) return;
+
+  if (!targetForm.dataset.bound) {
+    targetForm.dataset.bound = "1";
+    targetForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+  }
+
+  if (!createForm.dataset.bound) {
+    createForm.dataset.bound = "1";
+    createForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const target = getScanTarget();
+      if (!target.ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      const body = {
+        ...target,
+        name: (document.getElementById("scan-create-name")?.value || "").trim(),
+        email: (document.getElementById("scan-create-email")?.value || "").trim(),
+        folder: (document.getElementById("scan-create-folder")?.value || "").trim(),
+        user_code: (document.getElementById("scan-create-user-code")?.value || "").trim(),
+        fields: { entryTypeIn: "1" },
+      };
+      try {
+        const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+        await loadScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+  }
+
+  const tableBody = document.getElementById("scan-address-table-body");
+  if (tableBody && !tableBody.dataset.bound) {
+    tableBody.dataset.bound = "1";
+    tableBody.addEventListener("click", async (event) => {
+      const btn = event.target.closest(".scan-delete-btn");
+      if (!btn) return;
+      const registrationNo = String(btn.dataset.registrationNo || "").trim();
+      if (!registrationNo) return;
+      if (!window.confirm(`Delete registration_no ${registrationNo}?`)) return;
+      const target = getScanTarget();
+      if (!target.ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      try {
+        const data = await jsonFetch("/api/scan/address-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...target, registration_no: registrationNo }),
+        });
+        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+        await loadScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+  }
+}
+
 const dashboardState = {
   env: {},
   env_overrides: {},
@@ -987,6 +1115,9 @@ document.addEventListener("DOMContentLoaded", () => {
     loadOverview().catch(() => {});
     initDevicesPage().catch(() => {});
   }
+  if (page === "scan") {
+    initScanPage().catch(() => {});
+  }
   const refresh = document.getElementById("refresh-btn");
   if (refresh) {
     refresh.addEventListener("click", async () => {
@@ -995,6 +1126,8 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (page === "devices") {
         loadOverview().catch(() => {});
         loadDevices(true).catch(() => {});
+      } else if (page === "scan") {
+        loadScanAddressList().catch(() => {});
       } else {
         loadOverview().catch(() => {});
       }

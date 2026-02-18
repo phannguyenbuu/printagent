@@ -401,6 +401,169 @@ class RicohService:
         text = re.sub(r"<[^>]*>", "", input_value)
         return unescape(text).strip()
 
+    @staticmethod
+    def _extract_hidden_inputs(html: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for match in re.finditer(r"<input[^>]*>", html, re.I | re.S):
+            tag = match.group(0)
+            type_match = re.search(r"type=['\"]([^'\"]+)['\"]", tag, re.I)
+            input_type = (type_match.group(1).strip().lower() if type_match else "").strip()
+            if input_type and input_type != "hidden":
+                continue
+            name_match = re.search(r"name=['\"]([^'\"]+)['\"]", tag, re.I)
+            if not name_match:
+                continue
+            key = name_match.group(1).strip()
+            if not key:
+                continue
+            value_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I | re.S)
+            value = value_match.group(1) if value_match else ""
+            result[key] = unescape(value)
+        return result
+
+    @staticmethod
+    def _pick_field_key(keys: list[str], candidates: list[str]) -> str:
+        lowered_map = {k.lower(): k for k in keys}
+        for cand in candidates:
+            hit = lowered_map.get(cand.lower())
+            if hit:
+                return hit
+        return ""
+
+    def create_address_user_wizard(
+        self,
+        printer: Printer,
+        name: str,
+        email: str = "",
+        folder: str = "",
+        user_code: str = "",
+        fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.create_http_client(printer)
+        get_url = "/web/entry/en/address/adrsGetUserWizard.cgi"
+        set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
+        html = self.authenticate_and_get(session, printer, get_url)
+
+        defaults = self._extract_hidden_inputs(html)
+        token = defaults.get("wimToken", "")
+        if not token:
+            token = self._extract_wim_token(html)
+        defaults["wimToken"] = token
+
+        key_list = list(defaults.keys())
+        name_key = self._pick_field_key(key_list, ["nameIn", "userNameIn", "displayNameIn", "name"])
+        email_key = self._pick_field_key(key_list, ["emailAddressIn", "emailIn", "mailAddressIn", "email"])
+        folder_key = self._pick_field_key(key_list, ["folderPathIn", "folderIn", "pathIn", "folder"])
+        user_code_key = self._pick_field_key(key_list, ["userCodeIn", "userCode", "codeIn"])
+
+        if name_key:
+            defaults[name_key] = str(name or "").strip()
+        else:
+            defaults["nameIn"] = str(name or "").strip()
+        if email:
+            defaults[email_key or "emailAddressIn"] = str(email).strip()
+        if folder:
+            defaults[folder_key or "folderPathIn"] = str(folder).strip()
+        if user_code:
+            defaults[user_code_key or "userCodeIn"] = str(user_code).strip()
+
+        if fields and isinstance(fields, dict):
+            for k, v in fields.items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                defaults[key] = "" if v is None else str(v)
+
+        defaults.setdefault("open", "")
+
+        resp = session.post(
+            f"http://{printer.ip}{set_url}",
+            data=defaults,
+            headers={"Referer": f"http://{printer.ip}{get_url}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        verify_raw = ""
+        verify_count = 0
+        try:
+            verify_raw = self.get_address_list_ajax_with_client(session, printer)
+            parsed = self.parse_ajax_address_list(verify_raw)
+            verify_count = len(parsed)
+        except Exception:  # noqa: BLE001
+            verify_raw = ""
+            verify_count = 0
+
+        return {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "ok": True,
+            "endpoint": set_url,
+            "name": str(name or "").strip(),
+            "http_status": resp.status_code,
+            "response_excerpt": resp.text[:600],
+            "verify_count": verify_count,
+            "timestamp": self._timestamp(),
+        }
+
+    def delete_address_entries(self, printer: Printer, registration_numbers: list[str]) -> dict[str, Any]:
+        regs = [str(x or "").strip() for x in registration_numbers if str(x or "").strip()]
+        if not regs:
+            raise ValueError("registration_numbers is empty")
+
+        session = self.create_http_client(printer)
+        list_url = "/web/entry/en/address/adrsList.cgi"
+        delete_url = "/web/entry/en/address/adrsDeleteEntries.cgi"
+        html = self.authenticate_and_get(session, printer, list_url)
+        defaults = self._extract_hidden_inputs(html)
+        token = defaults.get("wimToken", "")
+        if not token:
+            token = self._extract_wim_token(html)
+        defaults["wimToken"] = token
+
+        joined = ",".join(regs)
+        form: list[tuple[str, str]] = [(k, str(v)) for k, v in defaults.items()]
+        # Best-effort compatibility across Ricoh model variants.
+        for key in (
+            "regiNoListIn",
+            "registrationNoListIn",
+            "entryNoListIn",
+            "selectedRegiNoIn",
+            "selectedEntryNoIn",
+            "deleteListIn",
+            "deleteEntriesIn",
+        ):
+            form.append((key, joined))
+            for reg in regs:
+                form.append((key, reg))
+        form.append(("open", ""))
+
+        resp = session.post(
+            f"http://{printer.ip}{delete_url}",
+            data=form,
+            headers={"Referer": f"http://{printer.ip}{list_url}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        verify_raw = self.get_address_list_ajax_with_client(session, printer)
+        verify_entries = self.parse_ajax_address_list(verify_raw)
+        remain = {str(e.registration_no or "").strip() for e in verify_entries}
+        failed = [reg for reg in regs if reg in remain]
+        if failed:
+            raise RuntimeError(f"Delete not confirmed for registration_no: {', '.join(failed)}")
+
+        return {
+            "printer_name": printer.name,
+            "ip": printer.ip,
+            "ok": True,
+            "endpoint": delete_url,
+            "deleted": regs,
+            "deleted_count": len(regs),
+            "http_status": resp.status_code,
+            "timestamp": self._timestamp(),
+        }
+
     def parse_address_list(self, html: str) -> list[AddressEntry]:
         user_count = re.search(r'<span id="span_numOfUsers">(\d+)</span>', html)
         group_count = re.search(r'<span id="span_numOfGroups">(\d+)</span>', html)

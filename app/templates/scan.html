@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h3>Address List</h3>
+    <span>Ricoh Address Book CRUD</span>
+  </div>
+
+  <form id="scan-target-form" class="inline-form">
+    <input id="scan-ip" placeholder="Printer IP" />
+    <input id="scan-user" placeholder="User (optional)" />
+    <input id="scan-password" type="password" placeholder="Password (optional)" />
+    <button id="scan-load-btn" type="submit" class="btn ghost">Load Address List</button>
+  </form>
+
+  <form id="scan-create-form" class="inline-form">
+    <input id="scan-create-name" placeholder="Name" required />
+    <input id="scan-create-email" placeholder="Email" />
+    <input id="scan-create-folder" placeholder="Folder" />
+    <input id="scan-create-user-code" placeholder="User Code" />
+    <button type="submit" class="btn ghost">Create</button>
+  </form>
+
+  <div class="table-wrap">
+    <table class="device-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Registration No</th>
+          <th>Name</th>
+          <th>User Code</th>
+          <th>Email</th>
+          <th>Folder</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="scan-address-table-body">
+        <tr><td colspan="7">No data</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <pre id="scan-output" class="json-output"></pre>
+</section>
+{% endblock %}
+

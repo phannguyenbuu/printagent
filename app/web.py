@@ -756,6 +756,10 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def devices() -> Any:
         return render_template("devices.html", active_tab="devices", page_title="Device Manager")
 
+    @app.get("/scan")
+    def scan() -> Any:
+        return render_template("scan.html", active_tab="scan", page_title="Scan")
+
     @app.get("/analytics")
     def analytics() -> Any:
         return render_template("analytics.html", active_tab="analytics", page_title="Counter Analytics")
@@ -763,6 +767,94 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.get("/settings")
     def settings() -> Any:
         return redirect(url_for("dashboard"))
+
+    def _resolve_target_printer(ip: str, user: str = "", password: str = "") -> Printer:
+        devices = _load_printers(api_client)
+        target = _resolve_printer(ip, devices)
+        if not target:
+            target = Printer(
+                name="Local Printer",
+                ip=ip,
+                user=config.get_string("test.user"),
+                password=config.get_string("test.password"),
+                printer_type="ricoh",
+                status="unknown",
+            )
+        if str(user or "").strip():
+            target.user = str(user).strip()
+        if str(password or "").strip():
+            target.password = str(password).strip()
+        if not str(target.user or "").strip():
+            target.user = config.get_string("test.user")
+        if target.password is None or str(target.password).strip() == "":
+            target.password = config.get_string("test.password")
+        return target
+
+    @app.get("/api/scan/address-list")
+    def api_scan_address_list() -> Any:
+        ip = str(request.args.get("ip", "")).strip()
+        user = str(request.args.get("user", "")).strip()
+        password = str(request.args.get("password", "")).strip()
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        try:
+            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            payload = ricoh_service.process_address_list(target)
+            return jsonify({"ok": True, "payload": payload})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.post("/api/scan/address-create")
+    def api_scan_address_create() -> Any:
+        body = request.get_json(silent=True) or {}
+        ip = str(body.get("ip", "")).strip()
+        user = str(body.get("user", "")).strip()
+        password = str(body.get("password", "")).strip()
+        name = str(body.get("name", "")).strip()
+        email = str(body.get("email", "")).strip()
+        folder = str(body.get("folder", "")).strip()
+        user_code = str(body.get("user_code", "")).strip()
+        fields = body.get("fields", {})
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        if not name:
+            return jsonify({"ok": False, "error": "Missing name"}), 400
+        if fields is not None and not isinstance(fields, dict):
+            return jsonify({"ok": False, "error": "fields must be object"}), 400
+        try:
+            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            merged_fields: dict[str, Any] = {"entryTypeIn": "1"}
+            if isinstance(fields, dict):
+                merged_fields.update(fields)
+            payload = ricoh_service.create_address_user_wizard(
+                target,
+                name=name,
+                email=email,
+                folder=folder,
+                user_code=user_code,
+                fields=merged_fields,
+            )
+            return jsonify({"ok": True, "payload": payload})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.post("/api/scan/address-delete")
+    def api_scan_address_delete() -> Any:
+        body = request.get_json(silent=True) or {}
+        ip = str(body.get("ip", "")).strip()
+        user = str(body.get("user", "")).strip()
+        password = str(body.get("password", "")).strip()
+        registration_no = str(body.get("registration_no", "")).strip()
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        if not registration_no:
+            return jsonify({"ok": False, "error": "Missing registration_no"}), 400
+        try:
+            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            payload = ricoh_service.delete_address_entries(target, [registration_no])
+            return jsonify({"ok": True, "payload": payload})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     @app.get("/api/overview")
     def api_overview() -> Any:
@@ -822,18 +914,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         if not action:
             return jsonify({"ok": False, "error": "Missing action"}), 400
 
-        devices = _load_printers(api_client)
-        target = _resolve_printer(ip, devices)
-        if not target:
-            # Allow direct actions for locally discovered printers that are not in upstream API list.
-            target = Printer(
-                name="Local Printer",
-                ip=ip,
-                user=config.get_string("test.user"),
-                password=config.get_string("test.password"),
-                printer_type="ricoh",
-                status="unknown",
-            )
+        target = _resolve_target_printer(ip=ip)
 
         counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
         status_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["status"]
@@ -862,6 +943,26 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             if action == "address_list":
                 payload = ricoh_service.process_address_list(target)
                 ws_client.send("address_list", payload)
+                return jsonify({"ok": True, "action": action, "payload": payload})
+            if action == "address_create":
+                name = str(request_data.get("name", "")).strip()
+                email = str(request_data.get("email", "")).strip()
+                folder = str(request_data.get("folder", "")).strip()
+                user_code = str(request_data.get("user_code", "")).strip()
+                fields = request_data.get("fields", {})
+                if not name:
+                    return jsonify({"ok": False, "error": "Missing name"}), 400
+                if fields is not None and not isinstance(fields, dict):
+                    return jsonify({"ok": False, "error": "fields must be object"}), 400
+                payload = ricoh_service.create_address_user_wizard(
+                    target,
+                    name=name,
+                    email=email,
+                    folder=folder,
+                    user_code=user_code,
+                    fields=fields if isinstance(fields, dict) else None,
+                )
+                ws_client.send("address_create", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "log_counter_start":
                 ok, message = _start_job(
