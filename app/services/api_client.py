@@ -39,12 +39,19 @@ class APIClient:
         target = url or f"{self.config.api_url}/printers"
         if not self.config.api_url and url is None:
             raise ValueError("api_url is not configured")
+        payload: Any
         response = self.session.get(target, timeout=30, headers={"Accept": "application/json"})
+        if response.status_code == 404 and url is None:
+            # Local web app exposes /api/devices, not /api/printers.
+            fallback_target = f"{self.config.api_url}/devices"
+            response = self.session.get(fallback_target, timeout=30, headers={"Accept": "application/json"})
         response.raise_for_status()
         payload = response.json()
 
         if isinstance(payload, dict) and "data" in payload:
             raw_printers = payload.get("data") or []
+        elif isinstance(payload, dict) and "devices" in payload:
+            raw_printers = payload.get("devices") or []
         elif isinstance(payload, list):
             raw_printers = payload
         else:
@@ -61,7 +68,7 @@ class APIClient:
                     ip=str(item.get("ip", "") or ""),
                     user=str(item.get("user", "") or ""),
                     password=str(item.get("password", "") or ""),
-                    printer_type=str(item.get("printer_type", "") or ""),
+                    printer_type=str(item.get("printer_type", item.get("type", "")) or ""),
                     status=str(item.get("status", "") or ""),
                 )
             )
