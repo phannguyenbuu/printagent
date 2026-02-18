@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from config import ServerConfig
 from db import create_session_factory
@@ -481,6 +481,13 @@ def create_app() -> Flask:
     cfg = ServerConfig()
     session_factory = create_session_factory(cfg)
     Base.metadata.create_all(bind=session_factory.kw["bind"])
+    with session_factory() as session:
+        # Self-heal schema drift for older deployments (PostgreSQL).
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS auth_user VARCHAR(128) NOT NULL DEFAULT \'\';'))
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS auth_password VARCHAR(255) NOT NULL DEFAULT \'\';'))
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        session.commit()
 
     lead_key_map = cfg.lead_keys()
 
@@ -858,14 +865,9 @@ def create_app() -> Flask:
         with session_factory() as session:
             _refresh_stale_offline(session=session, lead=lead)
             session.commit()
-            latest_stmt = select(Printer.lan_uid).order_by(Printer.updated_at.desc(), Printer.id.desc()).limit(1)
             stmt = select(Printer).order_by(Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc())
             if lead:
-                latest_stmt = latest_stmt.where(Printer.lead == lead)
                 stmt = stmt.where(Printer.lead == lead)
-            latest_lan_uid = session.execute(latest_stmt).scalar_one_or_none()
-            if latest_lan_uid:
-                stmt = stmt.where(Printer.lan_uid == latest_lan_uid)
             raw_rows = session.execute(stmt).scalars().all()
             deduped: dict[str, Printer] = {}
             for r in raw_rows:

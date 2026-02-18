@@ -115,6 +115,27 @@
         <div id="detail-modal-body"></div>
       </div>
     </div>
+    <div id="device-auth-modal" class="confirm-modal" hidden>
+      <div class="confirm-backdrop"></div>
+      <div class="confirm-dialog">
+        <h3>Device Credentials</h3>
+        <p>Enter User/Password to apply Enable/Disable.</p>
+        <div class="device-auth-dialog-form">
+          <label>
+            <span>User</span>
+            <input id="device-auth-dialog-user" type="text" placeholder="admin" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="device-auth-dialog-password" type="password" placeholder="password" />
+          </label>
+        </div>
+        <div class="confirm-actions">
+          <button id="device-auth-cancel" type="button">Cancel</button>
+          <button id="device-auth-ok" type="button">OK</button>
+        </div>
+      </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     {% include "_app_scripts.html" %}
   </body>

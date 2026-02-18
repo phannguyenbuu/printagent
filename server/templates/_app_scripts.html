@@ -314,6 +314,7 @@ const state = {
   charts: {},
   pendingDelete: null,
   detail: null,
+  deviceAuthResolver: null,
 };
 
 function currentPage() {
@@ -387,6 +388,28 @@ function closeDetailModal() {
   if (modal) modal.hidden = true;
 }
 
+function openDeviceAuthDialog(defaultUser = "", defaultPassword = "") {
+  const modal = qs("device-auth-modal");
+  const userInput = qs("device-auth-dialog-user");
+  const passInput = qs("device-auth-dialog-password");
+  if (!modal || !userInput || !passInput) return Promise.resolve(null);
+  userInput.value = String(defaultUser || "");
+  passInput.value = String(defaultPassword || "");
+  modal.hidden = false;
+  window.setTimeout(() => userInput.focus(), 0);
+  return new Promise((resolve) => {
+    state.deviceAuthResolver = resolve;
+  });
+}
+
+function closeDeviceAuthDialog(result = null) {
+  const modal = qs("device-auth-modal");
+  if (modal) modal.hidden = true;
+  const resolver = state.deviceAuthResolver;
+  state.deviceAuthResolver = null;
+  if (typeof resolver === "function") resolver(result);
+}
+
 function renderDeviceTabs() {
   const host = qs("devices-tabs");
   if (!host) return;
@@ -425,25 +448,24 @@ async function loadDeviceEvents(printerId) {
   if (head) {
     const live = p.is_online ? "Online" : "Offline";
     head.innerHTML = `
-      <div>
-        <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
-        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
-      </div>
-      <label class="device-auth-wrap">
-        <span>User</span>
-        <input id="device-auth-user" type="text" value="${escapeHtml(p.auth_user || "")}" placeholder="admin" />
-        <span>Password</span>
-        <input id="device-auth-password" type="password" value="${escapeHtml(p.auth_password || "")}" placeholder="password" />
-      </label>
       <label class="device-enable-wrap">
         <input id="device-enable-toggle" type="checkbox" ${p.enabled ? "checked" : ""} />
         <span>Enable</span>
       </label>
+      <div>
+        <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
+        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
+      </div>
     `;
     qs("device-enable-toggle")?.addEventListener("change", async (event) => {
       const next = Boolean(event.target.checked);
-      const authUser = (qs("device-auth-user")?.value || "").trim();
-      const authPassword = (qs("device-auth-password")?.value || "").trim();
+      const creds = await openDeviceAuthDialog(p.auth_user || "", p.auth_password || "");
+      if (!creds) {
+        event.target.checked = !next;
+        return;
+      }
+      const authUser = String(creds.user || "").trim();
+      const authPassword = String(creds.password || "").trim();
       try {
         const res = await fetch(`/api/devices/${printerId}/enable`, {
           method: "PATCH",
@@ -957,8 +979,28 @@ async function bind() {
       closeDetailModal();
     }
   });
+  qs("device-auth-ok")?.addEventListener("click", () => {
+    const user = (qs("device-auth-dialog-user")?.value || "").trim();
+    const password = (qs("device-auth-dialog-password")?.value || "").trim();
+    if (!user || !password) {
+      window.alert("Please enter both User and Password.");
+      return;
+    }
+    closeDeviceAuthDialog({ user, password });
+  });
+  qs("device-auth-cancel")?.addEventListener("click", () => {
+    closeDeviceAuthDialog(null);
+  });
+  qs("device-auth-modal")?.addEventListener("click", (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains("confirm-backdrop")) {
+      closeDeviceAuthDialog(null);
+    }
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeDetailModal();
+    if (event.key === "Escape") {
+      closeDetailModal();
+      closeDeviceAuthDialog(null);
+    }
   });
   qs("auto-refresh-toggle")?.addEventListener("change", (event) => {
     state.autoRefresh.enabled = Boolean(event.target?.checked);
