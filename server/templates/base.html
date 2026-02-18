@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title }} | GoPrinx</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+  </head>
+  <body data-page="{{ active_tab }}">
+    <div class="shell">
+      <aside class="sidebar">
+        <h2>GoPrinx</h2>
+        <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a class="link {% if active_tab == 'counter' %}active{% endif %}" href="{{ url_for('counter_page') }}">Counter</a>
+        <a class="link {% if active_tab == 'status' %}active{% endif %}" href="{{ url_for('status_page') }}">Status</a>
+        <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}">Heatmap</a>
+      </aside>
+      <main class="content">
+        <header class="topbar">
+          <h1>{{ page_title }}</h1>
+          <button id="refresh-btn">Refresh</button>
+        </header>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>

@@ -58,6 +58,8 @@ class AppConfig:
             ("POLLING_LEAD", "polling.lead", "str"),
             ("POLLING_TOKEN", "polling.token", "str"),
             ("POLLING_INTERVAL_SECONDS", "polling.interval_seconds", "str"),
+            ("POLLING_LAN_UID", "polling.lan_uid", "str"),
+            ("POLLING_AGENT_UID", "polling.agent_uid", "str"),
         ]
         for env_name, key, value_type in env_map:
             env_value = os.getenv(env_name)

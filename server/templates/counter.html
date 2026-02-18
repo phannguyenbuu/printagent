@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="tools">
+    <input id="counter-lead" placeholder="lead" />
+    <input id="counter-ip" placeholder="ip" />
+    <button id="counter-filter">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table id="counter-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th><th>Lead</th><th>Name</th><th>IP</th><th>Total</th><th>Copier</th><th>Printer</th><th>Scan BW</th><th>Scan Color</th><th>A3/DLT</th><th>Duplex</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="11">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <button id="counter-prev">Prev</button>
+    <span id="counter-page">1 / 1</span>
+    <button id="counter-next">Next</button>
+  </div>
+</section>
+{% endblock %}

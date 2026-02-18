@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="tools">
+    <input id="heatmap-date" type="date" />
+    <input id="heatmap-lead" placeholder="lead" />
+    <button id="heatmap-apply">Apply</button>
+    <button id="heatmap-mode-day" class="active">Day 1440</button>
+    <button id="heatmap-mode-hour">Hour 60</button>
+    <select id="heatmap-hour"></select>
+  </div>
+  <div id="heatmap-wrap" class="heatmap-wrap">Loading...</div>
+  <div class="pager">
+    <button id="heatmap-prev">Prev</button>
+    <span id="heatmap-page">1 / 1</span>
+    <button id="heatmap-next">Next</button>
+  </div>
+</section>
+{% endblock %}

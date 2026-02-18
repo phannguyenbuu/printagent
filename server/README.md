@@ -27,6 +27,26 @@ This Flask service receives polling data from agents every 60 seconds and stores
 ### Health
 - `GET /health`
 
+### Agent register (LAN + node identity)
+- `POST /api/agent/register`
+- Header:
+  - `X-Lead-Token: <token>`
+- Body:
+```json
+{
+  "lead": "default",
+  "lan_uid": "lan-a1b2c3",
+  "agent_uid": "pc-01",
+  "lan_name": "Factory A",
+  "subnet_cidr": "192.168.1.0/24",
+  "gateway_ip": "192.168.1.1",
+  "gateway_mac": "AA:BB:CC:DD:EE:FF",
+  "hostname": "PC-01",
+  "local_ip": "192.168.1.10",
+  "local_mac": "11:22:33:44:55:66"
+}
+```
+
 ### Polling ingest
 - `POST /api/polling`
 - Header:
@@ -35,6 +55,8 @@ This Flask service receives polling data from agents every 60 seconds and stores
 ```json
 {
   "lead": "default",
+  "lan_uid": "lan-a1b2c3",
+  "agent_uid": "pc-01",
   "printer_name": "Ricoh 7503",
   "ip": "192.168.1.222",
   "timestamp": "2026-02-17T14:43:05.041902+00:00",

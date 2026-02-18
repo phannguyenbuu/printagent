@@ -28,7 +28,7 @@ class ServerConfig:
         _load_env()
         self.host = os.getenv("SERVER_HOST", "0.0.0.0")
         self.port = int(os.getenv("SERVER_PORT", "8005"))
-        self.debug = os.getenv("SERVER_DEBUG", "false").strip().lower() in {"1", "true", "yes", "y"}
+        self.debug = os.getenv("SERVER_DEBUG", "true").strip().lower() in {"1", "true", "yes", "y"}
         self.database_url = os.getenv(
             "DATABASE_URL",
             "postgresql+psycopg2://postgres:myPass@localhost:5432/GoPrinx",

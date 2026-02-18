@@ -23,7 +23,9 @@ webhook:
 
 polling:
   enabled: true
-  url: ""  # example: http://vps-host:8000/api/polling
+  url: ""  # example: http://vps-host:8005/api/polling
   lead: ""
   token: ""
+  lan_uid: ""
+  agent_uid: ""
   interval_seconds: 60

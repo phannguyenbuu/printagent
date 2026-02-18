@@ -48,6 +48,8 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
         "POLLING_LEAD": config.get_string("polling.lead"),
         "POLLING_TOKEN": config.get_string("polling.token"),
         "POLLING_INTERVAL_SECONDS": config.get_string("polling.interval_seconds", "60"),
+        "POLLING_LAN_UID": config.get_string("polling.lan_uid"),
+        "POLLING_AGENT_UID": config.get_string("polling.agent_uid"),
     }
 
 

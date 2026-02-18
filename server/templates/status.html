@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="tools">
+    <input id="status-lead" placeholder="lead" />
+    <input id="status-ip" placeholder="ip" />
+    <button id="status-filter">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table id="status-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th><th>Lead</th><th>Name</th><th>IP</th><th>System</th><th>Printer</th><th>Copier</th><th>Scanner</th><th>Toner</th><th>Tray 1</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="10">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <button id="status-prev">Prev</button>
+    <span id="status-page">1 / 1</span>
+    <button id="status-next">Next</button>
+  </div>
+</section>
+{% endblock %}

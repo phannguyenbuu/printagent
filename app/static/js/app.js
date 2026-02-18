@@ -771,6 +771,8 @@ function bindDashboardActions() {
         POLLING_LEAD: envForm.elements.POLLING_LEAD.value,
         POLLING_TOKEN: envForm.elements.POLLING_TOKEN.value,
         POLLING_INTERVAL_SECONDS: envForm.elements.POLLING_INTERVAL_SECONDS.value,
+        POLLING_LAN_UID: envForm.elements.POLLING_LAN_UID.value,
+        POLLING_AGENT_UID: envForm.elements.POLLING_AGENT_UID.value,
       };
       try {
         await jsonFetch("/api/dashboard/env", {
