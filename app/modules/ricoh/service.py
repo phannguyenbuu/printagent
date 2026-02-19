@@ -930,6 +930,8 @@ class RicohService:
             raise RuntimeError(
                 "direct create fallback failed; "
                 + " | ".join(attempt_errors[-8:])
+                + " || detail_fallback_trace: "
+                + " | ".join(detail_errors[-4:])
             )
 
         defaults = self._extract_hidden_inputs(html)
