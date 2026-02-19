@@ -117,20 +117,22 @@ function setResultModalView(tab) {
   const summaryBtn = document.getElementById("result-modal-tab-summary");
   const htmlBtn = document.getElementById("result-modal-tab-html");
   const scanBtn = document.getElementById("result-modal-tab-scan");
+  const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
   const modalBody = document.getElementById("result-modal-counter-body");
   const htmlFrame = document.getElementById("result-modal-counter-html");
   const scanPanel = document.getElementById("result-modal-panel-scan");
-  if (!summaryBtn || !htmlBtn || !scanBtn || !modalBody || !htmlFrame || !scanPanel) return;
+  if (!summaryBtn || !htmlBtn || !scanBtn || !scanHtmlTopBtn || !modalBody || !htmlFrame || !scanPanel) return;
   const htmlEnabled = htmlBtn.dataset.enabled === "1";
-  let target = tab === "scan" ? "scan" : "summary";
+  let target = tab === "scan" || tab === "scan_html" ? tab : "summary";
   if (tab === "html" && htmlEnabled) target = "html";
   resultModalState.activeTab = target;
   summaryBtn.classList.toggle("active", target === "summary");
   htmlBtn.classList.toggle("active", target === "html");
   scanBtn.classList.toggle("active", target === "scan");
+  scanHtmlTopBtn.classList.toggle("active", target === "scan_html");
   modalBody.hidden = target !== "summary";
   htmlFrame.hidden = target !== "html";
-  scanPanel.hidden = target !== "scan";
+  scanPanel.hidden = !(target === "scan" || target === "scan_html");
 }
 
 async function jsonFetch(url, options = {}) {
@@ -360,15 +362,12 @@ function setSelectedScanProtocol(value) {
 }
 
 function setResultModalScanView(mode) {
-  const listBtn = document.getElementById("result-modal-scan-tab-list");
-  const htmlBtn = document.getElementById("result-modal-scan-tab-html");
+  const htmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
   const listWrap = document.getElementById("result-modal-scan-list-wrap");
   const htmlFrame = document.getElementById("result-modal-scan-html");
-  if (!listBtn || !htmlBtn || !listWrap || !htmlFrame) return;
-  const htmlEnabled = htmlBtn.dataset.enabled === "1";
+  if (!listWrap || !htmlFrame) return;
+  const htmlEnabled = String(htmlTopBtn?.dataset.enabled || "0") === "1";
   const target = mode === "html" && htmlEnabled ? "html" : "list";
-  listBtn.classList.toggle("active", target === "list");
-  htmlBtn.classList.toggle("active", target === "html");
   listWrap.hidden = target !== "list";
   htmlFrame.hidden = target !== "html";
 }
@@ -399,7 +398,7 @@ async function loadResultModalScanProtocol() {
 
 async function loadResultModalScanAddressList() {
   const out = document.getElementById("result-modal-scan-output");
-  const htmlBtn = document.getElementById("result-modal-scan-tab-html");
+  const htmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
   const htmlFrame = document.getElementById("result-modal-scan-html");
   const ip = String(resultModalState.ip || "").trim();
   if (!ip) {
@@ -478,7 +477,7 @@ function showResultModal(title, payload) {
   resultModalState.protocol = "";
   if (scanPrefetch?.ok && resultModalState.scanPayload) {
     const prefEntries = resultModalState.scanPayload.address_list || [];
-    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
     const scanHtmlFrame = document.getElementById("result-modal-scan-html");
     const scanHtmlPreview = buildCounterHtmlPreview(resultModalState.scanPayload);
     if (scanHtmlBtn) {
@@ -491,7 +490,7 @@ function showResultModal(title, payload) {
     renderResultModalScanRows(prefEntries);
     scanOut.textContent = jsonString(resultModalState.scanPayload);
   } else if (scanPrefetch && !scanPrefetch.ok) {
-    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
     const scanHtmlFrame = document.getElementById("result-modal-scan-html");
     if (scanHtmlBtn) {
       scanHtmlBtn.dataset.enabled = "0";
@@ -501,7 +500,7 @@ function showResultModal(title, payload) {
     renderResultModalScanRows([]);
     scanOut.textContent = String(scanPrefetch.error || "Scan preload failed");
   } else {
-    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
     const scanHtmlFrame = document.getElementById("result-modal-scan-html");
     if (scanHtmlBtn) {
       scanHtmlBtn.dataset.enabled = "0";
@@ -573,10 +572,9 @@ function bindResultModal() {
   const summaryBtn = document.getElementById("result-modal-tab-summary");
   const htmlBtn = document.getElementById("result-modal-tab-html");
   const scanTabBtn = document.getElementById("result-modal-tab-scan");
+  const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
   const scanReloadBtn = document.getElementById("result-modal-scan-reload");
   const scanBody = document.getElementById("result-modal-scan-body");
-  const scanSubListBtn = document.getElementById("result-modal-scan-tab-list");
-  const scanSubHtmlBtn = document.getElementById("result-modal-scan-tab-html");
   const protocolSaveBtn = document.getElementById("result-modal-scan-protocol-save");
   if (
     !modal ||
@@ -584,10 +582,9 @@ function bindResultModal() {
     !summaryBtn ||
     !htmlBtn ||
     !scanTabBtn ||
+    !scanHtmlTopBtn ||
     !scanReloadBtn ||
     !scanBody ||
-    !scanSubListBtn ||
-    !scanSubHtmlBtn ||
     !protocolSaveBtn ||
     closeBtn.dataset.bound
   ) {
@@ -619,11 +616,20 @@ function bindResultModal() {
       if (out) out.textContent = String(err?.message || err);
     }
   });
-  scanSubListBtn.addEventListener("click", () => {
-    setResultModalScanView("list");
-  });
-  scanSubHtmlBtn.addEventListener("click", () => {
+  scanHtmlTopBtn.addEventListener("click", async () => {
+    setResultModalView("scan_html");
     setResultModalScanView("html");
+    try {
+      const ip = String(resultModalState.ip || "").trim();
+      if (ip && resultModalState.scanLoadedIp !== ip) {
+        await loadResultModalScanAddressList();
+      } else {
+        await loadResultModalScanProtocol();
+      }
+    } catch (err) {
+      const out = document.getElementById("result-modal-scan-output");
+      if (out) out.textContent = String(err?.message || err);
+    }
   });
   scanReloadBtn.addEventListener("click", async () => {
     try {

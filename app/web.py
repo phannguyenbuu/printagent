@@ -853,6 +853,9 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             "password",
             "userid",
             "user name",
+            "privilege",
+            "do not have privileges",
+            "permission",
         )
         return any(token in text for token in tokens)
 
@@ -864,8 +867,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             candidates.append(
                 {"name": "provided", "user": user, "password": password, "force_override": True, "force_blank": False}
             )
-        candidates.append({"name": "config_default", "user": "", "password": "", "force_override": False, "force_blank": False})
         candidates.append({"name": "admin_admin", "user": "admin", "password": "admin", "force_override": True, "force_blank": False})
+        candidates.append({"name": "config_default", "user": "", "password": "", "force_override": False, "force_blank": False})
         candidates.append({"name": "blank_no_auth", "user": "", "password": "", "force_override": True, "force_blank": True})
         return candidates
 
@@ -912,7 +915,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     html_login = bool(debug.get("html_has_login_markers", False))
                     ajax_excerpt = str(debug.get("ajax_excerpt", "") or "").lower()
                     ajax_login = ("authform.cgi" in ajax_excerpt) or ("login.cgi" in ajax_excerpt)
-                    if html_login or ajax_login:
+                    raw_html = str(payload.get("html", "") or "").lower() if isinstance(payload, dict) else ""
+                    privilege_denied = (
+                        "do not have privileges to access here" in raw_html
+                        or "privilege settings may have been changed" in raw_html
+                        or "contact your administrator" in raw_html
+                    )
+                    if html_login or ajax_login or privilege_denied:
                         raise RuntimeError("address list authentication required (login page detected in payload)")
                     entry_count = len(payload.get("address_list", [])) if isinstance(payload, dict) else 0
                     LOGGER.info(
