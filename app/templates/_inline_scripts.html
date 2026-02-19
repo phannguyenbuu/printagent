@@ -372,6 +372,15 @@ function setResultModalScanView(mode) {
   htmlFrame.hidden = target !== "html";
 }
 
+function buildScanHtmlPreview(payload) {
+  const data = payload || {};
+  const preferred = String(data.easysecurity_html || "");
+  if (preferred.trim()) {
+    return buildCounterHtmlPreview({ ...data, html: preferred });
+  }
+  return buildCounterHtmlPreview(data);
+}
+
 async function loadResultModalScanProtocol() {
   const hint = document.getElementById("result-modal-scan-protocol-hint");
   const ip = String(resultModalState.ip || "").trim();
@@ -417,7 +426,7 @@ async function loadResultModalScanAddressList() {
   resultModalState.scanPayload = payload;
   resultModalState.scanLoadedIp = ip;
   renderResultModalScanRows(entries);
-  const scanHtmlPreview = buildCounterHtmlPreview(payload);
+  const scanHtmlPreview = buildScanHtmlPreview(payload);
   if (htmlBtn) {
     htmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
     htmlBtn.disabled = !scanHtmlPreview;

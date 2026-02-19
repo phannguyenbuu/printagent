@@ -870,6 +870,19 @@ class RicohService:
 
     def process_address_list(self, printer: Printer, trace_id: str = "") -> dict[str, Any]:
         session = self.create_http_client(printer)
+        easysecurity_html = ""
+        try:
+            easysecurity_html = self.authenticate_and_get(
+                session, printer, "/web/entry/en/websys/easySecurity/getEasySecurity.cgi"
+            )
+            self._append_address_debug(
+                f"address_list:easysecurity trace_id={trace_id or '-'} ip={printer.ip} easysecurity_len={len(easysecurity_html)} "
+                f"easysecurity_excerpt={repr(easysecurity_html[:300])}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_address_debug(
+                f"address_list:easysecurity_error trace_id={trace_id or '-'} ip={printer.ip} error={type(exc).__name__}:{str(exc)}"
+            )
         html = self.read_address_list_with_client(session, printer)
         entries = self.parse_address_list(html)
         has_table = '<tbody id="ReportListArea_TableBody">' in html
@@ -960,9 +973,12 @@ class RicohService:
             "printer_name": printer.name,
             "ip": printer.ip,
             "html": html,
+            "easysecurity_html": easysecurity_html,
             "address_list": [asdict(item) for item in entries],
             "debug": {
                 "trace_id": trace_id,
+                "easysecurity_len": len(easysecurity_html),
+                "easysecurity_excerpt": easysecurity_html[:300],
                 "html_len": len(html),
                 "html_entries": len(self.parse_address_list(html)),
                 "non_summary_html_entries": non_summary_html_entries,
