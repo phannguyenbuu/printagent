@@ -1153,7 +1153,6 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         folder = str(body.get("folder", "")).strip()
         user_code = str(body.get("user_code", "")).strip()
         fields = body.get("fields", {})
-        recreate_on_fail = bool(body.get("recreate_on_fail", False))
         if not ip:
             LOGGER.warning("Scan address modify rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
@@ -1181,55 +1180,36 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
             target.user = effective_user
             target.password = effective_password
-            try:
-                payload = ricoh_service.modify_address_user_wizard(
-                    target,
-                    registration_no=registration_no,
-                    name=name,
-                    email=email,
-                    folder=folder,
-                    user_code=user_code,
-                    fields=fields if isinstance(fields, dict) else None,
-                )
-                LOGGER.info(
-                    "Scan address modify success: trace_id=%s ip=%s registration_no=%s",
-                    trace_id,
-                    ip,
-                    registration_no,
-                )
-                return jsonify({"ok": True, "payload": payload, "trace_id": trace_id})
-            except Exception as exc:  # noqa: BLE001
-                if recreate_on_fail and name:
-                    LOGGER.warning(
-                        "Scan address modify failed, attempting recreate: trace_id=%s ip=%s registration_no=%s entry_id=%s error=%s",
-                        trace_id,
-                        ip,
-                        registration_no,
-                        entry_id,
-                        exc,
-                    )
-                    if entry_id:
-                        ricoh_service.delete_address_entries(target, [registration_no], entry_ids=[entry_id], verify=False)
-                    else:
-                        ricoh_service.delete_address_entries(target, [registration_no], verify=False)
-                    create_payload = ricoh_service.create_address_user_wizard(
-                        target,
-                        name=name,
-                        email=email,
-                        folder=folder,
-                        user_code=user_code,
-                        fields=fields if isinstance(fields, dict) else None,
-                    )
-                    return jsonify(
-                        {
-                            "ok": True,
-                            "payload": create_payload,
-                            "trace_id": trace_id,
-                            "recreated": True,
-                            "message": "Modify failed; entry recreated with new registration_no.",
-                        }
-                    )
-                raise
+            LOGGER.info(
+                "Scan address modify (recreate) request: trace_id=%s ip=%s registration_no=%s entry_id=%s",
+                trace_id,
+                ip,
+                registration_no,
+                entry_id,
+            )
+            if entry_id:
+                ricoh_service.delete_address_entries(target, [registration_no], entry_ids=[entry_id], verify=False)
+            else:
+                ricoh_service.delete_address_entries(target, [registration_no], verify=False)
+            create_payload = ricoh_service.create_address_user_wizard(
+                target,
+                name=name,
+                email=email,
+                folder=folder,
+                user_code=user_code,
+                fields=fields if isinstance(fields, dict) else None,
+                desired_registration_no=registration_no,
+                allow_auto_update=False,
+            )
+            return jsonify(
+                {
+                    "ok": True,
+                    "payload": create_payload,
+                    "trace_id": trace_id,
+                    "recreated": True,
+                    "message": "Entry recreated (requested to keep registration_no when possible).",
+                }
+            )
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Scan address modify failed: trace_id=%s ip=%s registration_no=%s", trace_id, ip, registration_no)
             return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500

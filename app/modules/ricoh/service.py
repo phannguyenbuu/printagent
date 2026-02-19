@@ -632,6 +632,8 @@ class RicohService:
         folder: str = "",
         user_code: str = "",
         fields: dict[str, Any] | None = None,
+        desired_registration_no: str | None = None,
+        allow_auto_update: bool = True,
     ) -> dict[str, Any]:
         session = self.create_http_client_auth_form_only(printer)
         set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
@@ -703,6 +705,12 @@ class RicohService:
                 )
 
                 next_index = "00001"
+                desired_reg = str(desired_registration_no or "").strip()
+                if desired_reg:
+                    if desired_reg.isdigit():
+                        next_index = desired_reg.zfill(5)
+                    else:
+                        desired_reg = ""
                 try:
                     raw_existing = self.get_address_list_ajax_with_client(session, printer)
                     existing_entries = self.parse_ajax_address_list(raw_existing)
@@ -726,7 +734,12 @@ class RicohService:
                 except Exception:  # noqa: BLE001
                     hint_seen = int(self._address_index_hint_by_ip.get(str(printer.ip or "").strip(), 0) or 0)
                     next_index = f"{hint_seen + 1:05d}" if hint_seen > 0 else "00001"
-                LOGGER.info("Address create wizard(index): ip=%s next_index=%s", printer.ip, next_index)
+                LOGGER.info(
+                    "Address create wizard(index): ip=%s next_index=%s desired_reg=%s",
+                    printer.ip,
+                    next_index,
+                    desired_reg or "-",
+                )
 
                 base_form: list[tuple[str, str]] = [
                     ("mode", "ADDUSER"),
@@ -892,7 +905,7 @@ class RicohService:
                 auto_updated = False
                 auto_update_error = ""
                 update_reg = str(created.registration_no or "").strip() if created else str(next_index or "").strip()
-                if update_reg:
+                if update_reg and allow_auto_update:
                     if not created:
                         created = AddressEntry(
                             type="User",
