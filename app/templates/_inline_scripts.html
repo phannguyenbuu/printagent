@@ -374,11 +374,19 @@ function setResultModalScanView(mode) {
 
 function buildScanHtmlPreview(payload) {
   const data = payload || {};
-  const preferred = String(data.easysecurity_html || "");
-  if (preferred.trim()) {
-    return buildCounterHtmlPreview({ ...data, html: preferred });
+  const rawHtml = String(data.easysecurity_html || data.html || "");
+  if (!rawHtml.trim()) return "";
+  const ip = String(data.ip || "").trim();
+  const baseTag = ip ? `<base href="http://${ip}/">` : "";
+  let prepared = rawHtml;
+  if (baseTag) {
+    if (/<head[^>]*>/i.test(prepared)) {
+      prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+    } else {
+      prepared = `${baseTag}${prepared}`;
+    }
   }
-  return buildCounterHtmlPreview(data);
+  return prepared;
 }
 
 async function loadResultModalScanProtocol() {
