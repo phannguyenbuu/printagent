@@ -684,8 +684,8 @@ function bindResultModal() {
   const createTabBtn = document.getElementById("result-modal-tab-create-address");
   const scanReloadBtn = document.getElementById("result-modal-scan-reload");
   const scanBody = document.getElementById("result-modal-scan-body");
-  const protocolSaveBtn = document.getElementById("result-modal-scan-protocol-save");
   const createSubmitBtn = document.getElementById("result-modal-create-submit");
+  const protocolInputs = document.querySelectorAll('input[name="result-modal-scan-protocol"]');
   if (
     !modal ||
     !closeBtn ||
@@ -696,7 +696,6 @@ function bindResultModal() {
     !createTabBtn ||
     !scanReloadBtn ||
     !scanBody ||
-    !protocolSaveBtn ||
     !createSubmitBtn ||
     closeBtn.dataset.bound
   ) {
@@ -866,7 +865,7 @@ function bindResultModal() {
       if (out) out.textContent = String(err?.message || err);
     }
   });
-  protocolSaveBtn.addEventListener("click", async () => {
+  const saveProtocol = async () => {
     const out = document.getElementById("result-modal-scan-output");
     const ip = String(resultModalState.ip || "").trim();
     const protocol = getSelectedScanProtocol();
@@ -890,6 +889,13 @@ function bindResultModal() {
     } catch (err) {
       if (out) out.textContent = String(err?.message || err);
     }
+  };
+  protocolInputs.forEach((node) => {
+    if (node.dataset.bound) return;
+    node.dataset.bound = "1";
+    node.addEventListener("change", () => {
+      saveProtocol().catch(() => {});
+    });
   });
   createSubmitBtn.addEventListener("click", async () => {
     const out = document.getElementById("result-modal-create-output");
