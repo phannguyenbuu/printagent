@@ -839,39 +839,6 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             target.password = config.get_string("test.password")
         return target
 
-    def _is_auth_related_error(exc: Exception) -> bool:
-        text = str(exc or "").strip().lower()
-        tokens = (
-            "login failed",
-            "login.cgi",
-            "authform",
-            "authentication",
-            "unauthorized",
-            "forbidden",
-            "401",
-            "403",
-            "password",
-            "userid",
-            "user name",
-            "privilege",
-            "do not have privileges",
-            "permission",
-        )
-        return any(token in text for token in tokens)
-
-    def _scan_auth_candidates(input_user: str, input_password: str) -> list[dict[str, Any]]:
-        user = str(input_user or "").strip()
-        password = str(input_password or "").strip()
-        candidates: list[dict[str, Any]] = []
-        if user or password:
-            candidates.append(
-                {"name": "provided", "user": user, "password": password, "force_override": True, "force_blank": False}
-            )
-        candidates.append({"name": "admin_admin", "user": "admin", "password": "admin", "force_override": True, "force_blank": False})
-        candidates.append({"name": "config_default", "user": "", "password": "", "force_override": False, "force_blank": False})
-        candidates.append({"name": "blank_no_auth", "user": "", "password": "", "force_override": True, "force_blank": True})
-        return candidates
-
     @app.get("/api/scan/address-list")
     def api_scan_address_list() -> Any:
         ip = str(request.args.get("ip", "")).strip()
@@ -889,90 +856,33 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             bool(password),
             request.remote_addr or "-",
         )
-        attempts: list[dict[str, Any]] = []
-        rounds = 3
-        candidates = _scan_auth_candidates(user, password)
-        for round_idx in range(rounds):
-            for cand in candidates:
-                try:
-                    target = _resolve_target_printer(ip=ip, user=cand["user"], password=cand["password"])
-                    if cand.get("force_override"):
-                        target.user = "" if cand.get("force_blank") else str(cand.get("user", "")).strip()
-                        target.password = "" if cand.get("force_blank") else str(cand.get("password", "")).strip()
-                    LOGGER.info(
-                        "Scan address list attempt: trace_id=%s round=%s mode=%s ip=%s effective_user=%s has_password=%s",
-                        trace_id,
-                        round_idx + 1,
-                        cand.get("name", "unknown"),
-                        target.ip,
-                        bool(str(target.user or "").strip()),
-                        bool(str(target.password or "").strip()),
-                    )
-                    payload = ricoh_service.process_address_list(target, trace_id=trace_id)
-                    # Guardrail: some devices return auth/login HTML as a "successful" payload.
-                    # Treat that as auth failure so credential fallback can continue.
-                    debug = payload.get("debug", {}) if isinstance(payload, dict) else {}
-                    html_login = bool(debug.get("html_has_login_markers", False))
-                    ajax_excerpt = str(debug.get("ajax_excerpt", "") or "").lower()
-                    ajax_login = ("authform.cgi" in ajax_excerpt) or ("login.cgi" in ajax_excerpt)
-                    raw_html = str(payload.get("html", "") or "").lower() if isinstance(payload, dict) else ""
-                    privilege_denied = (
-                        "do not have privileges to access here" in raw_html
-                        or "privilege settings may have been changed" in raw_html
-                        or "contact your administrator" in raw_html
-                    )
-                    if html_login or ajax_login or privilege_denied:
-                        raise RuntimeError("address list authentication required (login page detected in payload)")
-                    entry_count = len(payload.get("address_list", [])) if isinstance(payload, dict) else 0
-                    LOGGER.info(
-                        "Scan address list success: trace_id=%s ip=%s entries=%s mode=%s round=%s",
-                        trace_id,
-                        target.ip,
-                        entry_count,
-                        cand.get("name", "unknown"),
-                        round_idx + 1,
-                    )
-                    if isinstance(payload, dict):
-                        payload.setdefault("debug", {})
-                        if isinstance(payload["debug"], dict):
-                            payload["debug"]["trace_id"] = trace_id
-                            payload["debug"]["auth_mode"] = cand.get("name", "unknown")
-                            payload["debug"]["auth_round"] = round_idx + 1
-                    return jsonify({"ok": True, "payload": payload})
-                except Exception as exc:  # noqa: BLE001
-                    attempts.append(
-                        {
-                            "round": round_idx + 1,
-                            "mode": cand.get("name", "unknown"),
-                            "error": str(exc),
-                            "auth_related": _is_auth_related_error(exc),
-                        }
-                    )
-                    LOGGER.warning(
-                        "Scan address list attempt failed: trace_id=%s round=%s mode=%s ip=%s auth_related=%s error=%s",
-                        trace_id,
-                        round_idx + 1,
-                        cand.get("name", "unknown"),
-                        ip,
-                        _is_auth_related_error(exc),
-                        exc,
-                    )
-                    if not _is_auth_related_error(exc):
-                        LOGGER.exception("Scan address list failed (non-auth): trace_id=%s ip=%s", trace_id, ip)
-                        return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id, "attempts": attempts}), 500
-        last_error = attempts[-1]["error"] if attempts else "Unknown error"
-        LOGGER.error("Scan address list failed after retries: trace_id=%s ip=%s attempts=%s", trace_id, ip, len(attempts))
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": last_error,
-                    "trace_id": trace_id,
-                    "attempts": attempts,
-                }
-            ),
-            500,
-        )
+        try:
+            # Force login-first flow for address list: if caller does not provide credentials,
+            # default to admin/admin before fetching address list.
+            effective_user = user or "admin"
+            effective_password = password or "admin"
+            target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+            target.user = effective_user
+            target.password = effective_password
+            LOGGER.info(
+                "Scan address list single attempt: trace_id=%s ip=%s printer_name=%s effective_user=%s has_password=%s",
+                trace_id,
+                target.ip,
+                target.name,
+                bool(str(target.user or "").strip()),
+                bool(str(target.password or "").strip()),
+            )
+            payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+            if isinstance(payload, dict):
+                payload.setdefault("debug", {})
+                if isinstance(payload["debug"], dict):
+                    payload["debug"]["trace_id"] = trace_id
+                    payload["debug"]["auth_mode"] = "single_attempt"
+                    payload["debug"]["auth_round"] = 1
+            return jsonify({"ok": True, "payload": payload})
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Scan address list failed: trace_id=%s ip=%s", trace_id, ip)
+            return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
     @app.post("/api/scan/address-create")
     def api_scan_address_create() -> Any:
