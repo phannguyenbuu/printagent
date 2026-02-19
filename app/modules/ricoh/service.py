@@ -629,7 +629,7 @@ class RicohService:
         user_code: str = "",
         fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        session = self.create_http_client(printer)
+        session = self.create_http_client_auth_form_only(printer)
         set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
         # Warm up context from address list first; many Ricoh models require this before wizard page.
         warmup_targets = [
@@ -672,7 +672,92 @@ class RicohService:
                 errors.append(f"{target}:{type(exc).__name__}:{exc}")
                 continue
         if not html:
-            raise RuntimeError("cannot open address create wizard; " + " | ".join(errors[-4:]))
+            # Fallback for models that block adrsGetUserWizard but still accept adrsSetUserWizard.
+            list_candidates = [
+                "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
+                "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL",
+            ]
+            list_html = ""
+            list_url = ""
+            list_errors: list[str] = []
+            for target in list_candidates:
+                try:
+                    candidate = self.authenticate_and_get(session, printer, target)
+                    if not candidate.strip():
+                        list_errors.append(f"{target}:empty")
+                        continue
+                    if "login.cgi" in candidate or "authForm.cgi" in candidate:
+                        list_errors.append(f"{target}:login_page")
+                        continue
+                    list_html = candidate
+                    list_url = target
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    list_errors.append(f"{target}:{type(exc).__name__}:{exc}")
+                    continue
+            if not list_html:
+                raise RuntimeError(
+                    "cannot open address create wizard; "
+                    + " | ".join(errors[-4:])
+                    + " || list_fallback_failed: "
+                    + " | ".join(list_errors[-2:])
+                )
+
+            list_defaults = self._extract_hidden_inputs(list_html)
+            token = list_defaults.get("wimToken", "")
+            if not token:
+                token = self._extract_wim_token(list_html)
+
+            direct_form: dict[str, str] = {
+                "wimToken": token,
+                "entryTypeIn": "1",
+                "modeIn": "ADD",
+                "nameIn": str(name or "").strip(),
+                "emailAddressIn": str(email or "").strip(),
+                "folderPathIn": str(folder or "").strip(),
+                "userCodeIn": str(user_code or "").strip(),
+                "open": "",
+            }
+            if fields and isinstance(fields, dict):
+                for k, v in fields.items():
+                    key = str(k or "").strip()
+                    if not key:
+                        continue
+                    direct_form[key] = "" if v is None else str(v)
+
+            direct_resp = session.post(
+                f"http://{printer.ip}{set_url}",
+                data=direct_form,
+                headers={"Referer": f"http://{printer.ip}{list_url}"},
+                timeout=15,
+            )
+            direct_resp.raise_for_status()
+            direct_text = direct_resp.text
+            if "login.cgi" in direct_text or "authForm.cgi" in direct_text:
+                raise RuntimeError("direct create fallback redirected to login page")
+
+            verify_raw = ""
+            verify_count = 0
+            try:
+                verify_raw = self.get_address_list_ajax_with_client(session, printer)
+                parsed = self.parse_ajax_address_list(verify_raw)
+                verify_count = len(parsed)
+            except Exception:  # noqa: BLE001
+                verify_raw = ""
+                verify_count = 0
+
+            return {
+                "printer_name": printer.name,
+                "ip": printer.ip,
+                "ok": True,
+                "endpoint": set_url,
+                "name": str(name or "").strip(),
+                "http_status": direct_resp.status_code,
+                "response_excerpt": direct_resp.text[:600],
+                "verify_count": verify_count,
+                "fallback_mode": "direct_set_from_list",
+                "timestamp": self._timestamp(),
+            }
 
         defaults = self._extract_hidden_inputs(html)
         token = defaults.get("wimToken", "")

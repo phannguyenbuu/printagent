@@ -569,6 +569,7 @@ function showResultModal(title, payload) {
   if (createEmail) createEmail.value = "";
   if (createFolder) createFolder.value = "";
   if (createUserCode) createUserCode.value = "";
+  setCreateAddressLoading(false);
   scanOut.textContent = "Open Scan tab to load Address List.";
   renderResultModalScanRows([]);
   setSelectedScanProtocol("SMBv2/3");
@@ -634,6 +635,24 @@ function showResultModalError(title, message) {
   const modal = document.getElementById("result-modal");
   if (!modal) return;
   showResultModal(title, { ok: false, error: String(message || "Unknown error") });
+}
+
+function setCreateAddressLoading(loading) {
+  const submitBtn = document.getElementById("result-modal-create-submit");
+  const fields = [
+    document.getElementById("result-modal-create-name"),
+    document.getElementById("result-modal-create-email"),
+    document.getElementById("result-modal-create-folder"),
+    document.getElementById("result-modal-create-user-code"),
+  ];
+  if (submitBtn) {
+    submitBtn.disabled = Boolean(loading);
+    submitBtn.textContent = loading ? "Creating..." : "Create Address";
+  }
+  fields.forEach((node) => {
+    if (!node) return;
+    node.disabled = Boolean(loading);
+  });
 }
 
 function bindResultModal() {
@@ -853,6 +872,8 @@ function bindResultModal() {
       if (out) out.textContent = "Missing name";
       return;
     }
+    setCreateAddressLoading(true);
+    if (out) out.textContent = `Creating address "${name}" on ${ip}...`;
     try {
       const data = await jsonFetch("/api/scan/address-create", {
         method: "POST",
@@ -870,6 +891,8 @@ function bindResultModal() {
       await loadResultModalScanAddressList();
     } catch (err) {
       if (out) out.textContent = String(err?.message || err);
+    } finally {
+      setCreateAddressLoading(false);
     }
   });
   modal.addEventListener("click", (event) => {
