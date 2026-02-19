@@ -27,6 +27,7 @@ HISTORY_FILE = Path("storage/data/live_overview_history.csv")
 COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
 STATUS_LOG_FILE = Path("storage/data/log_status.csv")
 DEVICES_CACHE_FILE = Path("storage/data/devices_cache.json")
+SCAN_PROTOCOL_PREFS_FILE = Path("storage/data/scan_protocol_prefs.json")
 
 
 def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
@@ -111,6 +112,54 @@ def _normalize_mac(value: str) -> str:
     if text == "00:00:00:00:00:00":
         return ""
     return text
+
+
+def _load_scan_protocol_prefs() -> dict[str, str]:
+    try:
+        if not SCAN_PROTOCOL_PREFS_FILE.exists():
+            return {}
+        data = json.loads(SCAN_PROTOCOL_PREFS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for k, v in data.items():
+            ip = _normalize_ipv4(str(k or "").strip())
+            protocol = str(v or "").strip()
+            if ip and protocol:
+                normalized[ip] = protocol
+        return normalized
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_scan_protocol_prefs(prefs: dict[str, str]) -> None:
+    SCAN_PROTOCOL_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SCAN_PROTOCOL_PREFS_FILE.write_text(json.dumps(prefs, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _normalize_scan_protocol(value: str) -> str:
+    text = str(value or "").strip().upper().replace(" ", "")
+    if text in {"SMBV1", "SMB1", "SMBV1.0"}:
+        return "SMBv1"
+    if text in {"SMBV2/3", "SMBV2", "SMB2", "SMBV3", "SMB3"}:
+        return "SMBv2/3"
+    if text == "FTP":
+        return "FTP"
+    return ""
+
+
+def _detect_scan_protocol_from_html(html: str) -> str:
+    text = str(html or "").lower()
+    has_smbv1 = any(token in text for token in ["smbv1", "smb v1", "smb1", "nt1"])
+    has_smbv23 = any(token in text for token in ["smbv2", "smb v2", "smb2", "smbv3", "smb v3", "smb3", "cifs"])
+    has_ftp = "ftp" in text
+    if has_smbv23:
+        return "SMBv2/3"
+    if has_smbv1:
+        return "SMBv1"
+    if has_ftp:
+        return "FTP"
+    return ""
 
 
 def _load_neighbor_mac_map() -> dict[str, str]:
@@ -913,6 +962,49 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             return jsonify({"ok": True, "payload": payload})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.get("/api/scan/protocol")
+    def api_scan_protocol_get() -> Any:
+        ip = _normalize_ipv4(str(request.args.get("ip", "")).strip())
+        user = str(request.args.get("user", "")).strip()
+        password = str(request.args.get("password", "")).strip()
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        prefs = _load_scan_protocol_prefs()
+        saved = _normalize_scan_protocol(prefs.get(ip, ""))
+        detected = ""
+        try:
+            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            html = ricoh_service.read_device_info(target)
+            detected = _normalize_scan_protocol(_detect_scan_protocol_from_html(html))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Scan protocol detect failed: ip=%s error=%s", ip, exc)
+        protocol = detected or saved or "SMBv2/3"
+        return jsonify(
+            {
+                "ok": True,
+                "ip": ip,
+                "protocol": protocol,
+                "detected": detected,
+                "saved": saved,
+                "options": ["SMBv1", "SMBv2/3", "FTP"],
+            }
+        )
+
+    @app.post("/api/scan/protocol")
+    def api_scan_protocol_set() -> Any:
+        body = request.get_json(silent=True) or {}
+        ip = _normalize_ipv4(str(body.get("ip", "")).strip())
+        protocol = _normalize_scan_protocol(str(body.get("protocol", "")).strip())
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        if not protocol:
+            return jsonify({"ok": False, "error": "Invalid protocol"}), 400
+        prefs = _load_scan_protocol_prefs()
+        prefs[ip] = protocol
+        _save_scan_protocol_prefs(prefs)
+        LOGGER.info("Scan protocol saved: ip=%s protocol=%s", ip, protocol)
+        return jsonify({"ok": True, "ip": ip, "protocol": protocol})
 
     @app.get("/api/overview")
     def api_overview() -> Any:
