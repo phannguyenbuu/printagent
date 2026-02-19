@@ -471,45 +471,18 @@ function showResultModal(title, payload) {
   resultModalState.counterPayload = payload || {};
   resultModalState.ip = String(payload?.ip || "").trim();
   resultModalState.printerName = String(payload?.printer_name || "").trim();
-  const scanPrefetch = payload?.scan_prefetch || null;
-  resultModalState.scanPayload = scanPrefetch?.ok ? (scanPrefetch.payload || null) : null;
-  resultModalState.scanLoadedIp = scanPrefetch ? resultModalState.ip : "";
+  resultModalState.scanPayload = null;
+  resultModalState.scanLoadedIp = "";
   resultModalState.protocol = "";
-  if (scanPrefetch?.ok && resultModalState.scanPayload) {
-    const prefEntries = resultModalState.scanPayload.address_list || [];
-    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
-    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
-    const scanHtmlPreview = buildCounterHtmlPreview(resultModalState.scanPayload);
-    if (scanHtmlBtn) {
-      scanHtmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
-      scanHtmlBtn.disabled = !scanHtmlPreview;
-    }
-    if (scanHtmlFrame) {
-      scanHtmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
-    }
-    renderResultModalScanRows(prefEntries);
-    scanOut.textContent = jsonString(resultModalState.scanPayload);
-  } else if (scanPrefetch && !scanPrefetch.ok) {
-    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
-    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
-    if (scanHtmlBtn) {
-      scanHtmlBtn.dataset.enabled = "0";
-      scanHtmlBtn.disabled = true;
-    }
-    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
-    renderResultModalScanRows([]);
-    scanOut.textContent = String(scanPrefetch.error || "Scan preload failed");
-  } else {
-    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
-    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
-    if (scanHtmlBtn) {
-      scanHtmlBtn.dataset.enabled = "0";
-      scanHtmlBtn.disabled = true;
-    }
-    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
-    scanOut.textContent = "Open Scan tab to load Address List.";
-    renderResultModalScanRows([]);
+  const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
+  const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+  if (scanHtmlBtn) {
+    scanHtmlBtn.dataset.enabled = "0";
+    scanHtmlBtn.disabled = true;
   }
+  if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
+  scanOut.textContent = "Open Scan tab to load Address List.";
+  renderResultModalScanRows([]);
   setSelectedScanProtocol("SMBv2/3");
   setResultModalScanView("list");
 
@@ -819,17 +792,13 @@ async function loadDevices(forceRefresh = false) {
       resultModalState.ip = selectedIp;
       resultModalState.printerName = printerName;
       resultModalState.scanLoadedIp = "";
-      showResultModalLoading(baseTitle, "Loading counter, status, and scan...");
-      const [counterSettled, statusSettled, scanSettled] = await Promise.allSettled([
+      showResultModalLoading(baseTitle, "Loading counter and status...");
+      const [counterSettled, statusSettled] = await Promise.allSettled([
         runAction(selectedIp, "counter", { silent: true }),
         runAction(selectedIp, "status", { silent: true }),
-        fetchScanAddressListForIp(selectedIp, true),
       ]);
       const counterResult = counterSettled.status === "fulfilled" ? counterSettled.value : { ok: false, error: String(counterSettled.reason || "counter failed") };
       const statusResult = statusSettled.status === "fulfilled" ? statusSettled.value : { ok: false, error: String(statusSettled.reason || "status failed") };
-      const scanPrefetch = scanSettled.status === "fulfilled"
-        ? { ok: true, payload: scanSettled.value }
-        : { ok: false, error: String(scanSettled.reason?.message || scanSettled.reason || "scan preload failed") };
       const modal = document.getElementById("result-modal");
       if (!modal || modal.hidden) return;
       if (!counterResult.ok && !statusResult.ok) {
@@ -848,7 +817,6 @@ async function loadDevices(forceRefresh = false) {
         counter_data: counterPayload.counter_data || {},
         status_data: statusPayload.status_data || {},
         html: counterPayload.html || "",
-        scan_prefetch: scanPrefetch,
       };
       const timestamp = dataView.timestamp || "-";
       const finalTitle = `${baseTitle} [${timestamp}]`;

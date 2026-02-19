@@ -856,6 +856,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             bool(password),
             request.remote_addr or "-",
         )
+        def _looks_like_login_endpoint_500(exc: Exception) -> bool:
+            text = str(exc or "").lower()
+            return (
+                "500 server error" in text
+                and "login.cgi" in text
+                and "websys/webarch" in text
+            )
         try:
             # Force login-first flow for address list: if caller does not provide credentials,
             # default to admin/admin before fetching address list.
@@ -881,6 +888,41 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     payload["debug"]["auth_round"] = 1
             return jsonify({"ok": True, "payload": payload})
         except Exception as exc:  # noqa: BLE001
+            if _looks_like_login_endpoint_500(exc):
+                LOGGER.warning(
+                    "Scan address list login endpoint 500, fallback to no-auth: trace_id=%s ip=%s",
+                    trace_id,
+                    ip,
+                )
+                try:
+                    target = _resolve_target_printer(ip=ip, user="", password="")
+                    target.user = ""
+                    target.password = ""
+                    payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+                    if isinstance(payload, dict):
+                        payload.setdefault("debug", {})
+                        if isinstance(payload["debug"], dict):
+                            payload["debug"]["trace_id"] = trace_id
+                            payload["debug"]["auth_mode"] = "fallback_no_auth_after_login_500"
+                            payload["debug"]["auth_round"] = 2
+                    return jsonify({"ok": True, "payload": payload})
+                except Exception as fallback_exc:  # noqa: BLE001
+                    LOGGER.exception(
+                        "Scan address list fallback no-auth failed: trace_id=%s ip=%s",
+                        trace_id,
+                        ip,
+                    )
+                    return (
+                        jsonify(
+                            {
+                                "ok": False,
+                                "error": str(fallback_exc),
+                                "trace_id": trace_id,
+                                "primary_error": str(exc),
+                            }
+                        ),
+                        500,
+                    )
             LOGGER.exception("Scan address list failed: trace_id=%s ip=%s", trace_id, ip)
             return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
