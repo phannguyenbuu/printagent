@@ -372,7 +372,7 @@ function renderResultModalScanRows(entries) {
       return `
         <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}" data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td class="scan-actions">
-            <button class="btn action scan-row-apply" type="button" title="Apply">&#10003;</button>
+            <button class="btn action scan-row-apply" type="button" title="Apply" disabled>&#10003;</button>
             <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
           </td>
           <td><input class="scan-inline-input" data-field="name" value="${String(name).replaceAll('"', "&quot;")}" /></td>
@@ -926,6 +926,13 @@ function bindResultModal() {
     node.addEventListener("change", () => {
       saveProtocol().catch(() => {});
     });
+  });
+  scanBody.addEventListener("input", (event) => {
+    const row = event.target.closest("tr[data-registration-no]");
+    if (!row) return;
+    const applyBtn = row.querySelector(".scan-row-apply");
+    if (!applyBtn) return;
+    applyBtn.disabled = false;
   });
   createSubmitBtn.addEventListener("click", async () => {
     const out = document.getElementById("result-modal-create-output");
