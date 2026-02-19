@@ -896,14 +896,19 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                         for source in [entries[1:] if len(entries) > 1 else [], ajax_entries]:
                             for item in source:
                                 reg = str(getattr(item, "registration_no", "") or "").strip()
-                                if not reg or reg == "-":
-                                    reg = f"name::{str(getattr(item, 'name', '') or '').strip().lower()}"
-                                if reg not in merged_by_reg:
-                                    merged_by_reg[reg] = item
-                                    merged_order.append(reg)
+                                name_key = str(getattr(item, "name", "") or "").strip().lower()
+                                if reg and reg != "-":
+                                    # Some devices may return duplicated registration_no for newly-created rows.
+                                    # Keep per (registration_no, name) so we do not collapse distinct entries.
+                                    key = f"reg::{reg}::name::{name_key}"
                                 else:
-                                    if _score(item) >= _score(merged_by_reg[reg]):
-                                        merged_by_reg[reg] = item
+                                    key = f"name::{name_key}"
+                                if key not in merged_by_reg:
+                                    merged_by_reg[key] = item
+                                    merged_order.append(key)
+                                else:
+                                    if _score(item) >= _score(merged_by_reg[key]):
+                                        merged_by_reg[key] = item
 
                         merged_entries = [merged_by_reg[key] for key in merged_order]
                         entries = ([summary] if summary else []) + merged_entries
