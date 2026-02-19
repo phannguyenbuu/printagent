@@ -722,17 +722,21 @@ class RicohService:
                     next_index = "00001"
                 LOGGER.info("Address create wizard(index): ip=%s next_index=%s", printer.ip, next_index)
 
+                base_form: list[tuple[str, str]] = [
+                    ("mode", "ADDUSER"),
+                    ("step", "BASE"),
+                    ("wimToken", list_token_ctx),
+                    ("entryIndexIn", next_index),
+                    ("entryNameIn", str(name or "").strip()),
+                    ("entryDisplayNameIn", str(name or "").strip()),
+                    ("entryTagInfoIn", "1"),
+                    ("entryTagInfoIn", "1"),
+                    ("entryTagInfoIn", "1"),
+                    ("entryTagInfoIn", "1"),
+                ]
                 base_resp = session.post(
                     set_full_url,
-                    data={
-                        "mode": "ADDUSER",
-                        "step": "BASE",
-                        "wimToken": list_token_ctx,
-                        "entryIndexIn": next_index,
-                        "entryNameIn": str(name or "").strip(),
-                        "entryDisplayNameIn": str(name or "").strip(),
-                        "entryTagInfoIn": "1",
-                    },
+                    data=base_form,
                     headers={"Referer": wizard_referer},
                     timeout=15,
                 )

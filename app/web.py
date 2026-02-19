@@ -876,8 +876,37 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 try:
                     ajax_raw = ricoh_service.get_address_list_ajax_with_client(session, target)
                     ajax_entries = ricoh_service.parse_ajax_address_list(ajax_raw)
-                    if ajax_entries and entries:
-                        entries = [entries[0], *ajax_entries]
+                    if ajax_entries:
+                        summary = entries[0] if entries else None
+                        merged_by_reg: dict[str, Any] = {}
+                        merged_order: list[str] = []
+
+                        def _score(item: Any) -> int:
+                            score = 0
+                            if str(getattr(item, "name", "") or "").strip() not in {"", "-", "---"}:
+                                score += 1
+                            if str(getattr(item, "email_address", "") or "").strip() not in {"", "-", "---"}:
+                                score += 1
+                            if str(getattr(item, "folder", "") or "").strip() not in {"", "-", "---"}:
+                                score += 1
+                            if str(getattr(item, "user_code", "") or "").strip() not in {"", "-", "---"}:
+                                score += 1
+                            return score
+
+                        for source in [entries[1:] if len(entries) > 1 else [], ajax_entries]:
+                            for item in source:
+                                reg = str(getattr(item, "registration_no", "") or "").strip()
+                                if not reg or reg == "-":
+                                    reg = f"name::{str(getattr(item, 'name', '') or '').strip().lower()}"
+                                if reg not in merged_by_reg:
+                                    merged_by_reg[reg] = item
+                                    merged_order.append(reg)
+                                else:
+                                    if _score(item) >= _score(merged_by_reg[reg]):
+                                        merged_by_reg[reg] = item
+
+                        merged_entries = [merged_by_reg[key] for key in merged_order]
+                        entries = ([summary] if summary else []) + merged_entries
                 except Exception:  # noqa: BLE001
                     ajax_raw = ""
                     ajax_entries = []
