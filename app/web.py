@@ -986,6 +986,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.post("/api/scan/address-create")
     def api_scan_address_create() -> Any:
         body = request.get_json(silent=True) or {}
+        trace_id = f"scan-create-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         ip = str(body.get("ip", "")).strip()
         user = str(body.get("user", "")).strip()
         password = str(body.get("password", "")).strip()
@@ -995,13 +996,31 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         user_code = str(body.get("user_code", "")).strip()
         fields = body.get("fields", {})
         if not ip:
+            LOGGER.warning("Scan address create rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         if not name:
+            LOGGER.warning("Scan address create rejected: trace_id=%s ip=%s reason=missing_name", trace_id, ip)
             return jsonify({"ok": False, "error": "Missing name"}), 400
         if fields is not None and not isinstance(fields, dict):
+            LOGGER.warning("Scan address create rejected: trace_id=%s ip=%s reason=invalid_fields_type", trace_id, ip)
             return jsonify({"ok": False, "error": "fields must be object"}), 400
         try:
-            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            effective_user = user or "admin"
+            effective_password = password or "admin"
+            LOGGER.info(
+                "Scan address create request: trace_id=%s ip=%s name=%s email_set=%s folder_set=%s user_code_set=%s fields_count=%s auth_mode=%s",
+                trace_id,
+                ip,
+                name,
+                bool(email),
+                bool(folder),
+                bool(user_code),
+                len(fields) if isinstance(fields, dict) else 0,
+                "default_admin" if not user and not password else "provided_or_partial",
+            )
+            target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+            target.user = effective_user
+            target.password = effective_password
             merged_fields: dict[str, Any] = {"entryTypeIn": "1"}
             if isinstance(fields, dict):
                 merged_fields.update(fields)
@@ -1013,31 +1032,61 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 user_code=user_code,
                 fields=merged_fields,
             )
-            return jsonify({"ok": True, "payload": payload})
+            LOGGER.info(
+                "Scan address create success: trace_id=%s ip=%s http_status=%s verify_count=%s",
+                trace_id,
+                ip,
+                payload.get("http_status") if isinstance(payload, dict) else "-",
+                payload.get("verify_count") if isinstance(payload, dict) else "-",
+            )
+            return jsonify({"ok": True, "payload": payload, "trace_id": trace_id})
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            LOGGER.exception("Scan address create failed: trace_id=%s ip=%s", trace_id, ip)
+            return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
     @app.post("/api/scan/address-delete")
     def api_scan_address_delete() -> Any:
         body = request.get_json(silent=True) or {}
+        trace_id = f"scan-delete-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         ip = str(body.get("ip", "")).strip()
         user = str(body.get("user", "")).strip()
         password = str(body.get("password", "")).strip()
         registration_no = str(body.get("registration_no", "")).strip()
         if not ip:
+            LOGGER.warning("Scan address delete rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         if not registration_no:
+            LOGGER.warning("Scan address delete rejected: trace_id=%s ip=%s reason=missing_registration_no", trace_id, ip)
             return jsonify({"ok": False, "error": "Missing registration_no"}), 400
         try:
-            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            effective_user = user or "admin"
+            effective_password = password or "admin"
+            LOGGER.info(
+                "Scan address delete request: trace_id=%s ip=%s registration_no=%s auth_mode=%s",
+                trace_id,
+                ip,
+                registration_no,
+                "default_admin" if not user and not password else "provided_or_partial",
+            )
+            target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+            target.user = effective_user
+            target.password = effective_password
             payload = ricoh_service.delete_address_entries(target, [registration_no])
-            return jsonify({"ok": True, "payload": payload})
+            LOGGER.info(
+                "Scan address delete success: trace_id=%s ip=%s deleted_count=%s",
+                trace_id,
+                ip,
+                payload.get("deleted_count") if isinstance(payload, dict) else "-",
+            )
+            return jsonify({"ok": True, "payload": payload, "trace_id": trace_id})
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            LOGGER.exception("Scan address delete failed: trace_id=%s ip=%s registration_no=%s", trace_id, ip, registration_no)
+            return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
     @app.post("/api/scan/address-modify")
     def api_scan_address_modify() -> Any:
         body = request.get_json(silent=True) or {}
+        trace_id = f"scan-modify-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         ip = str(body.get("ip", "")).strip()
         user = str(body.get("user", "")).strip()
         password = str(body.get("password", "")).strip()
@@ -1048,13 +1097,32 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         user_code = str(body.get("user_code", "")).strip()
         fields = body.get("fields", {})
         if not ip:
+            LOGGER.warning("Scan address modify rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         if not registration_no:
+            LOGGER.warning("Scan address modify rejected: trace_id=%s ip=%s reason=missing_registration_no", trace_id, ip)
             return jsonify({"ok": False, "error": "Missing registration_no"}), 400
         if fields is not None and not isinstance(fields, dict):
+            LOGGER.warning("Scan address modify rejected: trace_id=%s ip=%s reason=invalid_fields_type", trace_id, ip)
             return jsonify({"ok": False, "error": "fields must be object"}), 400
         try:
-            target = _resolve_target_printer(ip=ip, user=user, password=password)
+            effective_user = user or "admin"
+            effective_password = password or "admin"
+            LOGGER.info(
+                "Scan address modify request: trace_id=%s ip=%s registration_no=%s name_set=%s email_set=%s folder_set=%s user_code_set=%s fields_count=%s auth_mode=%s",
+                trace_id,
+                ip,
+                registration_no,
+                bool(name),
+                bool(email),
+                bool(folder),
+                bool(user_code),
+                len(fields) if isinstance(fields, dict) else 0,
+                "default_admin" if not user and not password else "provided_or_partial",
+            )
+            target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+            target.user = effective_user
+            target.password = effective_password
             payload = ricoh_service.modify_address_user_wizard(
                 target,
                 registration_no=registration_no,
@@ -1064,9 +1132,16 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 user_code=user_code,
                 fields=fields if isinstance(fields, dict) else None,
             )
-            return jsonify({"ok": True, "payload": payload})
+            LOGGER.info(
+                "Scan address modify success: trace_id=%s ip=%s registration_no=%s",
+                trace_id,
+                ip,
+                registration_no,
+            )
+            return jsonify({"ok": True, "payload": payload, "trace_id": trace_id})
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            LOGGER.exception("Scan address modify failed: trace_id=%s ip=%s registration_no=%s", trace_id, ip, registration_no)
+            return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
     @app.get("/api/scan/protocol")
     def api_scan_protocol_get() -> Any:

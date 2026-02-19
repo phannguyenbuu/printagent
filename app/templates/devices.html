@@ -45,6 +45,7 @@
       <button id="result-modal-tab-html" class="modal-view-btn" type="button">HTML Preview</button>
       <button id="result-modal-tab-scan" class="modal-view-btn" type="button">Scan</button>
       <button id="result-modal-tab-scan-html-preview" class="modal-view-btn" type="button">Scan HTML Preview</button>
+      <button id="result-modal-tab-create-address" class="modal-view-btn" type="button">Create Address</button>
     </div>
     <div id="result-modal-loading" class="table-loading">
       <span class="spinner"></span>
@@ -88,6 +89,34 @@
         </div>
       </div>
       <pre id="result-modal-scan-output" class="json-output"></pre>
+    </div>
+    <div id="result-modal-panel-create-address" class="panel" hidden>
+      <div class="panel-head">
+        <h3>Create Address</h3>
+        <span>Create new address entry on this device</span>
+      </div>
+      <div class="form-grid create-address-grid">
+        <label>
+          <span>Name</span>
+          <input id="result-modal-create-name" type="text" placeholder="Display name" />
+        </label>
+        <label>
+          <span>Email</span>
+          <input id="result-modal-create-email" type="text" placeholder="user@example.com" />
+        </label>
+        <label>
+          <span>Folder</span>
+          <input id="result-modal-create-folder" type="text" placeholder="\\\\SERVER\\Share\\Path" />
+        </label>
+        <label>
+          <span>User Code</span>
+          <input id="result-modal-create-user-code" type="text" placeholder="Optional user code" />
+        </label>
+      </div>
+      <div class="modal-tools">
+        <button id="result-modal-create-submit" class="btn ghost" type="button">Create Address</button>
+      </div>
+      <pre id="result-modal-create-output" class="json-output"></pre>
     </div>
   </div>
 </div>

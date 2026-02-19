@@ -571,6 +571,32 @@ body {
   align-items: center;
 }
 
+.create-address-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.create-address-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.create-address-grid label span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.create-address-grid input {
+  border: 1px solid var(--line);
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 10px;
+  color: #1b2b3d;
+  min-width: 0;
+}
+
 .dashboard-config-grid {
   grid-template-columns: 1fr 1fr;
   align-items: stretch;
@@ -794,6 +820,10 @@ body {
 
   .layout-shell.nav-open + .sidebar-overlay {
     display: block;
+  }
+
+  .create-address-grid {
+    grid-template-columns: 1fr;
   }
 
   .stats-grid,
