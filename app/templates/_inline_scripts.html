@@ -857,7 +857,7 @@ function bindResultModal() {
         const data = await jsonFetch("/api/scan/address-delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId }),
+          body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId, confirm: true }),
         });
         if (out) out.textContent = jsonString(data.payload || data);
         if (row.isConnected) row.remove();
@@ -1416,7 +1416,7 @@ async function initScanPage() {
         const data = await jsonFetch("/api/scan/address-delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId }),
+          body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId, confirm: true }),
         });
         if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
         await loadScanAddressList();

@@ -1555,7 +1555,11 @@ class RicohService:
         }
 
     def delete_address_entries(
-        self, printer: Printer, registration_numbers: list[str], entry_ids: list[str] | None = None
+        self,
+        printer: Printer,
+        registration_numbers: list[str],
+        entry_ids: list[str] | None = None,
+        verify: bool = True,
     ) -> dict[str, Any]:
         regs = [str(x or "").strip() for x in registration_numbers if str(x or "").strip()]
         ids = [str(x or "").strip() for x in (entry_ids or []) if str(x or "").strip()]
@@ -1599,17 +1603,18 @@ class RicohService:
         )
         resp.raise_for_status()
 
-        verify_raw = self.get_address_list_ajax_with_client(session, printer)
-        verify_entries = self.parse_ajax_address_list(verify_raw)
-        if ids:
-            remain = {str(getattr(e, "entry_id", "") or "").strip() for e in verify_entries}
-            failed = [reg for reg in ids if reg in remain]
-        else:
-            remain = {str(e.registration_no or "").strip() for e in verify_entries}
-            failed = [reg for reg in regs if reg in remain]
-        if failed:
-            label = "entry_id" if ids else "registration_no"
-            raise RuntimeError(f"Delete not confirmed for {label}: {', '.join(failed)}")
+        if verify:
+            verify_raw = self.get_address_list_ajax_with_client(session, printer)
+            verify_entries = self.parse_ajax_address_list(verify_raw)
+            if ids:
+                remain = {str(getattr(e, "entry_id", "") or "").strip() for e in verify_entries}
+                failed = [reg for reg in ids if reg in remain]
+            else:
+                remain = {str(e.registration_no or "").strip() for e in verify_entries}
+                failed = [reg for reg in regs if reg in remain]
+            if failed:
+                label = "entry_id" if ids else "registration_no"
+                raise RuntimeError(f"Delete not confirmed for {label}: {', '.join(failed)}")
 
         return {
             "printer_name": printer.name,

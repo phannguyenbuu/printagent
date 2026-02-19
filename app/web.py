@@ -1101,6 +1101,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         password = str(body.get("password", "")).strip()
         registration_no = str(body.get("registration_no", "")).strip()
         entry_id = str(body.get("entry_id", "")).strip()
+        confirm = bool(body.get("confirm", False))
         if not ip:
             LOGGER.warning("Scan address delete rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
@@ -1121,7 +1122,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
             target.user = effective_user
             target.password = effective_password
-            payload = ricoh_service.delete_address_entries(target, [registration_no], entry_ids=[entry_id] if entry_id else None)
+            payload = ricoh_service.delete_address_entries(
+                target,
+                [registration_no],
+                entry_ids=[entry_id] if entry_id else None,
+                verify=not confirm,
+            )
             LOGGER.info(
                 "Scan address delete success: trace_id=%s ip=%s deleted_count=%s",
                 trace_id,
