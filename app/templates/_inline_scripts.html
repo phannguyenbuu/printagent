@@ -520,6 +520,23 @@ async function releaseScanIsolationForModal() {
   }
 }
 
+async function forceResetScanIsolationForModal() {
+  const ip = String(resultModalState.ip || "").trim();
+  if (!ip) return;
+  try {
+    await jsonFetch("/api/scan/release-session", { method: "POST" });
+  } catch (_err) {
+    // Best effort: continue to isolate even if release failed.
+  }
+  await jsonFetch("/api/scan/isolate-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ip }),
+  });
+  resultModalState.isolated = true;
+  loadDevicesPollingStatus().catch(() => {});
+}
+
 function showResultModal(title, payload) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
@@ -596,7 +613,9 @@ function showResultModal(title, payload) {
   setResultModalView("scan");
   setResultModalScanView("list");
   modal.hidden = false;
-  loadResultModalScanAddressList().catch((err) => {
+  forceResetScanIsolationForModal()
+    .then(() => loadResultModalScanAddressList())
+    .catch((err) => {
     const out = document.getElementById("result-modal-scan-output");
     if (out) out.textContent = String(err?.message || err);
   });

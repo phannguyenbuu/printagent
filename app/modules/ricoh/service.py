@@ -707,6 +707,15 @@ class RicohService:
                         reg = str(entry.registration_no or "").strip()
                         if reg.isdigit():
                             nums.append(int(reg))
+                    try:
+                        if list_html_ctx:
+                            html_existing = self.parse_address_list(list_html_ctx)
+                            for entry in html_existing:
+                                reg = str(entry.registration_no or "").strip()
+                                if reg.isdigit():
+                                    nums.append(int(reg))
+                    except Exception:  # noqa: BLE001
+                        pass
                     if nums:
                         next_index = f"{max(nums) + 1:05d}"
                 except Exception:  # noqa: BLE001
@@ -814,6 +823,19 @@ class RicohService:
                     ),
                     None,
                 )
+                if not created and str(next_index or "").strip():
+                    created = next(
+                        (
+                            e
+                            for e in verify_entries
+                            if str(e.registration_no or "").strip() == str(next_index).strip()
+                        ),
+                        None,
+                    )
+                if not created and verify_entries:
+                    numeric_entries = [e for e in verify_entries if str(e.registration_no or "").strip().isdigit()]
+                    if numeric_entries:
+                        created = max(numeric_entries, key=lambda e: int(str(e.registration_no or "0").strip()))
                 if not created:
                     try:
                         html_list = self.read_address_list_with_client(session, printer)
@@ -845,8 +867,18 @@ class RicohService:
 
                 auto_updated = False
                 auto_update_error = ""
-                update_reg = str(created.registration_no or "").strip() if created else ""
+                update_reg = str(created.registration_no or "").strip() if created else str(next_index or "").strip()
                 if update_reg:
+                    if not created:
+                        created = AddressEntry(
+                            type="User",
+                            registration_no=update_reg,
+                            name=str(name or "").strip(),
+                            user_code=str(user_code or "").strip(),
+                            date_last_used="-",
+                            email_address="",
+                            folder="",
+                        )
                     need_email = bool(str(email or "").strip()) and str(created.email_address or "").strip() in {"", "-", "---"}
                     need_folder = bool(str(folder or "").strip()) and str(created.folder or "").strip() in {"", "-", "---"}
                     LOGGER.info(
@@ -927,6 +959,8 @@ class RicohService:
                     "http_status": confirm_resp.status_code,
                     "response_excerpt": (confirm_resp.text or "")[:600],
                     "verify_count": len(verify_entries),
+                    "expected_registration_no": str(next_index or ""),
+                    "verify_sample_regs": [str(e.registration_no or "") for e in verify_entries[:5]],
                     "created_registration_no": str(created.registration_no) if created else "",
                     "created_email": str(created.email_address) if created else "",
                     "created_folder": str(created.folder) if created else "",
