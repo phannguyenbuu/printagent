@@ -334,6 +334,42 @@ class RicohService:
             raise RuntimeError("login failed; " + "; ".join(errors))
         self._warmup_address_context(session, printer)
 
+    def _login_auth_form_only(self, session: requests.Session, printer: Printer) -> None:
+        if not printer.user:
+            raise ValueError("username is required for login")
+        base_url = f"http://{printer.ip}"
+        session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
+        auth_url = urljoin(base_url, "/web/guest/en/websys/webArch/authForm.cgi")
+        auth_page = session.get(auth_url, timeout=10)
+        auth_page.raise_for_status()
+        auth_html = auth_page.text
+        action_match = re.search(r"<form[^>]*action=['\"]([^'\"]+)['\"]", auth_html, re.I)
+        post_url = urljoin(base_url, action_match.group(1)) if action_match else auth_url
+        token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", auth_html)
+        wim_token = token_match.group(1) if token_match else ""
+        encoded_user = base64.b64encode(printer.user.encode("utf-8")).decode("ascii")
+        encoded_password = base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii")
+        form = {
+            "userid": encoded_user,
+            "password": encoded_password,
+            "loginUserName": printer.user,
+            "loginPassword": printer.password or "",
+            "wimToken": wim_token,
+            "open": "",
+            "title": "",
+        }
+        resp = session.post(
+            post_url,
+            data=form,
+            headers={"Referer": auth_url},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        text = resp.text
+        if "authForm.cgi" in text or "login.cgi" in text or "Login User Name" in text:
+            raise RuntimeError("authForm login failed")
+        self._warmup_address_context(session, printer)
+
     def _reset_web_session(self, session: requests.Session, printer: Printer) -> None:
         base_url = f"http://{printer.ip}"
         # Best-effort logout/cleanup so address-book login starts from a clean state.
@@ -378,6 +414,16 @@ class RicohService:
         if printer.user:
             self._reset_web_session(session, printer)
             self._login(session, printer)
+        else:
+            session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
+        return session
+
+    def create_http_client_auth_form_only(self, printer: Printer) -> requests.Session:
+        session = requests.Session()
+        session.headers.update({"User-Agent": "printer-agent/0.1"})
+        if printer.user:
+            self._reset_web_session(session, printer)
+            self._login_auth_form_only(session, printer)
         else:
             session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
         return session

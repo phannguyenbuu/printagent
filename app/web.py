@@ -860,12 +860,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         )
         if mode == "adrslistall":
             try:
-                effective_user = user or "admin"
-                effective_password = password or "admin"
+                # Popup Scan tab uses fixed credential as requested.
+                effective_user = "admin"
+                effective_password = "admin"
                 target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
                 target.user = effective_user
                 target.password = effective_password
-                session = ricoh_service.create_http_client(target)
+                session = ricoh_service.create_http_client_auth_form_only(target)
                 html = ricoh_service.authenticate_and_get(session, target, "/web/entry/en/address/adrsListAll.cgi")
                 if ("Address List" not in html and "adrsList" not in html) or "login.cgi" in html:
                     html = ricoh_service.authenticate_and_get(session, target, "/web/guest/en/address/adrsListAll.cgi")
