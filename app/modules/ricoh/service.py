@@ -309,6 +309,25 @@ class RicohService:
             raise RuntimeError("login failed; " + "; ".join(errors))
         self._warmup_address_context(session, printer)
 
+    def _reset_web_session(self, session: requests.Session, printer: Printer) -> None:
+        base_url = f"http://{printer.ip}"
+        # Best-effort logout/cleanup so address-book login starts from a clean state.
+        urls = [
+            "/web/entry/en/websys/webArch/logout.cgi",
+            "/web/guest/en/websys/webArch/logout.cgi",
+            "/web/entry/en/websys/webArch/mainFrame.cgi",
+            "/web/guest/en/websys/webArch/mainFrame.cgi",
+        ]
+        for target in urls:
+            try:
+                session.get(urljoin(base_url, target), timeout=8)
+            except Exception:  # noqa: BLE001
+                continue
+        try:
+            session.cookies.clear()
+        except Exception:  # noqa: BLE001
+            return
+
     def _warmup_address_context(self, session: requests.Session, printer: Printer) -> None:
         base_url = f"http://{printer.ip}"
         urls = [
@@ -326,6 +345,7 @@ class RicohService:
         session = requests.Session()
         session.headers.update({"User-Agent": "printer-agent/0.1"})
         if printer.user:
+            self._reset_web_session(session, printer)
             self._login(session, printer)
         else:
             session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
