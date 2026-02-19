@@ -1365,10 +1365,86 @@ class RicohService:
         if not reg:
             raise ValueError("registration_no is required")
 
-        session = self.create_http_client(printer)
-        get_url = f"/web/entry/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}"
+        session = self.create_http_client_auth_form_only(printer)
         set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
-        html = self.authenticate_and_get(session, printer, get_url)
+        warmup_targets = [
+            "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
+            "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL",
+        ]
+        list_html = ""
+        list_url = ""
+        for target in warmup_targets:
+            try:
+                candidate = self.authenticate_and_get(session, printer, target)
+                if candidate.strip() and "login.cgi" not in candidate and "authForm.cgi" not in candidate:
+                    list_html = candidate
+                    list_url = target
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        list_defaults = self._extract_hidden_inputs(list_html) if list_html else {}
+        list_token = str(list_defaults.get("wimToken", "")).strip()
+        if not list_token and list_html:
+            try:
+                list_token = self._extract_wim_token(list_html)
+            except Exception:  # noqa: BLE001
+                list_token = ""
+
+        get_candidates = [
+            f"/web/entry/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}&modeIn=MOD",
+            f"/web/entry/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}&modeIn=EDIT",
+            f"/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=MOD&regiNoIn={reg}",
+            f"/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=EDIT&regiNoIn={reg}",
+            f"/web/entry/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}",
+            f"/web/guest/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}&modeIn=MOD",
+            f"/web/guest/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}&modeIn=EDIT",
+            f"/web/guest/en/address/adrsGetUserWizard.cgi?modeIn=MOD&regiNoIn={reg}",
+            f"/web/guest/en/address/adrsGetUserWizard.cgi?modeIn=EDIT&regiNoIn={reg}",
+            f"/web/guest/en/address/adrsGetUserWizard.cgi?regiNoIn={reg}",
+        ]
+        html = ""
+        get_url = ""
+        open_errors: list[str] = []
+        for target in get_candidates:
+            try:
+                candidate_html = self.authenticate_and_get(session, printer, target)
+                if not candidate_html.strip():
+                    open_errors.append(f"{target}:empty")
+                    continue
+                if "login.cgi" in candidate_html or "authForm.cgi" in candidate_html:
+                    open_errors.append(f"{target}:login_page")
+                    continue
+                html = candidate_html
+                get_url = target
+                break
+            except Exception as exc:  # noqa: BLE001
+                open_errors.append(f"{target}:{type(exc).__name__}:{exc}")
+                if list_token:
+                    try:
+                        post_resp = session.post(
+                            f"http://{printer.ip}{target}",
+                            data={
+                                "wimToken": list_token,
+                                "regiNoIn": reg,
+                                "modeIn": "MOD",
+                                "mode": "EDITUSER",
+                                "open": "",
+                                "title": "",
+                            },
+                            headers={"Referer": f"http://{printer.ip}{list_url}"} if list_url else {},
+                            timeout=15,
+                        )
+                        post_text = post_resp.text or ""
+                        if post_resp.status_code < 400 and "login.cgi" not in post_text and "authForm.cgi" not in post_text and post_text.strip():
+                            html = post_text
+                            get_url = target
+                            break
+                        open_errors.append(f"{target}:post_status={post_resp.status_code}")
+                    except Exception as post_exc:  # noqa: BLE001
+                        open_errors.append(f"{target}:post_error={type(post_exc).__name__}:{post_exc}")
+                continue
+        if not html:
+            raise RuntimeError("cannot open modify wizard; " + " | ".join(open_errors[-6:]))
 
         defaults = self._extract_hidden_inputs(html)
         token = defaults.get("wimToken", "")
