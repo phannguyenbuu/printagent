@@ -631,6 +631,7 @@ class RicohService:
     ) -> dict[str, Any]:
         session = self.create_http_client_auth_form_only(printer)
         set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
+        get_wizard_url = "/web/entry/en/address/adrsGetUserWizard.cgi"
         # Warm up context from address list first; many Ricoh models require this before wizard page.
         warmup_targets = [
             "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
@@ -642,6 +643,158 @@ class RicohService:
                 break
             except Exception:  # noqa: BLE001
                 continue
+        list_html_ctx = ""
+        list_url_ctx = ""
+        for target in warmup_targets:
+            try:
+                candidate = self.authenticate_and_get(session, printer, target)
+                if candidate.strip() and "login.cgi" not in candidate and "authForm.cgi" not in candidate:
+                    list_html_ctx = candidate
+                    list_url_ctx = target
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        list_defaults_ctx = self._extract_hidden_inputs(list_html_ctx) if list_html_ctx else {}
+        list_token_ctx = str(list_defaults_ctx.get("wimToken", "")).strip()
+        if not list_token_ctx and list_html_ctx:
+            try:
+                list_token_ctx = self._extract_wim_token(list_html_ctx)
+            except Exception:  # noqa: BLE001
+                list_token_ctx = ""
+
+        # Primary flow from captured HAR: POST multi-step wizard (ADDUSER -> BASE -> MAIL -> FOLDER -> CONFIRM).
+        if list_token_ctx:
+            try:
+                list_referer = f"http://{printer.ip}{list_url_ctx}" if list_url_ctx else f"http://{printer.ip}/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL"
+                wizard_referer = f"http://{printer.ip}{get_wizard_url}"
+                wizard_url = f"http://{printer.ip}{get_wizard_url}"
+                set_full_url = f"http://{printer.ip}{set_url}"
+
+                open_resp = session.post(
+                    wizard_url,
+                    data={
+                        "mode": "ADDUSER",
+                        "outputSpecifyModeIn": "DEFAULT",
+                        "wimToken": list_token_ctx,
+                    },
+                    headers={"Referer": list_referer},
+                    timeout=15,
+                )
+                open_resp.raise_for_status()
+
+                next_index = "00001"
+                try:
+                    raw_existing = self.get_address_list_ajax_with_client(session, printer)
+                    existing_entries = self.parse_ajax_address_list(raw_existing)
+                    nums: list[int] = []
+                    for entry in existing_entries:
+                        reg = str(entry.registration_no or "").strip()
+                        if reg.isdigit():
+                            nums.append(int(reg))
+                    if nums:
+                        next_index = f"{max(nums) + 1:05d}"
+                except Exception:  # noqa: BLE001
+                    next_index = "00001"
+
+                base_resp = session.post(
+                    set_full_url,
+                    data={
+                        "mode": "ADDUSER",
+                        "step": "BASE",
+                        "wimToken": list_token_ctx,
+                        "entryIndexIn": next_index,
+                        "entryNameIn": str(name or "").strip(),
+                        "entryDisplayNameIn": str(name or "").strip(),
+                        "entryTagInfoIn": "1",
+                    },
+                    headers={"Referer": wizard_referer},
+                    timeout=15,
+                )
+                base_resp.raise_for_status()
+
+                step_list = ["BASE"]
+                if str(email or "").strip():
+                    mail_resp = session.post(
+                        set_full_url,
+                        data={
+                            "mode": "ADDUSER",
+                            "step": "MAIL",
+                            "wimToken": list_token_ctx,
+                            "mailAddressIn": str(email).strip(),
+                        },
+                        headers={"Referer": wizard_referer},
+                        timeout=15,
+                    )
+                    mail_resp.raise_for_status()
+                    step_list.append("MAIL")
+
+                if str(folder or "").strip():
+                    folder_resp = session.post(
+                        set_full_url,
+                        data={
+                            "mode": "ADDUSER",
+                            "step": "FOLDER",
+                            "wimToken": list_token_ctx,
+                            "folderProtocolIn": "SMB_O",
+                            "folderPortNoIn": "21",
+                            "folderServerNameIn": "",
+                            "folderPathNameIn": str(folder).strip(),
+                            "folderAuthUserNameIn": "",
+                            "wk_folderPasswordIn": "",
+                            "folderPasswordIn": "",
+                            "wk_folderPasswordConfirmIn": "",
+                            "folderPasswordConfirmIn": "",
+                        },
+                        headers={"Referer": wizard_referer},
+                        timeout=15,
+                    )
+                    folder_resp.raise_for_status()
+                    step_list.append("FOLDER")
+
+                confirm_form: list[tuple[str, str]] = [("wimToken", list_token_ctx)]
+                for step_name in step_list:
+                    confirm_form.append(("stepListIn", step_name))
+                confirm_form.extend([("mode", "ADDUSER"), ("step", "CONFIRM")])
+                confirm_resp = session.post(
+                    set_full_url,
+                    data=confirm_form,
+                    headers={"Referer": wizard_referer},
+                    timeout=15,
+                )
+                confirm_resp.raise_for_status()
+
+                verify_raw = ""
+                verify_entries: list[AddressEntry] = []
+                try:
+                    verify_raw = self.get_address_list_ajax_with_client(session, printer)
+                    verify_entries = self.parse_ajax_address_list(verify_raw)
+                except Exception:  # noqa: BLE001
+                    verify_raw = ""
+                    verify_entries = []
+                created = next(
+                    (
+                        e
+                        for e in verify_entries
+                        if str(e.name or "").strip().lower() == str(name or "").strip().lower()
+                    ),
+                    None,
+                )
+
+                return {
+                    "printer_name": printer.name,
+                    "ip": printer.ip,
+                    "ok": True,
+                    "endpoint": set_url,
+                    "name": str(name or "").strip(),
+                    "http_status": confirm_resp.status_code,
+                    "response_excerpt": (confirm_resp.text or "")[:600],
+                    "verify_count": len(verify_entries),
+                    "created_registration_no": str(created.registration_no) if created else "",
+                    "fallback_mode": "wizard_multistep_har",
+                    "timestamp": self._timestamp(),
+                }
+            except Exception:  # noqa: BLE001
+                pass
 
         get_candidates = [
             "/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=ADD&entryTypeIn=1",
@@ -670,6 +823,29 @@ class RicohService:
                 break
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{target}:{type(exc).__name__}:{exc}")
+                if list_token_ctx:
+                    try:
+                        post_form = {
+                            "wimToken": list_token_ctx,
+                            "modeIn": "ADD",
+                            "entryTypeIn": "1",
+                            "open": "",
+                            "title": "",
+                        }
+                        post_resp = session.post(
+                            f"http://{printer.ip}{target}",
+                            data=post_form,
+                            headers={"Referer": f"http://{printer.ip}{list_url_ctx}"} if list_url_ctx else {},
+                            timeout=15,
+                        )
+                        post_text = post_resp.text or ""
+                        if post_resp.status_code < 400 and "login.cgi" not in post_text and "authForm.cgi" not in post_text and post_text.strip():
+                            html = post_text
+                            get_url = target
+                            break
+                        errors.append(f"{target}:post_open_failed_status={post_resp.status_code}")
+                    except Exception as post_exc:  # noqa: BLE001
+                        errors.append(f"{target}:post_open_error={type(post_exc).__name__}:{post_exc}")
                 continue
         if not html:
             # First fallback: try Detail Input endpoints (non-wizard) which are more stable on some models.
@@ -686,7 +862,33 @@ class RicohService:
             detail_errors: list[str] = []
             for detail_get in detail_get_candidates:
                 try:
-                    detail_html = self.authenticate_and_get(session, printer, detail_get)
+                    detail_html = ""
+                    try:
+                        detail_html = self.authenticate_and_get(session, printer, detail_get)
+                    except Exception as detail_get_exc:  # noqa: BLE001
+                        detail_errors.append(f"{detail_get}:get_error={type(detail_get_exc).__name__}:{detail_get_exc}")
+                        if list_token_ctx:
+                            try:
+                                detail_post = session.post(
+                                    f"http://{printer.ip}{detail_get}",
+                                    data={
+                                        "wimToken": list_token_ctx,
+                                        "modeIn": "ADD",
+                                        "entryTypeIn": "1",
+                                        "open": "",
+                                        "title": "",
+                                    },
+                                    headers={"Referer": f"http://{printer.ip}{list_url_ctx}"} if list_url_ctx else {},
+                                    timeout=15,
+                                )
+                                if detail_post.status_code < 400:
+                                    detail_html = detail_post.text or ""
+                                else:
+                                    detail_errors.append(f"{detail_get}:post_status={detail_post.status_code}")
+                            except Exception as detail_post_exc:  # noqa: BLE001
+                                detail_errors.append(
+                                    f"{detail_get}:post_error={type(detail_post_exc).__name__}:{detail_post_exc}"
+                                )
                     if not detail_html.strip():
                         detail_errors.append(f"{detail_get}:empty")
                         continue
