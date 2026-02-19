@@ -906,6 +906,14 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                         bool(str(target.password or "").strip()),
                     )
                     payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+                    # Guardrail: some devices return auth/login HTML as a "successful" payload.
+                    # Treat that as auth failure so credential fallback can continue.
+                    debug = payload.get("debug", {}) if isinstance(payload, dict) else {}
+                    html_login = bool(debug.get("html_has_login_markers", False))
+                    ajax_excerpt = str(debug.get("ajax_excerpt", "") or "").lower()
+                    ajax_login = ("authform.cgi" in ajax_excerpt) or ("login.cgi" in ajax_excerpt)
+                    if html_login or ajax_login:
+                        raise RuntimeError("address list authentication required (login page detected in payload)")
                     entry_count = len(payload.get("address_list", [])) if isinstance(payload, dict) else 0
                     LOGGER.info(
                         "Scan address list success: trace_id=%s ip=%s entries=%s mode=%s round=%s",

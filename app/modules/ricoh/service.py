@@ -820,6 +820,7 @@ class RicohService:
         )
         ajax_raw = ""
         ajax_entries: list[AddressEntry] = []
+        ajax_has_login_markers = False
         try:
             ajax_raw = self.get_address_list_ajax_with_client(session, printer)
             ajax_entries = self.parse_ajax_address_list(ajax_raw)
@@ -847,6 +848,13 @@ class RicohService:
                 f"address_list:ajax_error trace_id={trace_id or '-'} ip={printer.ip} error={type(exc).__name__}:{str(exc)}"
             )
             LOGGER.exception("Address list ajax error: trace_id=%s ip=%s", trace_id or "-", printer.ip)
+        if max(0, len(entries) - 1) == 0 and (has_login_markers or ajax_has_login_markers):
+            reason = "html_login" if has_login_markers else "ajax_login"
+            self._append_address_debug(
+                f"address_list:auth_required trace_id={trace_id or '-'} ip={printer.ip} reason={reason}"
+            )
+            LOGGER.warning("Address list auth required: trace_id=%s ip=%s reason=%s", trace_id or "-", printer.ip, reason)
+            raise RuntimeError("address list authentication required (login page detected)")
         if max(0, len(entries) - 1) == 0:
             reasons: list[str] = []
             if has_login_markers:
