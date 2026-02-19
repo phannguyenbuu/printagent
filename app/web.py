@@ -881,6 +881,19 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 except Exception:  # noqa: BLE001
                     ajax_raw = ""
                     ajax_entries = []
+                # If LIST_ALL + AJAX still yields only summary, fallback to full parser flow.
+                non_summary = max(0, len(entries) - 1)
+                if non_summary == 0:
+                    try:
+                        fallback_payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+                        if isinstance(fallback_payload, dict):
+                            fallback_payload.setdefault("debug", {})
+                            if isinstance(fallback_payload["debug"], dict):
+                                fallback_payload["debug"]["mode"] = "adrsListAll_fallback_process_address_list"
+                                fallback_payload["debug"]["trace_id"] = trace_id
+                        return jsonify({"ok": True, "payload": fallback_payload})
+                    except Exception:  # noqa: BLE001
+                        pass
                 payload = {
                     "printer_name": target.name,
                     "ip": target.ip,

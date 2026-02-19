@@ -845,18 +845,8 @@ class RicohService:
 
                 auto_updated = False
                 auto_update_error = ""
-                update_reg = str(created.registration_no or "").strip() if created else str(next_index or "").strip()
+                update_reg = str(created.registration_no or "").strip() if created else ""
                 if update_reg:
-                    if not created:
-                        created = AddressEntry(
-                            type="User",
-                            registration_no=update_reg,
-                            name=str(name or "").strip(),
-                            user_code=str(user_code or "").strip(),
-                            date_last_used="-",
-                            email_address="",
-                            folder="",
-                        )
                     need_email = bool(str(email or "").strip()) and str(created.email_address or "").strip() in {"", "-", "---"}
                     need_folder = bool(str(folder or "").strip()) and str(created.folder or "").strip() in {"", "-", "---"}
                     LOGGER.info(
