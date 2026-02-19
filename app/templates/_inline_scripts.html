@@ -27,6 +27,22 @@ function jsonString(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function hasMeaningfulScanEntryValue(row) {
+  if (!row || typeof row !== "object") return false;
+  const values = [
+    row.registration_no,
+    row.name,
+    row.user_code,
+    row.email_address,
+    row.folder,
+    row.date_last_used,
+  ];
+  return values.some((v) => {
+    const t = String(v ?? "").trim();
+    return t && t !== "-" && t.toLowerCase() !== "summary";
+  });
+}
+
 function formatCounterResult(payload) {
   const data = payload || {};
   const counter = data.counter_data || {};
@@ -298,7 +314,9 @@ async function runAction(ip, action, options = {}) {
 function renderResultModalScanRows(entries) {
   const body = document.getElementById("result-modal-scan-body");
   if (!body) return;
-  const rows = Array.isArray(entries) ? entries.filter((x) => x && x.type !== "Summary") : [];
+  const rows = Array.isArray(entries)
+    ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+    : [];
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="7">No address entries.</td></tr>`;
     return;
@@ -341,6 +359,20 @@ function setSelectedScanProtocol(value) {
   });
 }
 
+function setResultModalScanView(mode) {
+  const listBtn = document.getElementById("result-modal-scan-tab-list");
+  const htmlBtn = document.getElementById("result-modal-scan-tab-html");
+  const listWrap = document.getElementById("result-modal-scan-list-wrap");
+  const htmlFrame = document.getElementById("result-modal-scan-html");
+  if (!listBtn || !htmlBtn || !listWrap || !htmlFrame) return;
+  const htmlEnabled = htmlBtn.dataset.enabled === "1";
+  const target = mode === "html" && htmlEnabled ? "html" : "list";
+  listBtn.classList.toggle("active", target === "list");
+  htmlBtn.classList.toggle("active", target === "html");
+  listWrap.hidden = target !== "list";
+  htmlFrame.hidden = target !== "html";
+}
+
 async function loadResultModalScanProtocol() {
   const hint = document.getElementById("result-modal-scan-protocol-hint");
   const ip = String(resultModalState.ip || "").trim();
@@ -367,10 +399,17 @@ async function loadResultModalScanProtocol() {
 
 async function loadResultModalScanAddressList() {
   const out = document.getElementById("result-modal-scan-output");
+  const htmlBtn = document.getElementById("result-modal-scan-tab-html");
+  const htmlFrame = document.getElementById("result-modal-scan-html");
   const ip = String(resultModalState.ip || "").trim();
   if (!ip) {
     if (out) out.textContent = "Missing printer IP";
     renderResultModalScanRows([]);
+    if (htmlBtn) {
+      htmlBtn.dataset.enabled = "0";
+      htmlBtn.disabled = true;
+    }
+    if (htmlFrame) htmlFrame.srcdoc = "";
     return;
   }
   if (out) out.textContent = `Loading address list for ${ip}...`;
@@ -379,6 +418,14 @@ async function loadResultModalScanAddressList() {
   resultModalState.scanPayload = payload;
   resultModalState.scanLoadedIp = ip;
   renderResultModalScanRows(entries);
+  const scanHtmlPreview = buildCounterHtmlPreview(payload);
+  if (htmlBtn) {
+    htmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
+    htmlBtn.disabled = !scanHtmlPreview;
+  }
+  if (htmlFrame) {
+    htmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
+  }
   if (out) out.textContent = jsonString(payload);
   await loadResultModalScanProtocol();
 }
@@ -431,16 +478,41 @@ function showResultModal(title, payload) {
   resultModalState.protocol = "";
   if (scanPrefetch?.ok && resultModalState.scanPayload) {
     const prefEntries = resultModalState.scanPayload.address_list || [];
+    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+    const scanHtmlPreview = buildCounterHtmlPreview(resultModalState.scanPayload);
+    if (scanHtmlBtn) {
+      scanHtmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
+      scanHtmlBtn.disabled = !scanHtmlPreview;
+    }
+    if (scanHtmlFrame) {
+      scanHtmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
+    }
     renderResultModalScanRows(prefEntries);
     scanOut.textContent = jsonString(resultModalState.scanPayload);
   } else if (scanPrefetch && !scanPrefetch.ok) {
+    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+    if (scanHtmlBtn) {
+      scanHtmlBtn.dataset.enabled = "0";
+      scanHtmlBtn.disabled = true;
+    }
+    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
     renderResultModalScanRows([]);
     scanOut.textContent = String(scanPrefetch.error || "Scan preload failed");
   } else {
+    const scanHtmlBtn = document.getElementById("result-modal-scan-tab-html");
+    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+    if (scanHtmlBtn) {
+      scanHtmlBtn.dataset.enabled = "0";
+      scanHtmlBtn.disabled = true;
+    }
+    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
     scanOut.textContent = "Open Scan tab to load Address List.";
     renderResultModalScanRows([]);
   }
   setSelectedScanProtocol("SMBv2/3");
+  setResultModalScanView("list");
 
   const htmlPreview = buildCounterHtmlPreview(payload);
   const htmlReady = Boolean(htmlPreview);
@@ -503,6 +575,8 @@ function bindResultModal() {
   const scanTabBtn = document.getElementById("result-modal-tab-scan");
   const scanReloadBtn = document.getElementById("result-modal-scan-reload");
   const scanBody = document.getElementById("result-modal-scan-body");
+  const scanSubListBtn = document.getElementById("result-modal-scan-tab-list");
+  const scanSubHtmlBtn = document.getElementById("result-modal-scan-tab-html");
   const protocolSaveBtn = document.getElementById("result-modal-scan-protocol-save");
   if (
     !modal ||
@@ -512,6 +586,8 @@ function bindResultModal() {
     !scanTabBtn ||
     !scanReloadBtn ||
     !scanBody ||
+    !scanSubListBtn ||
+    !scanSubHtmlBtn ||
     !protocolSaveBtn ||
     closeBtn.dataset.bound
   ) {
@@ -530,6 +606,7 @@ function bindResultModal() {
   });
   scanTabBtn.addEventListener("click", async () => {
     setResultModalView("scan");
+    setResultModalScanView("list");
     try {
       const ip = String(resultModalState.ip || "").trim();
       if (ip && resultModalState.scanLoadedIp !== ip) {
@@ -541,6 +618,12 @@ function bindResultModal() {
       const out = document.getElementById("result-modal-scan-output");
       if (out) out.textContent = String(err?.message || err);
     }
+  });
+  scanSubListBtn.addEventListener("click", () => {
+    setResultModalScanView("list");
+  });
+  scanSubHtmlBtn.addEventListener("click", () => {
+    setResultModalScanView("html");
   });
   scanReloadBtn.addEventListener("click", async () => {
     try {
@@ -884,7 +967,9 @@ async function ensureScanTargetDefaults() {
 function renderScanAddressRows(entries) {
   const body = document.getElementById("scan-address-table-body");
   if (!body) return;
-  const rows = Array.isArray(entries) ? entries.filter((x) => x && x.type !== "Summary") : [];
+  const rows = Array.isArray(entries)
+    ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+    : [];
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="7">No address entries.</td></tr>`;
     return;

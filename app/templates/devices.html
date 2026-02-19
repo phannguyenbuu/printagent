@@ -52,9 +52,13 @@
     <iframe id="result-modal-counter-html" class="modal-html-frame" sandbox="" hidden></iframe>
     <div id="result-modal-panel-scan" hidden>
       <div class="modal-tools">
+        <button id="result-modal-scan-tab-list" class="modal-view-btn active" type="button">Address List</button>
+        <button id="result-modal-scan-tab-html" class="modal-view-btn" type="button">Scan HTML Preview</button>
+      </div>
+      <div class="modal-tools">
         <button id="result-modal-scan-reload" class="btn ghost" type="button">Reload Address List</button>
       </div>
-      <div class="table-wrap">
+      <div id="result-modal-scan-list-wrap" class="table-wrap">
         <table class="device-table">
           <thead>
             <tr>
@@ -72,6 +76,7 @@
           </tbody>
         </table>
       </div>
+      <iframe id="result-modal-scan-html" class="modal-html-frame" sandbox="" hidden></iframe>
       <div class="panel" style="margin-top:10px;">
         <div class="panel-head">
           <h3>Scan Protocol</h3>
