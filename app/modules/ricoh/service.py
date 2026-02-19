@@ -328,6 +328,12 @@ class RicohService:
         except Exception:  # noqa: BLE001
             return
 
+    def reset_web_session(self, printer: Printer) -> None:
+        # Public hook used by web layer before address-book operations.
+        session = requests.Session()
+        session.headers.update({"User-Agent": "printer-agent/0.1"})
+        self._reset_web_session(session, printer)
+
     def _warmup_address_context(self, session: requests.Session, printer: Printer) -> None:
         base_url = f"http://{printer.ip}"
         urls = [

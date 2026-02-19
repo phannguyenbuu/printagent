@@ -111,6 +111,7 @@ const resultModalState = {
   scanPayload: null,
   scanLoadedIp: "",
   protocol: "",
+  isolated: false,
 };
 
 function setResultModalView(tab) {
@@ -429,6 +430,7 @@ async function loadResultModalScanAddressList() {
     return;
   }
   if (out) out.textContent = `Loading address list for ${ip}...`;
+  await ensureScanIsolationForModal();
   const payload = await fetchScanAddressListForIp(ip, true);
   const entries = payload.address_list || [];
   resultModalState.scanPayload = payload;
@@ -457,6 +459,27 @@ async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
   const query = new URLSearchParams({ ip: targetIp }).toString();
   const data = await jsonFetch(`/api/scan/address-list?${query}`);
   return data.payload || {};
+}
+
+async function ensureScanIsolationForModal() {
+  if (resultModalState.isolated) return;
+  const ip = String(resultModalState.ip || "").trim();
+  if (!ip) return;
+  await jsonFetch("/api/scan/isolate-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ip }),
+  });
+  resultModalState.isolated = true;
+}
+
+async function releaseScanIsolationForModal() {
+  if (!resultModalState.isolated) return;
+  try {
+    await jsonFetch("/api/scan/release-session", { method: "POST" });
+  } finally {
+    resultModalState.isolated = false;
+  }
 }
 
 function showResultModal(title, payload) {
@@ -588,6 +611,7 @@ function bindResultModal() {
     return;
   }
   const close = () => {
+    releaseScanIsolationForModal().catch(() => {});
     modal.hidden = true;
   };
   closeBtn.dataset.bound = "1";
@@ -816,6 +840,7 @@ async function loadDevices(forceRefresh = false) {
       resultModalState.ip = selectedIp;
       resultModalState.printerName = printerName;
       resultModalState.scanLoadedIp = "";
+      resultModalState.isolated = false;
       showResultModalLoading(baseTitle, "Loading counter and status...");
       const [counterSettled, statusSettled] = await Promise.allSettled([
         runAction(selectedIp, "counter", { silent: true }),
