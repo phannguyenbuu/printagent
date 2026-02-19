@@ -872,6 +872,9 @@ function bindResultModal() {
       return;
     }
     if (!btnApply) return;
+    const prevApplyLabel = btnApply.innerHTML;
+    btnApply.textContent = "Applying...";
+    btnApply.disabled = true;
     const val = (field) =>
       String(row.querySelector(`input[data-field="${field}"]`)?.value || "").trim();
     try {
@@ -893,6 +896,11 @@ function bindResultModal() {
       await loadResultModalScanAddressList();
     } catch (err) {
       if (out) out.textContent = String(err?.message || err);
+      btnApply.disabled = false;
+    } finally {
+      if (btnApply.isConnected) {
+        btnApply.innerHTML = prevApplyLabel;
+      }
     }
   });
   const saveProtocol = async () => {

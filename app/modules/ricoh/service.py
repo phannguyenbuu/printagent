@@ -1368,11 +1368,20 @@ class RicohService:
 
         defaults.setdefault("open", "")
 
+        referer = list_url or get_url or "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL"
         resp = session.post(
             f"http://{printer.ip}{set_url}",
             data=defaults,
-            headers={"Referer": f"http://{printer.ip}{get_url}"},
+            headers={
+                "Referer": f"http://{printer.ip}{referer}",
+                "X-Requested-With": "XMLHttpRequest",
+            },
             timeout=15,
+        )
+        self._append_address_debug(
+            "address_modify:submit "
+            f"ip={printer.ip} reg={reg} url={set_url} status={resp.status_code} "
+            f"resp_excerpt={repr((resp.text or '')[:300])}"
         )
         resp.raise_for_status()
 
