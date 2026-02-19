@@ -942,6 +942,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                             "date_last_used": item.date_last_used,
                             "email_address": item.email_address,
                             "folder": item.folder,
+                            "entry_id": getattr(item, "entry_id", "") or "",
                         }
                         for item in entries
                     ],
@@ -1099,26 +1100,28 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         user = str(body.get("user", "")).strip()
         password = str(body.get("password", "")).strip()
         registration_no = str(body.get("registration_no", "")).strip()
+        entry_id = str(body.get("entry_id", "")).strip()
         if not ip:
             LOGGER.warning("Scan address delete rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
-        if not registration_no:
+        if not registration_no and not entry_id:
             LOGGER.warning("Scan address delete rejected: trace_id=%s ip=%s reason=missing_registration_no", trace_id, ip)
-            return jsonify({"ok": False, "error": "Missing registration_no"}), 400
+            return jsonify({"ok": False, "error": "Missing registration_no or entry_id"}), 400
         try:
             effective_user = user or "admin"
             effective_password = password or "admin"
             LOGGER.info(
-                "Scan address delete request: trace_id=%s ip=%s registration_no=%s auth_mode=%s",
+                "Scan address delete request: trace_id=%s ip=%s registration_no=%s entry_id=%s auth_mode=%s",
                 trace_id,
                 ip,
                 registration_no,
+                entry_id,
                 "default_admin" if not user and not password else "provided_or_partial",
             )
             target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
             target.user = effective_user
             target.password = effective_password
-            payload = ricoh_service.delete_address_entries(target, [registration_no])
+            payload = ricoh_service.delete_address_entries(target, [registration_no], entry_ids=[entry_id] if entry_id else None)
             LOGGER.info(
                 "Scan address delete success: trace_id=%s ip=%s deleted_count=%s",
                 trace_id,

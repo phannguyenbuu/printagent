@@ -32,6 +32,7 @@ class AddressEntry:
     date_last_used: str
     email_address: str
     folder: str
+    entry_id: str = ""
 
 
 class RicohService:
@@ -1553,9 +1554,12 @@ class RicohService:
             "timestamp": self._timestamp(),
         }
 
-    def delete_address_entries(self, printer: Printer, registration_numbers: list[str]) -> dict[str, Any]:
+    def delete_address_entries(
+        self, printer: Printer, registration_numbers: list[str], entry_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         regs = [str(x or "").strip() for x in registration_numbers if str(x or "").strip()]
-        if not regs:
+        ids = [str(x or "").strip() for x in (entry_ids or []) if str(x or "").strip()]
+        if not regs and not ids:
             raise ValueError("registration_numbers is empty")
 
         session = self.create_http_client(printer)
@@ -1568,7 +1572,7 @@ class RicohService:
             token = self._extract_wim_token(html)
         defaults["wimToken"] = token
 
-        joined = ",".join(regs)
+        joined = ",".join(ids or regs)
         form: list[tuple[str, str]] = [(k, str(v)) for k, v in defaults.items()]
         # Best-effort compatibility across Ricoh model variants.
         for key in (
@@ -1579,9 +1583,11 @@ class RicohService:
             "selectedEntryNoIn",
             "deleteListIn",
             "deleteEntriesIn",
+            "entryIndex",
+            "entryIndexIn",
         ):
             form.append((key, joined))
-            for reg in regs:
+            for reg in (ids or regs):
                 form.append((key, reg))
         form.append(("open", ""))
 
@@ -1595,18 +1601,23 @@ class RicohService:
 
         verify_raw = self.get_address_list_ajax_with_client(session, printer)
         verify_entries = self.parse_ajax_address_list(verify_raw)
-        remain = {str(e.registration_no or "").strip() for e in verify_entries}
-        failed = [reg for reg in regs if reg in remain]
+        if ids:
+            remain = {str(getattr(e, "entry_id", "") or "").strip() for e in verify_entries}
+            failed = [reg for reg in ids if reg in remain]
+        else:
+            remain = {str(e.registration_no or "").strip() for e in verify_entries}
+            failed = [reg for reg in regs if reg in remain]
         if failed:
-            raise RuntimeError(f"Delete not confirmed for registration_no: {', '.join(failed)}")
+            label = "entry_id" if ids else "registration_no"
+            raise RuntimeError(f"Delete not confirmed for {label}: {', '.join(failed)}")
 
         return {
             "printer_name": printer.name,
             "ip": printer.ip,
             "ok": True,
             "endpoint": delete_url,
-            "deleted": regs,
-            "deleted_count": len(regs),
+            "deleted": ids or regs,
+            "deleted_count": len(ids or regs),
             "http_status": resp.status_code,
             "timestamp": self._timestamp(),
         }
@@ -1739,6 +1750,7 @@ class RicohService:
                 date_last_used=last_used.strip("'\""),
                 email_address=fields[6].strip("'\""),
                 folder=fields[7].strip("'\""),
+                entry_id=fields[0].strip("'\""),
             )
             if entry.name or entry.registration_no:
                 entries.append(entry)

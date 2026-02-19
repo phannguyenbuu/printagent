@@ -335,10 +335,11 @@ function renderResultModalScanRows(entries) {
       const reg = row.registration_no || "";
       const name = row.name || "-";
       const userCode = row.user_code || "";
+      const entryId = row.entry_id || "";
       const email = row.email_address || "-";
       const folder = row.folder || "-";
       return `
-        <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}">
+        <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}" data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td class="scan-actions">
             <button class="btn action scan-row-apply" type="button" title="Apply">&#10003;</button>
             <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
@@ -808,11 +809,13 @@ function bindResultModal() {
     const reg = String(row.dataset.registrationNo || "").trim();
     const out = document.getElementById("result-modal-scan-output");
     const ip = String(resultModalState.ip || "").trim();
-    if (!ip || !reg) return;
+    const entryId = String(row.dataset.entryId || "").trim();
+    if (!ip || (!reg && !entryId)) return;
     const btnDelete = event.target.closest(".scan-row-delete");
     const btnApply = event.target.closest(".scan-row-apply");
     if (btnDelete) {
-      if (!window.confirm(`Delete registration_no ${reg}?`)) return;
+      const label = reg || entryId;
+      if (!window.confirm(`Delete registration_no ${label}?`)) return;
       const prevLabel = btnDelete.innerHTML;
       const controls = row.querySelectorAll("button, input");
       controls.forEach((node) => {
@@ -823,7 +826,7 @@ function bindResultModal() {
         const data = await jsonFetch("/api/scan/address-delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ip, registration_no: reg }),
+          body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId }),
         });
         if (out) out.textContent = jsonString(data.payload || data);
         if (row.isConnected) row.remove();
@@ -1233,8 +1236,9 @@ function renderScanAddressRows(entries) {
       const name = row.name || "-";
       const email = row.email_address || "-";
       const folder = row.folder || "-";
+      const entryId = row.entry_id || "";
       return `
-        <tr>
+        <tr data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
           <td>${type}</td>
           <td>${reg}</td>
@@ -1361,8 +1365,10 @@ async function initScanPage() {
       const btn = event.target.closest(".scan-delete-btn");
       if (!btn) return;
       const registrationNo = String(btn.dataset.registrationNo || "").trim();
-      if (!registrationNo) return;
-      if (!window.confirm(`Delete registration_no ${registrationNo}?`)) return;
+      const entryId = String(btn.closest("tr")?.dataset.entryId || "").trim();
+      if (!registrationNo && !entryId) return;
+      const label = registrationNo || entryId;
+      if (!window.confirm(`Delete registration_no ${label}?`)) return;
       const target = getScanTarget();
       if (!target.ip) {
         if (out) out.textContent = "Missing printer IP";
@@ -1372,7 +1378,7 @@ async function initScanPage() {
         const data = await jsonFetch("/api/scan/address-delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...target, registration_no: registrationNo }),
+          body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId }),
         });
         if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
         await loadScanAddressList();
