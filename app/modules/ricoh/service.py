@@ -93,6 +93,7 @@ class RicohService:
             ts = datetime.now(timezone.utc).isoformat()
             with ADDRESS_DEBUG_LOG_FILE.open("a", encoding="utf-8") as fp:
                 fp.write(f"[{ts}] {message}\n")
+            LOGGER.info("address_debug %s", message)
         except Exception:  # noqa: BLE001
             return
 

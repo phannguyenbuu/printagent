@@ -122,6 +122,14 @@ body {
 
 .btn:disabled {
   cursor: not-allowed;
+  opacity: 0.55;
+  filter: grayscale(0.2);
+}
+
+.btn.action:disabled,
+.btn.action.alt:disabled {
+  background: #cbd5e1;
+  color: #6b7280;
 }
 
 .btn.ghost {
