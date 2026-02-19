@@ -307,6 +307,20 @@ class RicohService:
         resp.raise_for_status()
         if "login.cgi" in resp.text or "Login User Name" in resp.text or "authForm.cgi" in resp.text:
             raise RuntimeError("login failed; " + "; ".join(errors))
+        self._warmup_address_context(session, printer)
+
+    def _warmup_address_context(self, session: requests.Session, printer: Printer) -> None:
+        base_url = f"http://{printer.ip}"
+        urls = [
+            "/web/entry/en/websys/webArch/mainFrame.cgi?open=websys/easySecurity/getEasySecurity.cgi",
+            "/web/entry/en/websys/easySecurity/getEasySecurity.cgi",
+            "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
+        ]
+        for target in urls:
+            try:
+                session.get(urljoin(base_url, target), timeout=10).raise_for_status()
+            except Exception:  # noqa: BLE001
+                continue
 
     def create_http_client(self, printer: Printer) -> requests.Session:
         session = requests.Session()
@@ -324,6 +338,12 @@ class RicohService:
         html = response.text
         if ("authForm.cgi" in html or "login.cgi" in html) and printer.user:
             self._login(session, printer)
+            response = session.get(full_url, timeout=10)
+            response.raise_for_status()
+            html = response.text
+        # Some models require EasySecurity/mainFrame context before address pages are accessible.
+        if "PERMISSION_E" in html and printer.user:
+            self._warmup_address_context(session, printer)
             response = session.get(full_url, timeout=10)
             response.raise_for_status()
             html = response.text
