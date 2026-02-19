@@ -363,7 +363,6 @@ function renderResultModalScanRows(entries) {
   }
   body.innerHTML = rows
     .map((row) => {
-      const type = row.type || "-";
       const reg = row.registration_no || "";
       const name = row.name || "-";
       const userCode = row.user_code || "";
@@ -376,11 +375,10 @@ function renderResultModalScanRows(entries) {
             <button class="btn action scan-row-apply" type="button" title="Apply">&#10003;</button>
             <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
           </td>
-          <td><input class="scan-inline-input" data-field="type" value="${String(type).replaceAll('"', "&quot;")}" readonly /></td>
-          <td><input class="scan-inline-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
           <td><input class="scan-inline-input" data-field="name" value="${String(name).replaceAll('"', "&quot;")}" /></td>
-          <td><input class="scan-inline-input" data-field="email" value="${String(email).replaceAll('"', "&quot;")}" /></td>
           <td><input class="scan-inline-input" data-field="folder" value="${String(folder).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input" data-field="email" value="${String(email).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input scan-reg-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
         </tr>
       `;
     })
@@ -1269,7 +1267,6 @@ function renderScanAddressRows(entries) {
   }
   body.innerHTML = rows
     .map((row) => {
-      const type = row.type || "-";
       const reg = row.registration_no || "";
       const name = row.name || "-";
       const email = row.email_address || "-";
@@ -1278,11 +1275,10 @@ function renderScanAddressRows(entries) {
       return `
         <tr data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
-          <td>${type}</td>
-          <td>${reg}</td>
           <td>${name}</td>
-          <td>${email}</td>
           <td>${folder}</td>
+          <td>${email}</td>
+          <td class="col-reg-no">${reg}</td>
         </tr>
       `;
     })
