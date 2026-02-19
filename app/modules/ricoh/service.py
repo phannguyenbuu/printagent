@@ -1567,7 +1567,7 @@ class RicohService:
             raise ValueError("registration_numbers is empty")
 
         session = self.create_http_client(printer)
-        list_url = "/web/entry/en/address/adrsList.cgi"
+        list_url = "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL"
         delete_url = "/web/entry/en/address/adrsDeleteEntries.cgi"
         html = self.authenticate_and_get(session, printer, list_url)
         defaults = self._extract_hidden_inputs(html)
@@ -1576,24 +1576,32 @@ class RicohService:
             token = self._extract_wim_token(html)
         defaults["wimToken"] = token
 
-        joined = ",".join(ids or regs)
         form: list[tuple[str, str]] = [(k, str(v)) for k, v in defaults.items()]
-        # Best-effort compatibility across Ricoh model variants.
-        for key in (
-            "regiNoListIn",
-            "registrationNoListIn",
-            "entryNoListIn",
-            "selectedRegiNoIn",
-            "selectedEntryNoIn",
-            "deleteListIn",
-            "deleteEntriesIn",
-            "entryIndex",
-            "entryIndexIn",
-        ):
-            form.append((key, joined))
-            for reg in (ids or regs):
-                form.append((key, reg))
-        form.append(("open", ""))
+        if ids:
+            joined = ",".join(ids)
+            if joined and not joined.endswith(","):
+                joined = f"{joined},"
+            # Align with Ricoh JS: entryIndex list + wimToken only.
+            form.append(("entryIndex", joined))
+            form.append(("entryIndexIn", joined))
+        else:
+            joined = ",".join(regs)
+            # Best-effort compatibility across Ricoh model variants.
+            for key in (
+                "regiNoListIn",
+                "registrationNoListIn",
+                "entryNoListIn",
+                "selectedRegiNoIn",
+                "selectedEntryNoIn",
+                "deleteListIn",
+                "deleteEntriesIn",
+                "entryIndex",
+                "entryIndexIn",
+            ):
+                form.append((key, joined))
+                for reg in regs:
+                    form.append((key, reg))
+            form.append(("open", ""))
 
         resp = session.post(
             f"http://{printer.ip}{delete_url}",
