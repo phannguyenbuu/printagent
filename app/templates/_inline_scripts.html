@@ -587,6 +587,24 @@ function getScanTarget() {
   return { ip, user, password };
 }
 
+async function ensureScanTargetDefaults() {
+  const ipInput = document.getElementById("scan-ip");
+  const userInput = document.getElementById("scan-user");
+  if (!ipInput) return;
+  if (String(ipInput.value || "").trim()) return;
+  try {
+    const cfg = await jsonFetch("/api/dashboard/config");
+    const testIp = String(cfg?.env?.TEST_IP || "").trim();
+    const testUser = String(cfg?.env?.TEST_USER || "").trim();
+    if (testIp) ipInput.value = testIp;
+    if (userInput && !String(userInput.value || "").trim() && testUser) {
+      userInput.value = testUser;
+    }
+  } catch (_err) {
+    // Keep manual input flow if config is unavailable.
+  }
+}
+
 function renderScanAddressRows(entries) {
   const body = document.getElementById("scan-address-table-body");
   if (!body) return;
@@ -742,6 +760,17 @@ async function initScanPage() {
         if (out) out.textContent = String(err?.message || err);
       }
     });
+  }
+
+  // Auto-load once on page open so user does not need to click "Load Address List".
+  if (!targetForm.dataset.autoLoaded) {
+    targetForm.dataset.autoLoaded = "1";
+    try {
+      await ensureScanTargetDefaults();
+      await loadScanAddressList();
+    } catch (err) {
+      if (out) out.textContent = String(err?.message || err);
+    }
   }
 }
 
