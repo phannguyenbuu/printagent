@@ -644,7 +644,7 @@ async function loadDevices(forceRefresh = false) {
   if (!body) return;
   body.innerHTML = `
     <tr>
-      <td colspan="8">
+      <td colspan="6">
         <div class="table-loading">
           <span class="spinner"></span>
           <span>Loading printers...</span>
@@ -681,24 +681,15 @@ async function loadDevices(forceRefresh = false) {
   }
   const devices = Array.from(dedupMap.values());
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
     .map((d) => {
       const hasIp = Boolean(d.ip);
-      const isRicoh = String(d.type || "").toLowerCase() === "ricoh";
-      const canQuery = hasIp && isRicoh;
-      const isControllableSource = ["api", "test"].includes(String(d.source || "").toLowerCase());
-      const canMachineControl = canQuery && isControllableSource;
+      const canQuery = hasIp;
       return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
-        <td>
-          <label class="mini-switch">
-            <input type="checkbox" data-row-checker="enable" data-machine-control="${canMachineControl ? "1" : "0"}" data-ip="${d.ip || ""}" checked />
-            <span class="mini-slider"></span>
-          </label>
-        </td>
         <td>
           <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
         </td>
@@ -707,12 +698,6 @@ async function loadDevices(forceRefresh = false) {
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
         <td>${d.source || "-"}</td>
-        <td>
-          <label class="mini-switch">
-            <input type="checkbox" data-row-checker="counter" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"} />
-            <span class="mini-slider"></span>
-          </label>
-        </td>
       </tr>`;
     })
     .join("");
@@ -754,63 +739,6 @@ async function loadDevices(forceRefresh = false) {
       showResultModal(finalTitle, dataView);
     });
   });
-
-  const rowCheckerInputs = body.querySelectorAll("input[data-row-checker][data-ip]");
-  const ipSet = new Set();
-  rowCheckerInputs.forEach((inp) => {
-    const ip = inp.dataset.ip || "";
-    if (ip) ipSet.add(ip);
-    if (inp.dataset.bound) return;
-    inp.dataset.bound = "1";
-    inp.addEventListener("change", async () => {
-      const isChecked = inp.checked;
-      const kind = inp.dataset.rowChecker;
-      const row = inp.closest("tr");
-      if (!ip) {
-        if (kind === "enable") setRowEnabled(row, isChecked);
-        return;
-      }
-      const canMachineControl = inp.dataset.machineControl === "1";
-      if (kind === "enable" && !canMachineControl) {
-        setRowEnabled(row, isChecked);
-        return;
-      }
-      let action = "";
-      if (kind === "enable") action = isChecked ? "enable_machine" : "lock_machine";
-      if (kind === "counter") action = isChecked ? "log_counter_start" : "log_counter_stop";
-      if (!action) return;
-      const result = await runAction(ip, action);
-      if (!result.ok) {
-        inp.checked = !isChecked;
-        return;
-      }
-      if (kind === "enable") {
-        if (!isChecked) {
-          const counterInp = row?.querySelector('input[data-row-checker="counter"]');
-          if (counterInp) counterInp.checked = false;
-        }
-        setRowEnabled(row, isChecked);
-      }
-    });
-  });
-
-  body.querySelectorAll('input[data-row-checker="enable"]').forEach((enableInput) => {
-    setRowEnabled(enableInput.closest("tr"), !enableInput.disabled && enableInput.checked);
-  });
-
-  for (const ip of ipSet) {
-    try {
-      const st = await runAction(ip, "job_status", { silent: true });
-      const counterOn = Boolean(st.counter_running);
-      const e = body.querySelector(`input[data-row-checker="enable"][data-ip="${ip}"]`);
-      const c = body.querySelector(`input[data-row-checker="counter"][data-ip="${ip}"]`);
-      if (e) {
-        e.checked = true;
-        setRowEnabled(e.closest("tr"), true);
-      }
-      if (c) c.checked = counterOn;
-    } catch (_e) {}
-  }
 
   applyValidPrinterFilter();
 }
