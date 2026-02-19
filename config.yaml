@@ -22,7 +22,7 @@ webhook:
   listen_path: "/api/update/receive-text"
 
 polling:
-  enabled: true
+  enabled: false
   url: "http://31.97.76.62:8005/api/polling"
   lead: "default"
   token: "change-me"

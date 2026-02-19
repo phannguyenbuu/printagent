@@ -44,7 +44,7 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
         "UPDATE_WEBHOOK_TOKEN_SET": "yes" if bool(updater.webhook_token) else "no",
         "TEST_IP": config.get_string("test.ip"),
         "TEST_USER": config.get_string("test.user"),
-        "POLLING_ENABLED": str(config.get_bool("polling.enabled", True)).lower(),
+        "POLLING_ENABLED": str(config.get_bool("polling.enabled", False)).lower(),
         "POLLING_URL": config.get_string("polling.url"),
         "POLLING_LEAD": config.get_string("polling.lead"),
         "POLLING_TOKEN": config.get_string("polling.token"),

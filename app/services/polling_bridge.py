@@ -117,7 +117,7 @@ class PollingBridge:
         return self._config.get_bool("polling.scan_recursive", True)
 
     def start(self) -> tuple[bool, str]:
-        if not self._config.get_bool("polling.enabled", True):
+        if not self._config.get_bool("polling.enabled", False):
             LOGGER.info("Polling bridge disabled by config polling.enabled=false")
             return False, "Polling disabled"
         if not self.is_configured():
@@ -161,7 +161,7 @@ class PollingBridge:
         return {
             "configured": self.is_configured(),
             "config_issues": issues,
-            "enabled": self._config.get_bool("polling.enabled", True),
+            "enabled": self._config.get_bool("polling.enabled", False),
             "running": bool(self._thread and self._thread.is_alive()),
             "interval_seconds": self.interval_seconds(),
             "url": self._config.get_string("polling.url"),
@@ -797,6 +797,12 @@ if ($r) { $r }
                         ack.get("skipped_counter", "?"),
                         ack.get("skipped_status", "?"),
                     )
+                    # Requested flow: after polling returns data, immediately logout/reset printer web session.
+                    try:
+                        self._ricoh_service.reset_web_session(printer)
+                        LOGGER.info("Polling logout: name=%s ip=%s ok=true", printer.name, printer.ip)
+                    except Exception as logout_exc:  # noqa: BLE001
+                        LOGGER.info("Polling logout: name=%s ip=%s ok=false error=%s", printer.name, printer.ip, logout_exc)
                 except Exception as exc:  # noqa: BLE001
                     self._last_cycle_failed += 1
                     self._last_error = str(exc)

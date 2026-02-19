@@ -123,30 +123,55 @@ class RicohService:
         return payload
 
     def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html = self.read_status(printer)
-        payload = {
-            "printer_name": printer.name,
-            "ip": printer.ip,
-            "html": html,
-            "status_data": self.parse_status(html),
-            "timestamp": self._timestamp(),
-        }
-        if should_post:
-            self.api_client.post_data(payload)
-        return payload
+        try:
+            html = self.read_status(printer)
+            payload = {
+                "printer_name": printer.name,
+                "ip": printer.ip,
+                "html": html,
+                "status_data": self.parse_status(html),
+                "timestamp": self._timestamp(),
+            }
+            if should_post:
+                self.api_client.post_data(payload)
+            return payload
+        finally:
+            self._logout_after_collect(printer, source="status")
 
     def process_counter(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html = self.read_counter(printer)
-        payload = {
-            "printer_name": printer.name,
-            "ip": printer.ip,
-            "html": html,
-            "counter_data": self.parse_counter(html),
-            "timestamp": self._timestamp(),
-        }
-        if should_post:
-            self.api_client.post_data(payload)
-        return payload
+        try:
+            html = self.read_counter(printer)
+            payload = {
+                "printer_name": printer.name,
+                "ip": printer.ip,
+                "html": html,
+                "counter_data": self.parse_counter(html),
+                "timestamp": self._timestamp(),
+            }
+            if should_post:
+                self.api_client.post_data(payload)
+            return payload
+        finally:
+            self._logout_after_collect(printer, source="counter")
+
+    def _logout_after_collect(self, printer: Printer, source: str = "") -> None:
+        # Best-effort cleanup requested by user flow: logout/reset right after each counter/status collect.
+        try:
+            self.reset_web_session(printer)
+            LOGGER.info(
+                "Logout after %s collect: name=%s ip=%s ok=true",
+                source or "unknown",
+                printer.name,
+                printer.ip,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.info(
+                "Logout after %s collect: name=%s ip=%s ok=false error=%s",
+                source or "unknown",
+                printer.name,
+                printer.ip,
+                exc,
+            )
 
     @staticmethod
     def parse_device_info(html: str) -> dict[str, str]:
