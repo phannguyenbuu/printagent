@@ -113,6 +113,7 @@ const resultModalState = {
   protocol: "",
   isolated: false,
 };
+let devicesPollingStatusTimer = null;
 
 function setResultModalView(tab) {
   const summaryBtn = document.getElementById("result-modal-tab-summary");
@@ -461,6 +462,37 @@ async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
   return data.payload || {};
 }
 
+async function loadCounterStatusForModal() {
+  const ip = String(resultModalState.ip || "").trim();
+  if (!ip) return;
+  const [counterSettled, statusSettled] = await Promise.allSettled([
+    runAction(ip, "counter", { silent: true }),
+    runAction(ip, "status", { silent: true }),
+  ]);
+  const counterResult =
+    counterSettled.status === "fulfilled"
+      ? counterSettled.value
+      : { ok: false, error: String(counterSettled.reason || "counter failed") };
+  const statusResult =
+    statusSettled.status === "fulfilled"
+      ? statusSettled.value
+      : { ok: false, error: String(statusSettled.reason || "status failed") };
+  if (!counterResult.ok && !statusResult.ok) {
+    throw new Error(counterResult.error || statusResult.error || "Counter/Status failed");
+  }
+  const counterPayload = counterResult.payload || {};
+  const statusPayload = statusResult.payload || {};
+  resultModalState.counterPayload = {
+    printer_name: counterPayload.printer_name || statusPayload.printer_name || resultModalState.printerName || "Local Printer",
+    ip: counterPayload.ip || statusPayload.ip || ip,
+    timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
+    counter_data: counterPayload.counter_data || {},
+    status_data: statusPayload.status_data || {},
+    html: counterPayload.html || "",
+  };
+  return resultModalState.counterPayload;
+}
+
 async function ensureScanIsolationForModal() {
   if (resultModalState.isolated) return;
   const ip = String(resultModalState.ip || "").trim();
@@ -471,6 +503,7 @@ async function ensureScanIsolationForModal() {
     body: JSON.stringify({ ip }),
   });
   resultModalState.isolated = true;
+  loadDevicesPollingStatus().catch(() => {});
 }
 
 async function releaseScanIsolationForModal() {
@@ -479,6 +512,7 @@ async function releaseScanIsolationForModal() {
     await jsonFetch("/api/scan/release-session", { method: "POST" });
   } finally {
     resultModalState.isolated = false;
+    loadDevicesPollingStatus().catch(() => {});
   }
 }
 
@@ -618,9 +652,57 @@ function bindResultModal() {
   closeBtn.addEventListener("click", close);
   summaryBtn.addEventListener("click", () => {
     setResultModalView("summary");
+    const current = resultModalState.counterPayload || {};
+    const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+    if (!hasData) {
+      releaseScanIsolationForModal()
+        .catch(() => {})
+        .then(() => loadCounterStatusForModal())
+        .then((payload) => {
+          const counterBody = document.getElementById("result-modal-counter-body");
+          const htmlBtn = document.getElementById("result-modal-tab-html");
+          const htmlFrame = document.getElementById("result-modal-counter-html");
+          if (counterBody) counterBody.textContent = formatCounterResult(payload);
+          const htmlPreview = buildCounterHtmlPreview(payload);
+          if (htmlBtn) {
+            htmlBtn.dataset.enabled = htmlPreview ? "1" : "0";
+            htmlBtn.disabled = !htmlPreview;
+          }
+          if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+        })
+        .catch((err) => {
+          const counterBody = document.getElementById("result-modal-counter-body");
+          if (counterBody) counterBody.textContent = String(err?.message || err);
+        });
+    }
   });
   htmlBtn.addEventListener("click", () => {
     setResultModalView("html");
+    const current = resultModalState.counterPayload || {};
+    const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+    if (!hasData) {
+      releaseScanIsolationForModal()
+        .catch(() => {})
+        .then(() => loadCounterStatusForModal())
+        .then((payload) => {
+          const counterBody = document.getElementById("result-modal-counter-body");
+          const htmlTopBtn = document.getElementById("result-modal-tab-html");
+          const htmlFrame = document.getElementById("result-modal-counter-html");
+          if (counterBody) counterBody.textContent = formatCounterResult(payload);
+          const htmlPreview = buildCounterHtmlPreview(payload);
+          if (htmlTopBtn) {
+            htmlTopBtn.dataset.enabled = htmlPreview ? "1" : "0";
+            htmlTopBtn.disabled = !htmlPreview;
+          }
+          if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+          setResultModalView("html");
+        })
+        .catch((err) => {
+          const counterBody = document.getElementById("result-modal-counter-body");
+          if (counterBody) counterBody.textContent = String(err?.message || err);
+          setResultModalView("summary");
+        });
+    }
   });
   scanTabBtn.addEventListener("click", async () => {
     setResultModalView("scan");
@@ -752,6 +834,57 @@ function getDeviceFilterMode() {
   return validOnlyInput?.checked ? "valid_only" : "all";
 }
 
+function renderDevicesPollingStatus(status, errorText = "") {
+  const badge = document.getElementById("devices-polling-status");
+  if (!badge) return;
+  badge.classList.remove("ok", "warn", "off", "loading");
+  if (errorText) {
+    badge.classList.add("warn");
+    badge.textContent = "Polling: error";
+    badge.title = errorText;
+    return;
+  }
+  const running = Boolean(status?.running);
+  if (running) {
+    badge.classList.add("ok");
+    badge.textContent = "Polling: ON";
+  } else {
+    badge.classList.add("off");
+    badge.textContent = "Polling: OFF";
+  }
+  const interval = Number(status?.interval_seconds || 0);
+  const lastCycle = String(status?.last_cycle_at || "").trim();
+  badge.title = `running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
+}
+
+async function loadDevicesPollingStatus() {
+  const badge = document.getElementById("devices-polling-status");
+  if (!badge) return;
+  if (!badge.textContent || badge.textContent.includes("checking")) {
+    badge.classList.remove("ok", "warn", "off");
+    badge.classList.add("loading");
+    badge.textContent = "Polling: checking...";
+  }
+  try {
+    const data = await jsonFetch("/api/polling/status");
+    renderDevicesPollingStatus(data || {});
+  } catch (err) {
+    renderDevicesPollingStatus(null, String(err?.message || err));
+  }
+}
+
+function startDevicesPollingStatusLoop() {
+  if (!document.getElementById("devices-polling-status")) return;
+  if (devicesPollingStatusTimer) {
+    clearInterval(devicesPollingStatusTimer);
+    devicesPollingStatusTimer = null;
+  }
+  loadDevicesPollingStatus().catch(() => {});
+  devicesPollingStatusTimer = setInterval(() => {
+    loadDevicesPollingStatus().catch(() => {});
+  }, 5000);
+}
+
 function isValidPrinterName(name) {
   const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
   const lowered = String(name || "").trim().toLowerCase();
@@ -841,34 +974,18 @@ async function loadDevices(forceRefresh = false) {
       resultModalState.printerName = printerName;
       resultModalState.scanLoadedIp = "";
       resultModalState.isolated = false;
-      showResultModalLoading(baseTitle, "Loading counter and status...");
-      const [counterSettled, statusSettled] = await Promise.allSettled([
-        runAction(selectedIp, "counter", { silent: true }),
-        runAction(selectedIp, "status", { silent: true }),
-      ]);
-      const counterResult = counterSettled.status === "fulfilled" ? counterSettled.value : { ok: false, error: String(counterSettled.reason || "counter failed") };
-      const statusResult = statusSettled.status === "fulfilled" ? statusSettled.value : { ok: false, error: String(statusSettled.reason || "status failed") };
+      showResultModalLoading(baseTitle, "Opening scan...");
       const modal = document.getElementById("result-modal");
       if (!modal || modal.hidden) return;
-      if (!counterResult.ok && !statusResult.ok) {
-        showResultModalError(
-          baseTitle,
-          counterResult.error || statusResult.error || "Request failed"
-        );
-        return;
-      }
-      const counterPayload = counterResult.payload || {};
-      const statusPayload = statusResult.payload || {};
       const dataView = {
-        printer_name: counterPayload.printer_name || statusPayload.printer_name || "Local Printer",
-        ip: counterPayload.ip || statusPayload.ip || selectedIp || "",
-        timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
-        counter_data: counterPayload.counter_data || {},
-        status_data: statusPayload.status_data || {},
-        html: counterPayload.html || "",
+        printer_name: printerName || "Local Printer",
+        ip: selectedIp || "",
+        timestamp: "",
+        counter_data: {},
+        status_data: {},
+        html: "",
       };
-      const timestamp = dataView.timestamp || "-";
-      const finalTitle = `${baseTitle} [${timestamp}]`;
+      const finalTitle = `${baseTitle}`;
       showResultModal(finalTitle, dataView);
     });
   });
@@ -878,6 +995,7 @@ async function loadDevices(forceRefresh = false) {
 
 async function initDevicesPage() {
   bindResultModal();
+  startDevicesPollingStatusLoop();
   const validOnlyInput = document.getElementById("valid-printer-only");
   if (validOnlyInput && !validOnlyInput.dataset.bound) {
     validOnlyInput.dataset.bound = "1";

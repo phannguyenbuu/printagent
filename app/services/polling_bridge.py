@@ -147,6 +147,13 @@ class PollingBridge:
     def stop(self) -> None:
         self._stop_event.set()
         self._save_scan_upload_state()
+        try:
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=3)
+            if self._scan_thread and self._scan_thread.is_alive():
+                self._scan_thread.join(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
         LOGGER.info("Polling bridge stop requested")
 
     def status(self) -> dict[str, object]:
