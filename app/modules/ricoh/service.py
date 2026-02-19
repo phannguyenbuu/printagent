@@ -1603,9 +1603,11 @@ class RicohService:
                     form.append((key, reg))
             form.append(("open", ""))
 
+        # Use multipart form to mirror Ricoh JS delete flow.
+        multipart = [(k, (None, str(v))) for k, v in form]
         resp = session.post(
             f"http://{printer.ip}{delete_url}",
-            data=form,
+            files=multipart,
             headers={"Referer": f"http://{printer.ip}{list_url}"},
             timeout=15,
         )
