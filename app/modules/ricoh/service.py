@@ -708,56 +708,118 @@ class RicohService:
             if not token:
                 token = self._extract_wim_token(list_html)
 
-            direct_form: dict[str, str] = {
+            base_form: dict[str, str] = {
                 "wimToken": token,
                 "entryTypeIn": "1",
                 "modeIn": "ADD",
-                "nameIn": str(name or "").strip(),
-                "emailAddressIn": str(email or "").strip(),
-                "folderPathIn": str(folder or "").strip(),
-                "userCodeIn": str(user_code or "").strip(),
                 "open": "",
+                "title": "",
             }
             if fields and isinstance(fields, dict):
                 for k, v in fields.items():
                     key = str(k or "").strip()
                     if not key:
                         continue
-                    direct_form[key] = "" if v is None else str(v)
+                    base_form[key] = "" if v is None else str(v)
 
-            direct_resp = session.post(
+            # Some Ricoh models use different field names in set endpoint.
+            field_variants: list[dict[str, str]] = [
+                {
+                    "nameIn": str(name or "").strip(),
+                    "emailAddressIn": str(email or "").strip(),
+                    "folderPathIn": str(folder or "").strip(),
+                    "userCodeIn": str(user_code or "").strip(),
+                },
+                {
+                    "userNameIn": str(name or "").strip(),
+                    "emailIn": str(email or "").strip(),
+                    "folderIn": str(folder or "").strip(),
+                    "userCode": str(user_code or "").strip(),
+                },
+                {
+                    "displayNameIn": str(name or "").strip(),
+                    "mailAddressIn": str(email or "").strip(),
+                    "pathIn": str(folder or "").strip(),
+                    "codeIn": str(user_code or "").strip(),
+                },
+            ]
+            referer_candidates = [
+                f"http://{printer.ip}{list_url}",
+                f"http://{printer.ip}/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=ADD&entryTypeIn=1",
+                f"http://{printer.ip}/web/entry/en/address/adrsGetUserWizard.cgi",
+                f"http://{printer.ip}/web/guest/en/address/adrsGetUserWizard.cgi?modeIn=ADD&entryTypeIn=1",
+                f"http://{printer.ip}/web/guest/en/address/adrsGetUserWizard.cgi",
+            ]
+            post_targets = [
                 f"http://{printer.ip}{set_url}",
-                data=direct_form,
-                headers={"Referer": f"http://{printer.ip}{list_url}"},
-                timeout=15,
+                f"http://{printer.ip}/web/guest/en/address/adrsSetUserWizard.cgi",
+            ]
+
+            attempt_errors: list[str] = []
+            for post_url in post_targets:
+                for referer in referer_candidates:
+                    for variant in field_variants:
+                        direct_form = dict(base_form)
+                        direct_form.update(variant)
+                        try:
+                            resp = session.post(
+                                post_url,
+                                data=direct_form,
+                                headers={"Referer": referer},
+                                timeout=15,
+                            )
+                            text = resp.text or ""
+                            if resp.status_code >= 400:
+                                attempt_errors.append(
+                                    f"status={resp.status_code} post={post_url} referer={referer} excerpt={text[:120]}"
+                                )
+                                continue
+                            if "login.cgi" in text or "authForm.cgi" in text:
+                                attempt_errors.append(f"login_redirect post={post_url} referer={referer}")
+                                continue
+
+                            verify_raw = ""
+                            verify_entries: list[AddressEntry] = []
+                            try:
+                                verify_raw = self.get_address_list_ajax_with_client(session, printer)
+                                verify_entries = self.parse_ajax_address_list(verify_raw)
+                            except Exception:  # noqa: BLE001
+                                verify_raw = ""
+                                verify_entries = []
+
+                            name_norm = str(name or "").strip().lower()
+                            created = next(
+                                (
+                                    e
+                                    for e in verify_entries
+                                    if str(e.name or "").strip().lower() == name_norm
+                                ),
+                                None,
+                            )
+
+                            return {
+                                "printer_name": printer.name,
+                                "ip": printer.ip,
+                                "ok": True,
+                                "endpoint": post_url.replace(f"http://{printer.ip}", ""),
+                                "name": str(name or "").strip(),
+                                "http_status": resp.status_code,
+                                "response_excerpt": text[:600],
+                                "verify_count": len(verify_entries),
+                                "created_registration_no": str(created.registration_no) if created else "",
+                                "fallback_mode": "direct_set_from_list",
+                                "timestamp": self._timestamp(),
+                            }
+                        except Exception as exc:  # noqa: BLE001
+                            attempt_errors.append(
+                                f"post={post_url} referer={referer} error={type(exc).__name__}:{exc}"
+                            )
+                            continue
+
+            raise RuntimeError(
+                "direct create fallback failed; "
+                + " | ".join(attempt_errors[-8:])
             )
-            direct_resp.raise_for_status()
-            direct_text = direct_resp.text
-            if "login.cgi" in direct_text or "authForm.cgi" in direct_text:
-                raise RuntimeError("direct create fallback redirected to login page")
-
-            verify_raw = ""
-            verify_count = 0
-            try:
-                verify_raw = self.get_address_list_ajax_with_client(session, printer)
-                parsed = self.parse_ajax_address_list(verify_raw)
-                verify_count = len(parsed)
-            except Exception:  # noqa: BLE001
-                verify_raw = ""
-                verify_count = 0
-
-            return {
-                "printer_name": printer.name,
-                "ip": printer.ip,
-                "ok": True,
-                "endpoint": set_url,
-                "name": str(name or "").strip(),
-                "http_status": direct_resp.status_code,
-                "response_excerpt": direct_resp.text[:600],
-                "verify_count": verify_count,
-                "fallback_mode": "direct_set_from_list",
-                "timestamp": self._timestamp(),
-            }
 
         defaults = self._extract_hidden_inputs(html)
         token = defaults.get("wimToken", "")
