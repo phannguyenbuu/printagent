@@ -669,6 +669,16 @@ class RicohService:
                 wizard_referer = f"http://{printer.ip}{get_wizard_url}"
                 wizard_url = f"http://{printer.ip}{get_wizard_url}"
                 set_full_url = f"http://{printer.ip}{set_url}"
+                LOGGER.info(
+                    "Address create wizard(start): ip=%s name=%s has_email=%s has_folder=%s has_user_code=%s token=%s list_url=%s",
+                    printer.ip,
+                    str(name or "").strip(),
+                    bool(str(email or "").strip()),
+                    bool(str(folder or "").strip()),
+                    bool(str(user_code or "").strip()),
+                    bool(list_token_ctx),
+                    list_url_ctx or "-",
+                )
 
                 open_resp = session.post(
                     wizard_url,
@@ -681,6 +691,12 @@ class RicohService:
                     timeout=15,
                 )
                 open_resp.raise_for_status()
+                LOGGER.info(
+                    "Address create wizard(open): ip=%s status=%s referer=%s",
+                    printer.ip,
+                    open_resp.status_code,
+                    list_referer,
+                )
 
                 next_index = "00001"
                 try:
@@ -695,6 +711,7 @@ class RicohService:
                         next_index = f"{max(nums) + 1:05d}"
                 except Exception:  # noqa: BLE001
                     next_index = "00001"
+                LOGGER.info("Address create wizard(index): ip=%s next_index=%s", printer.ip, next_index)
 
                 base_resp = session.post(
                     set_full_url,
@@ -711,6 +728,7 @@ class RicohService:
                     timeout=15,
                 )
                 base_resp.raise_for_status()
+                LOGGER.info("Address create wizard(step=BASE): ip=%s status=%s", printer.ip, base_resp.status_code)
 
                 step_list = ["BASE"]
                 if str(email or "").strip():
@@ -727,6 +745,9 @@ class RicohService:
                     )
                     mail_resp.raise_for_status()
                     step_list.append("MAIL")
+                    LOGGER.info("Address create wizard(step=MAIL): ip=%s status=%s", printer.ip, mail_resp.status_code)
+                else:
+                    LOGGER.info("Address create wizard(step=MAIL): ip=%s skipped=yes", printer.ip)
 
                 if str(folder or "").strip():
                     folder_resp = session.post(
@@ -750,6 +771,14 @@ class RicohService:
                     )
                     folder_resp.raise_for_status()
                     step_list.append("FOLDER")
+                    LOGGER.info(
+                        "Address create wizard(step=FOLDER): ip=%s status=%s folder=%s",
+                        printer.ip,
+                        folder_resp.status_code,
+                        str(folder or "").strip(),
+                    )
+                else:
+                    LOGGER.info("Address create wizard(step=FOLDER): ip=%s skipped=yes", printer.ip)
 
                 confirm_form: list[tuple[str, str]] = [("wimToken", list_token_ctx)]
                 for step_name in step_list:
@@ -762,6 +791,12 @@ class RicohService:
                     timeout=15,
                 )
                 confirm_resp.raise_for_status()
+                LOGGER.info(
+                    "Address create wizard(step=CONFIRM): ip=%s status=%s step_list=%s",
+                    printer.ip,
+                    confirm_resp.status_code,
+                    ",".join(step_list),
+                )
 
                 verify_raw = ""
                 verify_entries: list[AddressEntry] = []
@@ -779,6 +814,86 @@ class RicohService:
                     ),
                     None,
                 )
+                LOGGER.info(
+                    "Address create wizard(verify): ip=%s verify_entries=%s created_reg=%s",
+                    printer.ip,
+                    len(verify_entries),
+                    str(created.registration_no) if created else "",
+                )
+
+                auto_updated = False
+                auto_update_error = ""
+                if created and str(created.registration_no or "").strip():
+                    need_email = bool(str(email or "").strip()) and str(created.email_address or "").strip() in {"", "-", "---"}
+                    need_folder = bool(str(folder or "").strip()) and str(created.folder or "").strip() in {"", "-", "---"}
+                    LOGGER.info(
+                        "Address create wizard(auto-update-check): ip=%s reg=%s need_email=%s need_folder=%s current_email=%s current_folder=%s",
+                        printer.ip,
+                        str(created.registration_no or "").strip(),
+                        need_email,
+                        need_folder,
+                        str(created.email_address or ""),
+                        str(created.folder or ""),
+                    )
+                    if need_email or need_folder:
+                        try:
+                            self.modify_address_user_wizard(
+                                printer=printer,
+                                registration_no=str(created.registration_no).strip(),
+                                name=str(name or "").strip(),
+                                email=str(email or "").strip(),
+                                folder=str(folder or "").strip(),
+                                user_code=str(user_code or "").strip(),
+                                fields=fields if isinstance(fields, dict) else None,
+                            )
+                            auto_updated = True
+                            LOGGER.info(
+                                "Address create wizard(auto-update): ip=%s reg=%s status=success",
+                                printer.ip,
+                                str(created.registration_no or "").strip(),
+                            )
+                            try:
+                                verify_raw = self.get_address_list_ajax_with_client(session, printer)
+                                verify_entries = self.parse_ajax_address_list(verify_raw)
+                                created = next(
+                                    (
+                                        e
+                                        for e in verify_entries
+                                        if str(e.registration_no or "").strip() == str(created.registration_no).strip()
+                                    ),
+                                    created,
+                                )
+                                LOGGER.info(
+                                    "Address create wizard(auto-update-verify): ip=%s reg=%s email=%s folder=%s verify_entries=%s",
+                                    printer.ip,
+                                    str(created.registration_no or "").strip(),
+                                    str(created.email_address or ""),
+                                    str(created.folder or ""),
+                                    len(verify_entries),
+                                )
+                            except Exception:  # noqa: BLE001
+                                LOGGER.exception(
+                                    "Address create wizard(auto-update-verify): ip=%s reg=%s status=error",
+                                    printer.ip,
+                                    str(created.registration_no or "").strip(),
+                                )
+                                pass
+                        except Exception as exc:  # noqa: BLE001
+                            auto_update_error = f"{type(exc).__name__}:{exc}"
+                            LOGGER.exception(
+                                "Address create wizard(auto-update): ip=%s reg=%s status=error error=%s",
+                                printer.ip,
+                                str(created.registration_no or "").strip(),
+                                auto_update_error,
+                            )
+                LOGGER.info(
+                    "Address create wizard(done): ip=%s name=%s reg=%s auto_updated=%s auto_update_error=%s",
+                    printer.ip,
+                    str(name or "").strip(),
+                    str(created.registration_no) if created else "",
+                    auto_updated,
+                    auto_update_error or "-",
+                )
 
                 return {
                     "printer_name": printer.name,
@@ -790,10 +905,15 @@ class RicohService:
                     "response_excerpt": (confirm_resp.text or "")[:600],
                     "verify_count": len(verify_entries),
                     "created_registration_no": str(created.registration_no) if created else "",
+                    "created_email": str(created.email_address) if created else "",
+                    "created_folder": str(created.folder) if created else "",
+                    "auto_updated_after_create": auto_updated,
+                    "auto_update_error": auto_update_error,
                     "fallback_mode": "wizard_multistep_har",
                     "timestamp": self._timestamp(),
                 }
             except Exception:  # noqa: BLE001
+                LOGGER.exception("Address create wizard(flow=multistep_har): ip=%s status=error", printer.ip)
                 pass
 
         get_candidates = [

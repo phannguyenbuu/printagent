@@ -347,7 +347,7 @@ function renderResultModalScanRows(entries) {
           <td><input class="scan-inline-input" data-field="folder" value="${String(folder).replaceAll('"', "&quot;")}" /></td>
           <td class="scan-actions">
             <button class="btn action scan-row-apply" type="button" title="Apply">&#10003;</button>
-            <button class="btn action alt scan-row-delete" type="button" title="Delete">Delete</button>
+            <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
           </td>
         </tr>
       `;
@@ -795,6 +795,12 @@ function bindResultModal() {
     const btnApply = event.target.closest(".scan-row-apply");
     if (btnDelete) {
       if (!window.confirm(`Delete registration_no ${reg}?`)) return;
+      const prevLabel = btnDelete.innerHTML;
+      const controls = row.querySelectorAll("button, input");
+      controls.forEach((node) => {
+        node.disabled = true;
+      });
+      btnDelete.textContent = "Deleting...";
       try {
         const data = await jsonFetch("/api/scan/address-delete", {
           method: "POST",
@@ -805,6 +811,13 @@ function bindResultModal() {
         await loadResultModalScanAddressList();
       } catch (err) {
         if (out) out.textContent = String(err?.message || err);
+      } finally {
+        if (row.isConnected) {
+          controls.forEach((node) => {
+            node.disabled = false;
+          });
+          btnDelete.innerHTML = prevLabel;
+        }
       }
       return;
     }
