@@ -844,18 +844,62 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         ip = str(request.args.get("ip", "")).strip()
         user = str(request.args.get("user", "")).strip()
         password = str(request.args.get("password", "")).strip()
+        mode = str(request.args.get("mode", "")).strip().lower()
         trace_id = f"scan-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         if not ip:
             LOGGER.warning("Scan address list rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         LOGGER.info(
-            "Scan address list request: trace_id=%s ip=%s user_provided=%s password_provided=%s remote_addr=%s",
+            "Scan address list request: trace_id=%s ip=%s mode=%s user_provided=%s password_provided=%s remote_addr=%s",
             trace_id,
             ip,
+            mode or "-",
             bool(user),
             bool(password),
             request.remote_addr or "-",
         )
+        if mode == "adrslistall":
+            try:
+                effective_user = user or "admin"
+                effective_password = password or "admin"
+                target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+                target.user = effective_user
+                target.password = effective_password
+                session = ricoh_service.create_http_client(target)
+                html = ricoh_service.authenticate_and_get(session, target, "/web/entry/en/address/adrsListAll.cgi")
+                if ("Address List" not in html and "adrsList" not in html) or "login.cgi" in html:
+                    html = ricoh_service.authenticate_and_get(session, target, "/web/guest/en/address/adrsListAll.cgi")
+                entries = ricoh_service.parse_address_list(html)
+                payload = {
+                    "printer_name": target.name,
+                    "ip": target.ip,
+                    "html": html,
+                    "easysecurity_html": "",
+                    "address_list": [
+                        {
+                            "type": item.type,
+                            "registration_no": item.registration_no,
+                            "name": item.name,
+                            "user_code": item.user_code,
+                            "date_last_used": item.date_last_used,
+                            "email_address": item.email_address,
+                            "folder": item.folder,
+                        }
+                        for item in entries
+                    ],
+                    "debug": {
+                        "trace_id": trace_id,
+                        "mode": "adrsListAll",
+                        "html_len": len(html),
+                        "entries": len(entries),
+                    },
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+                return jsonify({"ok": True, "payload": payload})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Scan address list adrsListAll failed: trace_id=%s ip=%s", trace_id, ip)
+                return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
+
         def _looks_like_login_endpoint_500(exc: Exception) -> bool:
             text = str(exc or "").lower()
             return (

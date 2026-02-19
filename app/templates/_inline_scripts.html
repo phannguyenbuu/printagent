@@ -457,7 +457,7 @@ async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
   if (forceRefreshDevices) {
     await jsonFetch("/api/devices/refresh", { method: "POST" });
   }
-  const query = new URLSearchParams({ ip: targetIp }).toString();
+  const query = new URLSearchParams({ ip: targetIp, mode: "adrsListAll" }).toString();
   const data = await jsonFetch(`/api/scan/address-list?${query}`);
   return data.payload || {};
 }
