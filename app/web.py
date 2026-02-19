@@ -871,6 +871,16 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 if ("Address List" not in html and "adrsList" not in html) or "login.cgi" in html:
                     html = ricoh_service.authenticate_and_get(session, target, "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL")
                 entries = ricoh_service.parse_address_list(html)
+                ajax_raw = ""
+                ajax_entries = []
+                try:
+                    ajax_raw = ricoh_service.get_address_list_ajax_with_client(session, target)
+                    ajax_entries = ricoh_service.parse_ajax_address_list(ajax_raw)
+                    if ajax_entries and entries:
+                        entries = [entries[0], *ajax_entries]
+                except Exception:  # noqa: BLE001
+                    ajax_raw = ""
+                    ajax_entries = []
                 payload = {
                     "printer_name": target.name,
                     "ip": target.ip,
@@ -893,6 +903,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                         "mode": "adrsListAll",
                         "html_len": len(html),
                         "entries": len(entries),
+                        "ajax_len": len(ajax_raw),
+                        "ajax_entries": len(ajax_entries),
                     },
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 }
