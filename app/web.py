@@ -867,9 +867,9 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 target.user = effective_user
                 target.password = effective_password
                 session = ricoh_service.create_http_client_auth_form_only(target)
-                html = ricoh_service.authenticate_and_get(session, target, "/web/entry/en/address/adrsListAll.cgi")
+                html = ricoh_service.authenticate_and_get(session, target, "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL")
                 if ("Address List" not in html and "adrsList" not in html) or "login.cgi" in html:
-                    html = ricoh_service.authenticate_and_get(session, target, "/web/guest/en/address/adrsListAll.cgi")
+                    html = ricoh_service.authenticate_and_get(session, target, "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL")
                 entries = ricoh_service.parse_address_list(html)
                 payload = {
                     "printer_name": target.name,
