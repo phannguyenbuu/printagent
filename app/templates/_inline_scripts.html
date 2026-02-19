@@ -326,7 +326,7 @@ function renderResultModalScanRows(entries) {
     ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
     : [];
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7">No address entries.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
     return;
   }
   body.innerHTML = rows
@@ -334,21 +334,20 @@ function renderResultModalScanRows(entries) {
       const type = row.type || "-";
       const reg = row.registration_no || "";
       const name = row.name || "-";
-      const userCode = row.user_code || "-";
+      const userCode = row.user_code || "";
       const email = row.email_address || "-";
       const folder = row.folder || "-";
       return `
-        <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}">
-          <td><input class="scan-inline-input" data-field="type" value="${String(type).replaceAll('"', "&quot;")}" readonly /></td>
-          <td><input class="scan-inline-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
-          <td><input class="scan-inline-input" data-field="name" value="${String(name).replaceAll('"', "&quot;")}" /></td>
-          <td><input class="scan-inline-input" data-field="user_code" value="${String(userCode).replaceAll('"', "&quot;")}" /></td>
-          <td><input class="scan-inline-input" data-field="email" value="${String(email).replaceAll('"', "&quot;")}" /></td>
-          <td><input class="scan-inline-input" data-field="folder" value="${String(folder).replaceAll('"', "&quot;")}" /></td>
+        <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}">
           <td class="scan-actions">
             <button class="btn action scan-row-apply" type="button" title="Apply">&#10003;</button>
             <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
           </td>
+          <td><input class="scan-inline-input" data-field="type" value="${String(type).replaceAll('"', "&quot;")}" readonly /></td>
+          <td><input class="scan-inline-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
+          <td><input class="scan-inline-input" data-field="name" value="${String(name).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input" data-field="email" value="${String(email).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input" data-field="folder" value="${String(folder).replaceAll('"', "&quot;")}" /></td>
         </tr>
       `;
     })
@@ -828,7 +827,6 @@ function bindResultModal() {
         });
         if (out) out.textContent = jsonString(data.payload || data);
         if (row.isConnected) row.remove();
-        await loadResultModalScanAddressList();
       } catch (err) {
         if (out) out.textContent = String(err?.message || err);
       } finally {
@@ -851,7 +849,7 @@ function bindResultModal() {
         name: val("name"),
         email: val("email"),
         folder: val("folder"),
-        user_code: val("user_code"),
+        user_code: String(row.dataset.userCode || "").trim(),
         fields: {},
       };
       const data = await jsonFetch("/api/scan/address-modify", {
@@ -896,7 +894,7 @@ function bindResultModal() {
     const name = String(document.getElementById("result-modal-create-name")?.value || "").trim();
     const email = String(document.getElementById("result-modal-create-email")?.value || "").trim();
     const folder = String(document.getElementById("result-modal-create-folder")?.value || "").trim();
-    const userCode = String(document.getElementById("result-modal-create-user-code")?.value || "").trim();
+    const userCode = String(document.getElementById("result-modal-create-user-code")?.value || "").trim() || "-";
     if (!ip) {
       if (out) out.textContent = "Missing printer IP";
       return;
@@ -1225,7 +1223,7 @@ function renderScanAddressRows(entries) {
     ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
     : [];
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7">No address entries.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
     return;
   }
   body.innerHTML = rows
@@ -1233,18 +1231,16 @@ function renderScanAddressRows(entries) {
       const type = row.type || "-";
       const reg = row.registration_no || "";
       const name = row.name || "-";
-      const userCode = row.user_code || "-";
       const email = row.email_address || "-";
       const folder = row.folder || "-";
       return `
         <tr>
+          <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
           <td>${type}</td>
           <td>${reg}</td>
           <td>${name}</td>
-          <td>${userCode}</td>
           <td>${email}</td>
           <td>${folder}</td>
-          <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
         </tr>
       `;
     })
@@ -1305,7 +1301,7 @@ async function initScanPage() {
         name: (document.getElementById("scan-create-name")?.value || "").trim(),
         email: (document.getElementById("scan-create-email")?.value || "").trim(),
         folder: (document.getElementById("scan-create-folder")?.value || "").trim(),
-        user_code: (document.getElementById("scan-create-user-code")?.value || "").trim(),
+        user_code: (document.getElementById("scan-create-user-code")?.value || "").trim() || "-",
         fields: { entryTypeIn: "1" },
       };
       try {
