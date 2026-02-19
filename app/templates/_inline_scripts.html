@@ -156,6 +156,38 @@ async function jsonFetch(url, options = {}) {
   return body;
 }
 
+function showConfirmModal(message, options = {}) {
+  const modal = document.getElementById("confirm-modal");
+  const titleEl = document.getElementById("confirm-modal-title");
+  const messageEl = document.getElementById("confirm-modal-message");
+  const okBtn = document.getElementById("confirm-modal-ok");
+  const cancelBtn = document.getElementById("confirm-modal-cancel");
+  if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
+    return Promise.resolve(window.confirm(message));
+  }
+  titleEl.textContent = options.title || "Confirm";
+  messageEl.textContent = message;
+  modal.hidden = false;
+  return new Promise((resolve) => {
+    const cleanup = (result) => {
+      modal.hidden = true;
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => {
+      if (event.target === modal) onCancel();
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") onCancel();
+    };
+    okBtn.addEventListener("click", onOk, { once: true });
+    cancelBtn.addEventListener("click", onCancel, { once: true });
+    modal.addEventListener("click", onBackdrop, { once: true });
+    document.addEventListener("keydown", onKey, { once: true });
+  });
+}
+
 function renderTrendChart(el, labels, seriesA, seriesB, seriesC) {
   if (!el) return;
   const width = 900;
@@ -814,7 +846,7 @@ function bindResultModal() {
     const btnApply = event.target.closest(".scan-row-apply");
     if (btnDelete) {
       const label = reg || entryId;
-      if (!window.confirm(`Delete registration_no ${label}?`)) return;
+      if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
       const prevLabel = btnDelete.innerHTML;
       const controls = row.querySelectorAll("button, input");
       controls.forEach((node) => {
@@ -1374,7 +1406,7 @@ async function initScanPage() {
       const entryId = String(btn.closest("tr")?.dataset.entryId || "").trim();
       if (!registrationNo && !entryId) return;
       const label = registrationNo || entryId;
-      if (!window.confirm(`Delete registration_no ${label}?`)) return;
+      if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
       const target = getScanTarget();
       if (!target.ip) {
         if (out) out.textContent = "Missing printer IP";
