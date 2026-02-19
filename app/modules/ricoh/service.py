@@ -1780,6 +1780,7 @@ class RicohService:
             if "#" in last_used:
                 last_used = last_used.split("#", 1)[1]
             type_map = {"1": "User", "2": "Group"}
+            raw_entry_id = fields[0].strip().lstrip("[").strip("'\"")
             entry = AddressEntry(
                 type=type_map.get(fields[1], f"Type_{fields[1]}"),
                 registration_no=fields[2].strip("'\""),
@@ -1788,7 +1789,7 @@ class RicohService:
                 date_last_used=last_used.strip("'\""),
                 email_address=fields[6].strip("'\""),
                 folder=fields[7].strip("'\""),
-                entry_id=fields[0].strip("'\""),
+                entry_id=raw_entry_id,
             )
             if entry.name or entry.registration_no:
                 entries.append(entry)
