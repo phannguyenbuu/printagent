@@ -397,9 +397,29 @@ class RicohService:
         for target in urls:
             try:
                 html = self.authenticate_and_get(session, printer, target)
-                if "Address List" in html or "adrsList" in html:
+                html_len = len(html)
+                has_address_markers = "Address List" in html or "adrsList" in html
+                has_login_markers = "login.cgi" in html or "Login User Name" in html or "authForm.cgi" in html
+                self._append_address_debug(
+                    "address_list:url_check "
+                    f"ip={printer.ip} target={target} html_len={html_len} "
+                    f"has_address_markers={has_address_markers} has_login_markers={has_login_markers}"
+                )
+                LOGGER.info(
+                    "Address list URL check: ip=%s target=%s html_len=%s has_address_markers=%s has_login_markers=%s",
+                    printer.ip,
+                    target,
+                    html_len,
+                    has_address_markers,
+                    has_login_markers,
+                )
+                if has_address_markers:
                     return html
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                self._append_address_debug(
+                    f"address_list:url_error ip={printer.ip} target={target} error={type(exc).__name__}:{str(exc)}"
+                )
+                LOGGER.warning("Address list URL error: ip=%s target=%s error=%s", printer.ip, target, exc)
                 continue
         return self.authenticate_and_get(session, printer, urls[0])
 
@@ -772,53 +792,99 @@ class RicohService:
                 entries.append(entry)
         return entries
 
-    def process_address_list(self, printer: Printer) -> dict[str, Any]:
+    def process_address_list(self, printer: Printer, trace_id: str = "") -> dict[str, Any]:
         session = self.create_http_client(printer)
         html = self.read_address_list_with_client(session, printer)
         entries = self.parse_address_list(html)
+        has_table = '<tbody id="ReportListArea_TableBody">' in html
+        has_login_markers = "login.cgi" in html or "Login User Name" in html or "authForm.cgi" in html
+        has_address_markers = "Address List" in html or "adrsList" in html
+        non_summary_html_entries = max(0, len(entries) - 1)
         self._append_address_debug(
-            f"address_list:start ip={printer.ip} name={printer.name} html_len={len(html)} entries_html={len(entries)}"
+            "address_list:start "
+            f"trace_id={trace_id or '-'} ip={printer.ip} name={printer.name} html_len={len(html)} "
+            f"entries_html={len(entries)} non_summary_html_entries={non_summary_html_entries} "
+            f"has_table={has_table} has_address_markers={has_address_markers} has_login_markers={has_login_markers}"
         )
         LOGGER.info(
-            "Address list start: ip=%s name=%s html_len=%s entries_html=%s",
+            "Address list start: trace_id=%s ip=%s name=%s html_len=%s entries_html=%s non_summary_html_entries=%s has_table=%s has_address_markers=%s has_login_markers=%s",
+            trace_id or "-",
             printer.ip,
             printer.name,
             len(html),
             len(entries),
+            non_summary_html_entries,
+            has_table,
+            has_address_markers,
+            has_login_markers,
         )
         ajax_raw = ""
         ajax_entries: list[AddressEntry] = []
         try:
             ajax_raw = self.get_address_list_ajax_with_client(session, printer)
             ajax_entries = self.parse_ajax_address_list(ajax_raw)
+            ajax_has_brackets = "[" in ajax_raw and "]" in ajax_raw
+            ajax_has_login_markers = "login.cgi" in ajax_raw or "Login User Name" in ajax_raw or "authForm.cgi" in ajax_raw
             self._append_address_debug(
                 "address_list:ajax "
-                f"ip={printer.ip} ajax_len={len(ajax_raw)} ajax_entries={len(ajax_entries)} "
+                f"trace_id={trace_id or '-'} ip={printer.ip} ajax_len={len(ajax_raw)} ajax_entries={len(ajax_entries)} "
+                f"ajax_has_brackets={ajax_has_brackets} ajax_has_login_markers={ajax_has_login_markers} "
                 f"ajax_excerpt={repr(ajax_raw[:300])}"
             )
             LOGGER.info(
-                "Address list ajax: ip=%s ajax_len=%s ajax_entries=%s",
+                "Address list ajax: trace_id=%s ip=%s ajax_len=%s ajax_entries=%s ajax_has_brackets=%s ajax_has_login_markers=%s",
+                trace_id or "-",
                 printer.ip,
                 len(ajax_raw),
                 len(ajax_entries),
+                ajax_has_brackets,
+                ajax_has_login_markers,
             )
             if ajax_entries and entries:
                 entries = [entries[0], *ajax_entries]
-        except Exception:  # noqa: BLE001
-            self._append_address_debug(f"address_list:ajax_error ip={printer.ip}")
-            LOGGER.exception("Address list ajax error: ip=%s", printer.ip)
+        except Exception as exc:  # noqa: BLE001
+            self._append_address_debug(
+                f"address_list:ajax_error trace_id={trace_id or '-'} ip={printer.ip} error={type(exc).__name__}:{str(exc)}"
+            )
+            LOGGER.exception("Address list ajax error: trace_id=%s ip=%s", trace_id or "-", printer.ip)
+        if max(0, len(entries) - 1) == 0:
+            reasons: list[str] = []
+            if has_login_markers:
+                reasons.append("html_contains_login_markers")
+            if not has_table:
+                reasons.append("html_missing_report_table")
+            if not has_address_markers:
+                reasons.append("html_missing_address_markers")
+            if ajax_raw and len(ajax_entries) == 0:
+                reasons.append("ajax_present_but_no_parsed_entries")
+            if not ajax_raw:
+                reasons.append("ajax_response_empty")
+            if not reasons:
+                reasons.append("no_entry_matched_filters")
+            reason_text = ",".join(reasons)
+            self._append_address_debug(
+                f"address_list:no_data trace_id={trace_id or '-'} ip={printer.ip} reasons={reason_text}"
+            )
+            LOGGER.warning("Address list no data: trace_id=%s ip=%s reasons=%s", trace_id or "-", printer.ip, reason_text)
         self._append_address_debug(
-            f"address_list:final ip={printer.ip} total_entries={len(entries)} first_entries={repr([asdict(x) for x in entries[:3]])}"
+            "address_list:final "
+            f"trace_id={trace_id or '-'} ip={printer.ip} total_entries={len(entries)} "
+            f"first_entries={repr([asdict(x) for x in entries[:3]])}"
         )
-        LOGGER.info("Address list final: ip=%s total_entries=%s", printer.ip, len(entries))
+        LOGGER.info("Address list final: trace_id=%s ip=%s total_entries=%s", trace_id or "-", printer.ip, len(entries))
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "html": html,
             "address_list": [asdict(item) for item in entries],
             "debug": {
+                "trace_id": trace_id,
                 "html_len": len(html),
                 "html_entries": len(self.parse_address_list(html)),
+                "non_summary_html_entries": non_summary_html_entries,
+                "html_has_table": has_table,
+                "html_has_address_markers": has_address_markers,
+                "html_has_login_markers": has_login_markers,
                 "ajax_len": len(ajax_raw),
                 "ajax_entries": len(ajax_entries),
                 "ajax_excerpt": ajax_raw[:300],

@@ -795,14 +795,39 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         ip = str(request.args.get("ip", "")).strip()
         user = str(request.args.get("user", "")).strip()
         password = str(request.args.get("password", "")).strip()
+        trace_id = f"scan-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         if not ip:
+            LOGGER.warning("Scan address list rejected: trace_id=%s reason=missing_ip", trace_id)
             return jsonify({"ok": False, "error": "Missing ip"}), 400
+        LOGGER.info(
+            "Scan address list request: trace_id=%s ip=%s user_provided=%s password_provided=%s remote_addr=%s",
+            trace_id,
+            ip,
+            bool(user),
+            bool(password),
+            request.remote_addr or "-",
+        )
         try:
             target = _resolve_target_printer(ip=ip, user=user, password=password)
-            payload = ricoh_service.process_address_list(target)
+            LOGGER.info(
+                "Scan address list resolved target: trace_id=%s ip=%s printer_name=%s effective_user=%s has_password=%s",
+                trace_id,
+                target.ip,
+                target.name,
+                bool(str(target.user or "").strip()),
+                bool(str(target.password or "").strip()),
+            )
+            payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+            entry_count = len(payload.get("address_list", [])) if isinstance(payload, dict) else 0
+            LOGGER.info("Scan address list success: trace_id=%s ip=%s entries=%s", trace_id, target.ip, entry_count)
+            if isinstance(payload, dict):
+                payload.setdefault("debug", {})
+                if isinstance(payload["debug"], dict):
+                    payload["debug"]["trace_id"] = trace_id
             return jsonify({"ok": True, "payload": payload})
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            LOGGER.exception("Scan address list failed: trace_id=%s ip=%s", trace_id, ip)
+            return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
 
     @app.post("/api/scan/address-create")
     def api_scan_address_create() -> Any:
@@ -974,7 +999,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 ws_client.send("machine_locked", {"ip": target.ip, "name": target.name})
                 return jsonify({"ok": True, "action": action, "message": "Machine locked successfully"})
             if action == "address_list":
-                payload = ricoh_service.process_address_list(target)
+                trace_id = f"action-scan-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                payload = ricoh_service.process_address_list(target, trace_id=trace_id)
+                if isinstance(payload, dict):
+                    payload.setdefault("debug", {})
+                    if isinstance(payload["debug"], dict):
+                        payload["debug"]["trace_id"] = trace_id
                 ws_client.send("address_list", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "address_create":
