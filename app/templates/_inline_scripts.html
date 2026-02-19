@@ -827,6 +827,7 @@ function bindResultModal() {
           body: JSON.stringify({ ip, registration_no: reg }),
         });
         if (out) out.textContent = jsonString(data.payload || data);
+        if (row.isConnected) row.remove();
         await loadResultModalScanAddressList();
       } catch (err) {
         if (out) out.textContent = String(err?.message || err);
