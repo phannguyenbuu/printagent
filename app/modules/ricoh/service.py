@@ -393,6 +393,10 @@ class RicohService:
             "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
             "/web/entry/en/address/adrsListAll.cgi",
             "/web/entry/en/address/getAddressList.cgi",
+            "/web/guest/en/address/adrsList.cgi",
+            "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL",
+            "/web/guest/en/address/adrsListAll.cgi",
+            "/web/guest/en/address/getAddressList.cgi",
         ]
         for target in urls:
             try:
@@ -413,7 +417,7 @@ class RicohService:
                     has_address_markers,
                     has_login_markers,
                 )
-                if has_address_markers:
+                if has_address_markers and not has_login_markers:
                     return html
             except Exception as exc:  # noqa: BLE001
                 self._append_address_debug(
@@ -421,7 +425,7 @@ class RicohService:
                 )
                 LOGGER.warning("Address list URL error: ip=%s target=%s error=%s", printer.ip, target, exc)
                 continue
-        return self.authenticate_and_get(session, printer, urls[0])
+        return self.authenticate_and_get(session, printer, "/web/guest/en/address/adrsList.cgi")
 
     def read_address_list(self, printer: Printer) -> str:
         session = self.create_http_client(printer)
@@ -716,9 +720,25 @@ class RicohService:
         return entries
 
     def get_address_list_ajax_with_client(self, session: requests.Session, printer: Printer) -> str:
-        return self.authenticate_and_get(
-            session, printer, "/web/entry/en/address/adrsListLoadEntry.cgi?listCountIn=50&getCountIn=1"
-        )
+        targets = [
+            "/web/entry/en/address/adrsListLoadEntry.cgi?listCountIn=200&getCountIn=1",
+            "/web/entry/en/address/adrsListLoadEntry.cgi?listCountIn=50&getCountIn=1",
+            "/web/guest/en/address/adrsListLoadEntry.cgi?listCountIn=200&getCountIn=1",
+            "/web/guest/en/address/adrsListLoadEntry.cgi?listCountIn=50&getCountIn=1",
+        ]
+        last = ""
+        for target in targets:
+            try:
+                raw = self.authenticate_and_get(session, printer, target)
+                last = raw
+                has_login_markers = "login.cgi" in raw or "Login User Name" in raw or "authForm.cgi" in raw
+                if has_login_markers:
+                    continue
+                if "[" in raw and "]" in raw:
+                    return raw
+            except Exception:  # noqa: BLE001
+                continue
+        return last
 
     @staticmethod
     def parse_javascript_array_fields(data: str) -> list[str]:
