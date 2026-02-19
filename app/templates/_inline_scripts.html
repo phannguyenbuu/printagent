@@ -512,7 +512,14 @@ function showResultModal(title, payload) {
     tools.hidden = false;
     setResultModalView("summary");
   }
+  // Default opening tab: Scan (Address List), not Summary.
+  setResultModalView("scan");
+  setResultModalScanView("list");
   modal.hidden = false;
+  loadResultModalScanAddressList().catch((err) => {
+    const out = document.getElementById("result-modal-scan-output");
+    if (out) out.textContent = String(err?.message || err);
+  });
 }
 
 function showResultModalLoading(title, loadingText) {
