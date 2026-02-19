@@ -873,8 +873,12 @@ class RicohService:
         easysecurity_html = ""
         try:
             easysecurity_html = self.authenticate_and_get(
-                session, printer, "/web/entry/en/websys/easySecurity/getEasySecurity.cgi"
+                session, printer, "/web/entry/en/websys/webArch/mainFrame.cgi?open=websys/easySecurity/getEasySecurity.cgi"
             )
+            if not str(easysecurity_html or "").strip():
+                easysecurity_html = self.authenticate_and_get(
+                    session, printer, "/web/entry/en/websys/easySecurity/getEasySecurity.cgi"
+                )
             self._append_address_debug(
                 f"address_list:easysecurity trace_id={trace_id or '-'} ip={printer.ip} easysecurity_len={len(easysecurity_html)} "
                 f"easysecurity_excerpt={repr(easysecurity_html[:300])}"
