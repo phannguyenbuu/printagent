@@ -672,6 +672,115 @@ class RicohService:
                 errors.append(f"{target}:{type(exc).__name__}:{exc}")
                 continue
         if not html:
+            # First fallback: try Detail Input endpoints (non-wizard) which are more stable on some models.
+            detail_get_candidates = [
+                "/web/entry/en/address/adrsGetUser.cgi?modeIn=ADD",
+                "/web/entry/en/address/adrsGetUser.cgi",
+                "/web/guest/en/address/adrsGetUser.cgi?modeIn=ADD",
+                "/web/guest/en/address/adrsGetUser.cgi",
+            ]
+            detail_set_candidates = [
+                "/web/entry/en/address/adrsSetUser.cgi",
+                "/web/guest/en/address/adrsSetUser.cgi",
+            ]
+            detail_errors: list[str] = []
+            for detail_get in detail_get_candidates:
+                try:
+                    detail_html = self.authenticate_and_get(session, printer, detail_get)
+                    if not detail_html.strip():
+                        detail_errors.append(f"{detail_get}:empty")
+                        continue
+                    if "login.cgi" in detail_html or "authForm.cgi" in detail_html:
+                        detail_errors.append(f"{detail_get}:login_page")
+                        continue
+                    detail_defaults = self._extract_hidden_inputs(detail_html)
+                    token = detail_defaults.get("wimToken", "")
+                    if not token:
+                        token = self._extract_wim_token(detail_html)
+                    detail_defaults["wimToken"] = token
+
+                    key_list = list(detail_defaults.keys())
+                    name_key = self._pick_field_key(
+                        key_list,
+                        ["entryNameIn", "nameIn", "userNameIn", "displayNameIn", "entryDisplayNameIn", "name"],
+                    )
+                    email_key = self._pick_field_key(
+                        key_list,
+                        ["emailAddressIn", "emailIn", "mailAddressIn", "entryMailAddressIn", "email"],
+                    )
+                    folder_key = self._pick_field_key(
+                        key_list,
+                        ["folderPathNameIn", "folderPathIn", "folderIn", "pathIn", "folder"],
+                    )
+                    user_code_key = self._pick_field_key(
+                        key_list,
+                        ["userCodeIn", "userCode", "entryUserCodeIn", "codeIn"],
+                    )
+
+                    value_variants = [
+                        {"name": str(name or "").strip(), "email": str(email or "").strip(), "folder": str(folder or "").strip(), "user_code": str(user_code or "").strip()},
+                        {"name": str(name or "").strip(), "email": str(email or "").strip(), "folder": "", "user_code": str(user_code or "").strip()},
+                        {"name": str(name or "").strip(), "email": "", "folder": "", "user_code": ""},
+                    ]
+                    for set_target in detail_set_candidates:
+                        for values in value_variants:
+                            form = dict(detail_defaults)
+                            form[name_key or "entryNameIn"] = values["name"]
+                            if values["email"]:
+                                form[email_key or "emailAddressIn"] = values["email"]
+                            if values["folder"]:
+                                form[folder_key or "folderPathNameIn"] = values["folder"]
+                            if values["user_code"]:
+                                form[user_code_key or "userCodeIn"] = values["user_code"]
+                            form.setdefault("open", "")
+                            if fields and isinstance(fields, dict):
+                                for k, v in fields.items():
+                                    key = str(k or "").strip()
+                                    if not key:
+                                        continue
+                                    form[key] = "" if v is None else str(v)
+                            resp = session.post(
+                                f"http://{printer.ip}{set_target}",
+                                data=form,
+                                headers={"Referer": f"http://{printer.ip}{detail_get}"},
+                                timeout=15,
+                            )
+                            text = resp.text or ""
+                            if resp.status_code >= 400:
+                                detail_errors.append(f"set={set_target} status={resp.status_code} from={detail_get}")
+                                continue
+                            if "login.cgi" in text or "authForm.cgi" in text:
+                                detail_errors.append(f"set={set_target} login_redirect from={detail_get}")
+                                continue
+                            verify_raw = ""
+                            verify_entries: list[AddressEntry] = []
+                            try:
+                                verify_raw = self.get_address_list_ajax_with_client(session, printer)
+                                verify_entries = self.parse_ajax_address_list(verify_raw)
+                            except Exception:  # noqa: BLE001
+                                verify_raw = ""
+                                verify_entries = []
+                            created = next(
+                                (e for e in verify_entries if str(e.name or "").strip().lower() == str(name or "").strip().lower()),
+                                None,
+                            )
+                            return {
+                                "printer_name": printer.name,
+                                "ip": printer.ip,
+                                "ok": True,
+                                "endpoint": set_target,
+                                "name": str(name or "").strip(),
+                                "http_status": resp.status_code,
+                                "response_excerpt": text[:600],
+                                "verify_count": len(verify_entries),
+                                "created_registration_no": str(created.registration_no) if created else "",
+                                "fallback_mode": "detail_input_set_user",
+                                "timestamp": self._timestamp(),
+                            }
+                except Exception as exc:  # noqa: BLE001
+                    detail_errors.append(f"{detail_get}:{type(exc).__name__}:{exc}")
+                    continue
+
             # Fallback for models that block adrsGetUserWizard but still accept adrsSetUserWizard.
             list_candidates = [
                 "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
@@ -699,6 +808,8 @@ class RicohService:
                 raise RuntimeError(
                     "cannot open address create wizard; "
                     + " | ".join(errors[-4:])
+                    + " || detail_fallback_failed: "
+                    + " | ".join(detail_errors[-4:])
                     + " || list_fallback_failed: "
                     + " | ".join(list_errors[-2:])
                 )
