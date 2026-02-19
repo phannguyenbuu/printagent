@@ -87,11 +87,22 @@ function buildCounterHtmlPreview(payload) {
   return prepared;
 }
 
+const resultModalState = {
+  activeMainTab: "counter",
+  ip: "",
+  printerName: "",
+  counterPayload: null,
+  configPayload: null,
+  scanPayload: null,
+  configLoadedIp: "",
+  scanLoadedIp: "",
+};
+
 function setResultModalView(mode) {
   const summaryBtn = document.getElementById("result-modal-view-summary");
   const htmlBtn = document.getElementById("result-modal-view-html");
-  const modalBody = document.getElementById("result-modal-body");
-  const htmlFrame = document.getElementById("result-modal-html");
+  const modalBody = document.getElementById("result-modal-counter-body");
+  const htmlFrame = document.getElementById("result-modal-counter-html");
   if (!summaryBtn || !htmlBtn || !modalBody || !htmlFrame) return;
   const htmlEnabled = htmlBtn.dataset.enabled === "1";
   const target = mode === "html" && htmlEnabled ? "html" : "summary";
@@ -99,6 +110,24 @@ function setResultModalView(mode) {
   htmlBtn.classList.toggle("active", target === "html");
   modalBody.hidden = target !== "summary";
   htmlFrame.hidden = target !== "html";
+}
+
+function setResultModalMainTab(tab) {
+  const counterBtn = document.getElementById("result-modal-tab-counter");
+  const scanBtn = document.getElementById("result-modal-tab-scan");
+  const configBtn = document.getElementById("result-modal-tab-config");
+  const counterPanel = document.getElementById("result-modal-panel-counter");
+  const scanPanel = document.getElementById("result-modal-panel-scan");
+  const configPanel = document.getElementById("result-modal-panel-config");
+  if (!counterBtn || !scanBtn || !configBtn || !counterPanel || !scanPanel || !configPanel) return;
+  const target = tab === "scan" || tab === "config" ? tab : "counter";
+  resultModalState.activeMainTab = target;
+  counterBtn.classList.toggle("active", target === "counter");
+  scanBtn.classList.toggle("active", target === "scan");
+  configBtn.classList.toggle("active", target === "config");
+  counterPanel.hidden = target !== "counter";
+  scanPanel.hidden = target !== "scan";
+  configPanel.hidden = target !== "config";
 }
 
 async function jsonFetch(url, options = {}) {
@@ -279,35 +308,154 @@ async function runAction(ip, action, options = {}) {
   }
 }
 
+function renderResultModalScanRows(entries) {
+  const body = document.getElementById("result-modal-scan-body");
+  if (!body) return;
+  const rows = Array.isArray(entries) ? entries.filter((x) => x && x.type !== "Summary") : [];
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map((row) => {
+      const type = row.type || "-";
+      const reg = row.registration_no || "";
+      const name = row.name || "-";
+      const userCode = row.user_code || "-";
+      const email = row.email_address || "-";
+      const folder = row.folder || "-";
+      return `
+        <tr>
+          <td>${type}</td>
+          <td>${reg}</td>
+          <td>${name}</td>
+          <td>${userCode}</td>
+          <td>${email}</td>
+          <td>${folder}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+async function loadResultModalScanAddressList() {
+  const out = document.getElementById("result-modal-scan-output");
+  const ip = String(resultModalState.ip || "").trim();
+  if (!ip) {
+    if (out) out.textContent = "Missing printer IP";
+    renderResultModalScanRows([]);
+    return;
+  }
+  if (out) out.textContent = `Loading address list for ${ip}...`;
+  await jsonFetch("/api/devices/refresh", { method: "POST" });
+  const query = new URLSearchParams({ ip }).toString();
+  const data = await jsonFetch(`/api/scan/address-list?${query}`);
+  const payload = data.payload || {};
+  const entries = payload.address_list || [];
+  resultModalState.scanPayload = payload;
+  resultModalState.scanLoadedIp = ip;
+  renderResultModalScanRows(entries);
+  if (out) out.textContent = jsonString(payload);
+}
+
+async function loadResultModalConfig() {
+  const body = document.getElementById("result-modal-config-body");
+  const ip = String(resultModalState.ip || "").trim();
+  if (!body) return;
+  if (!ip) {
+    body.textContent = "Missing printer IP";
+    return;
+  }
+  body.textContent = `Loading config for ${ip}...`;
+  const data = await runAction(ip, "device_info", { silent: true });
+  if (!data?.ok) {
+    body.textContent = data?.error || "Load config failed";
+    return;
+  }
+  const payload = data.payload || {};
+  resultModalState.configPayload = payload;
+  resultModalState.configLoadedIp = ip;
+  body.textContent = jsonString({
+    printer_name: payload.printer_name || "-",
+    ip: payload.ip || ip,
+    timestamp: payload.timestamp || "-",
+    device_info: payload.device_info || {},
+  });
+}
+
+async function ensureResultModalMainTabData(tab) {
+  if (tab === "scan") {
+    const ip = String(resultModalState.ip || "").trim();
+    if (ip && resultModalState.scanLoadedIp !== ip) {
+      await loadResultModalScanAddressList();
+    }
+    return;
+  }
+  if (tab === "config") {
+    const ip = String(resultModalState.ip || "").trim();
+    if (ip && resultModalState.configLoadedIp !== ip) {
+      await loadResultModalConfig();
+    }
+  }
+}
+
 function showResultModal(title, payload) {
   const modal = document.getElementById("result-modal");
   const modalTitle = document.getElementById("result-modal-title");
   const modalLoading = document.getElementById("result-modal-loading");
-  const modalTools = document.getElementById("result-modal-tools");
+  const counterTools = document.getElementById("result-modal-counter-tools");
   const summaryBtn = document.getElementById("result-modal-view-summary");
   const htmlBtn = document.getElementById("result-modal-view-html");
-  const modalBody = document.getElementById("result-modal-body");
-  const htmlFrame = document.getElementById("result-modal-html");
-  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalTools || !summaryBtn || !htmlBtn || !htmlFrame) return;
+  const counterBody = document.getElementById("result-modal-counter-body");
+  const htmlFrame = document.getElementById("result-modal-counter-html");
+  const configBody = document.getElementById("result-modal-config-body");
+  const scanOut = document.getElementById("result-modal-scan-output");
+  if (
+    !modal ||
+    !modalTitle ||
+    !counterBody ||
+    !modalLoading ||
+    !counterTools ||
+    !summaryBtn ||
+    !htmlBtn ||
+    !htmlFrame ||
+    !configBody ||
+    !scanOut
+  ) {
+    return;
+  }
+
   modalTitle.textContent = title;
   modalLoading.hidden = true;
+  resultModalState.counterPayload = payload || {};
+  resultModalState.ip = String(payload?.ip || "").trim();
+  resultModalState.printerName = String(payload?.printer_name || "").trim();
+  resultModalState.configPayload = null;
+  resultModalState.scanPayload = null;
+  resultModalState.configLoadedIp = "";
+  resultModalState.scanLoadedIp = "";
+  configBody.textContent = "Open Config tab to load data.";
+  scanOut.textContent = "Open Scan tab to load Address List.";
+  renderResultModalScanRows([]);
+
   const htmlPreview = buildCounterHtmlPreview(payload);
   const htmlReady = Boolean(htmlPreview);
   if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
-    modalBody.textContent = formatCounterResult(payload);
+    counterBody.textContent = formatCounterResult(payload);
     htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
     htmlBtn.disabled = !htmlReady;
     htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
-    modalTools.hidden = false;
+    counterTools.hidden = false;
     setResultModalView("summary");
   } else {
-    modalBody.textContent = jsonString(payload || {});
+    counterBody.textContent = jsonString(payload || {});
     htmlBtn.dataset.enabled = "0";
     htmlBtn.disabled = true;
     htmlFrame.srcdoc = "";
-    modalTools.hidden = true;
+    counterTools.hidden = true;
     setResultModalView("summary");
   }
+  setResultModalMainTab("counter");
   modal.hidden = false;
 }
 
@@ -316,21 +464,24 @@ function showResultModalLoading(title, loadingText) {
   const modalTitle = document.getElementById("result-modal-title");
   const modalLoading = document.getElementById("result-modal-loading");
   const modalLoadingText = document.getElementById("result-modal-loading-text");
-  const modalTools = document.getElementById("result-modal-tools");
+  const counterTools = document.getElementById("result-modal-counter-tools");
   const htmlBtn = document.getElementById("result-modal-view-html");
-  const modalBody = document.getElementById("result-modal-body");
-  const htmlFrame = document.getElementById("result-modal-html");
-  if (!modal || !modalTitle || !modalBody || !modalLoading || !modalLoadingText || !modalTools || !htmlBtn || !htmlFrame) return;
+  const counterBody = document.getElementById("result-modal-counter-body");
+  const htmlFrame = document.getElementById("result-modal-counter-html");
+  if (!modal || !modalTitle || !counterBody || !modalLoading || !modalLoadingText || !counterTools || !htmlBtn || !htmlFrame) {
+    return;
+  }
   modalTitle.textContent = title;
   modalLoadingText.textContent = loadingText || "Loading...";
-  modalBody.textContent = "";
+  counterBody.textContent = "";
   htmlFrame.srcdoc = "";
   htmlBtn.dataset.enabled = "0";
   htmlBtn.disabled = true;
-  modalTools.hidden = true;
-  modalBody.hidden = true;
+  counterTools.hidden = true;
+  counterBody.hidden = true;
   htmlFrame.hidden = true;
   modalLoading.hidden = false;
+  setResultModalMainTab("counter");
   modal.hidden = false;
 }
 
@@ -345,7 +496,23 @@ function bindResultModal() {
   const closeBtn = document.getElementById("result-modal-close");
   const summaryBtn = document.getElementById("result-modal-view-summary");
   const htmlBtn = document.getElementById("result-modal-view-html");
-  if (!modal || !closeBtn || !summaryBtn || !htmlBtn || closeBtn.dataset.bound) return;
+  const counterTabBtn = document.getElementById("result-modal-tab-counter");
+  const scanTabBtn = document.getElementById("result-modal-tab-scan");
+  const configTabBtn = document.getElementById("result-modal-tab-config");
+  const scanReloadBtn = document.getElementById("result-modal-scan-reload");
+  if (
+    !modal ||
+    !closeBtn ||
+    !summaryBtn ||
+    !htmlBtn ||
+    !counterTabBtn ||
+    !scanTabBtn ||
+    !configTabBtn ||
+    !scanReloadBtn ||
+    closeBtn.dataset.bound
+  ) {
+    return;
+  }
   const close = () => {
     modal.hidden = true;
   };
@@ -353,6 +520,33 @@ function bindResultModal() {
   closeBtn.addEventListener("click", close);
   summaryBtn.addEventListener("click", () => setResultModalView("summary"));
   htmlBtn.addEventListener("click", () => setResultModalView("html"));
+  counterTabBtn.addEventListener("click", () => setResultModalMainTab("counter"));
+  scanTabBtn.addEventListener("click", async () => {
+    setResultModalMainTab("scan");
+    try {
+      await ensureResultModalMainTabData("scan");
+    } catch (err) {
+      const out = document.getElementById("result-modal-scan-output");
+      if (out) out.textContent = String(err?.message || err);
+    }
+  });
+  configTabBtn.addEventListener("click", async () => {
+    setResultModalMainTab("config");
+    try {
+      await ensureResultModalMainTabData("config");
+    } catch (err) {
+      const body = document.getElementById("result-modal-config-body");
+      if (body) body.textContent = String(err?.message || err);
+    }
+  });
+  scanReloadBtn.addEventListener("click", async () => {
+    try {
+      await loadResultModalScanAddressList();
+    } catch (err) {
+      const out = document.getElementById("result-modal-scan-output");
+      if (out) out.textContent = String(err?.message || err);
+    }
+  });
   modal.addEventListener("click", (event) => {
     if (event.target === modal) close();
   });
@@ -470,11 +664,16 @@ async function loadDevices(forceRefresh = false) {
   body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
-      const baseTitle = `${printerName} (${btn.dataset.ip})`;
+      const selectedIp = String(btn.dataset.ip || "").trim();
+      const baseTitle = `${printerName} (${selectedIp})`;
+      resultModalState.ip = selectedIp;
+      resultModalState.printerName = printerName;
+      resultModalState.configLoadedIp = "";
+      resultModalState.scanLoadedIp = "";
       showResultModalLoading(baseTitle, "Loading counter and status...");
       const [counterResult, statusResult] = await Promise.all([
-        runAction(btn.dataset.ip, "counter", { silent: true }),
-        runAction(btn.dataset.ip, "status", { silent: true }),
+        runAction(selectedIp, "counter", { silent: true }),
+        runAction(selectedIp, "status", { silent: true }),
       ]);
       const modal = document.getElementById("result-modal");
       if (!modal || modal.hidden) return;
@@ -489,7 +688,7 @@ async function loadDevices(forceRefresh = false) {
       const statusPayload = statusResult.payload || {};
       const dataView = {
         printer_name: counterPayload.printer_name || statusPayload.printer_name || "Local Printer",
-        ip: counterPayload.ip || statusPayload.ip || btn.dataset.ip || "",
+        ip: counterPayload.ip || statusPayload.ip || selectedIp || "",
         timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
         counter_data: counterPayload.counter_data || {},
         status_data: statusPayload.status_data || {},

@@ -41,16 +41,49 @@
       <h4 id="result-modal-title">Counter Result</h4>
       <button id="result-modal-close" class="modal-close" type="button" aria-label="Close">&times;</button>
     </div>
-    <div id="result-modal-tools" class="modal-tools" hidden>
-      <button id="result-modal-view-summary" class="modal-view-btn active" type="button">Summary</button>
-      <button id="result-modal-view-html" class="modal-view-btn" type="button">HTML Preview</button>
+    <div id="result-modal-main-tabs" class="modal-tools">
+      <button id="result-modal-tab-counter" class="modal-view-btn active" type="button">Counter</button>
+      <button id="result-modal-tab-scan" class="modal-view-btn" type="button">Scan</button>
+      <button id="result-modal-tab-config" class="modal-view-btn" type="button">Config</button>
     </div>
     <div id="result-modal-loading" class="table-loading">
       <span class="spinner"></span>
       <span id="result-modal-loading-text">Loading...</span>
     </div>
-    <pre id="result-modal-body" class="json-output"></pre>
-    <iframe id="result-modal-html" class="modal-html-frame" sandbox="" hidden></iframe>
+    <div id="result-modal-panel-counter">
+      <div id="result-modal-counter-tools" class="modal-tools" hidden>
+        <button id="result-modal-view-summary" class="modal-view-btn active" type="button">Summary</button>
+        <button id="result-modal-view-html" class="modal-view-btn" type="button">HTML Preview</button>
+      </div>
+      <pre id="result-modal-counter-body" class="json-output"></pre>
+      <iframe id="result-modal-counter-html" class="modal-html-frame" sandbox="" hidden></iframe>
+    </div>
+    <div id="result-modal-panel-scan" hidden>
+      <div class="modal-tools">
+        <button id="result-modal-scan-reload" class="btn ghost" type="button">Reload Address List</button>
+      </div>
+      <div class="table-wrap">
+        <table class="device-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Registration No</th>
+              <th>Name</th>
+              <th>User Code</th>
+              <th>Email</th>
+              <th>Folder</th>
+            </tr>
+          </thead>
+          <tbody id="result-modal-scan-body">
+            <tr><td colspan="6">No data</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre id="result-modal-scan-output" class="json-output"></pre>
+    </div>
+    <div id="result-modal-panel-config" hidden>
+      <pre id="result-modal-config-body" class="json-output"></pre>
+    </div>
   </div>
 </div>
 
