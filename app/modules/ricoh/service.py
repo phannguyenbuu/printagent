@@ -283,7 +283,8 @@ class RicohService:
             auth_page.raise_for_status()
             auth_html = auth_page.text
             action_match = re.search(r"<form[^>]*action=['\"]([^'\"]+)['\"]", auth_html, re.I)
-            post_url = urljoin(base_url, action_match.group(1)) if action_match else auth_url
+            # Resolve relative form action against authForm URL to keep full webArch path.
+            post_url = urljoin(auth_url, action_match.group(1)) if action_match else auth_url
             token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", auth_html)
             wim_token = token_match.group(1) if token_match else ""
             encoded_user = base64.b64encode(printer.user.encode("utf-8")).decode("ascii")
@@ -344,7 +345,8 @@ class RicohService:
         auth_page.raise_for_status()
         auth_html = auth_page.text
         action_match = re.search(r"<form[^>]*action=['\"]([^'\"]+)['\"]", auth_html, re.I)
-        post_url = urljoin(base_url, action_match.group(1)) if action_match else auth_url
+        # Resolve relative form action against authForm URL to keep full webArch path.
+        post_url = urljoin(auth_url, action_match.group(1)) if action_match else auth_url
         token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", auth_html)
         wim_token = token_match.group(1) if token_match else ""
         encoded_user = base64.b64encode(printer.user.encode("utf-8")).decode("ascii")
