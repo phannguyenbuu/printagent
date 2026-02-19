@@ -630,9 +630,49 @@ class RicohService:
         fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session = self.create_http_client(printer)
-        get_url = "/web/entry/en/address/adrsGetUserWizard.cgi"
         set_url = "/web/entry/en/address/adrsSetUserWizard.cgi"
-        html = self.authenticate_and_get(session, printer, get_url)
+        # Warm up context from address list first; many Ricoh models require this before wizard page.
+        warmup_targets = [
+            "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
+            "/web/guest/en/address/adrsList.cgi?modeIn=LIST_ALL",
+        ]
+        for target in warmup_targets:
+            try:
+                self.authenticate_and_get(session, printer, target)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+
+        get_candidates = [
+            "/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=ADD&entryTypeIn=1",
+            "/web/entry/en/address/adrsGetUserWizard.cgi?entryTypeIn=1",
+            "/web/entry/en/address/adrsGetUserWizard.cgi?modeIn=ADD",
+            "/web/entry/en/address/adrsGetUserWizard.cgi",
+            "/web/guest/en/address/adrsGetUserWizard.cgi?modeIn=ADD&entryTypeIn=1",
+            "/web/guest/en/address/adrsGetUserWizard.cgi?entryTypeIn=1",
+            "/web/guest/en/address/adrsGetUserWizard.cgi?modeIn=ADD",
+            "/web/guest/en/address/adrsGetUserWizard.cgi",
+        ]
+        html = ""
+        get_url = ""
+        errors: list[str] = []
+        for target in get_candidates:
+            try:
+                candidate_html = self.authenticate_and_get(session, printer, target)
+                if not candidate_html.strip():
+                    errors.append(f"{target}:empty")
+                    continue
+                if "login.cgi" in candidate_html or "authForm.cgi" in candidate_html:
+                    errors.append(f"{target}:login_page")
+                    continue
+                html = candidate_html
+                get_url = target
+                break
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{target}:{type(exc).__name__}:{exc}")
+                continue
+        if not html:
+            raise RuntimeError("cannot open address create wizard; " + " | ".join(errors[-4:]))
 
         defaults = self._extract_hidden_inputs(html)
         token = defaults.get("wimToken", "")
