@@ -814,6 +814,28 @@ class RicohService:
                     ),
                     None,
                 )
+                if not created:
+                    try:
+                        html_list = self.read_address_list_with_client(session, printer)
+                        html_entries = self.parse_address_list(html_list)
+                        created = next(
+                            (
+                                e
+                                for e in html_entries
+                                if str(e.name or "").strip().lower() == str(name or "").strip().lower()
+                            ),
+                            None,
+                        )
+                        if html_entries:
+                            verify_entries = html_entries
+                        LOGGER.info(
+                            "Address create wizard(verify-html): ip=%s html_entries=%s created_reg=%s",
+                            printer.ip,
+                            len(html_entries),
+                            str(created.registration_no) if created else "",
+                        )
+                    except Exception:  # noqa: BLE001
+                        LOGGER.exception("Address create wizard(verify-html): ip=%s status=error", printer.ip)
                 LOGGER.info(
                     "Address create wizard(verify): ip=%s verify_entries=%s created_reg=%s",
                     printer.ip,
@@ -823,13 +845,24 @@ class RicohService:
 
                 auto_updated = False
                 auto_update_error = ""
-                if created and str(created.registration_no or "").strip():
+                update_reg = str(created.registration_no or "").strip() if created else str(next_index or "").strip()
+                if update_reg:
+                    if not created:
+                        created = AddressEntry(
+                            type="User",
+                            registration_no=update_reg,
+                            name=str(name or "").strip(),
+                            user_code=str(user_code or "").strip(),
+                            date_last_used="-",
+                            email_address="",
+                            folder="",
+                        )
                     need_email = bool(str(email or "").strip()) and str(created.email_address or "").strip() in {"", "-", "---"}
                     need_folder = bool(str(folder or "").strip()) and str(created.folder or "").strip() in {"", "-", "---"}
                     LOGGER.info(
                         "Address create wizard(auto-update-check): ip=%s reg=%s need_email=%s need_folder=%s current_email=%s current_folder=%s",
                         printer.ip,
-                        str(created.registration_no or "").strip(),
+                        update_reg,
                         need_email,
                         need_folder,
                         str(created.email_address or ""),
@@ -839,7 +872,7 @@ class RicohService:
                         try:
                             self.modify_address_user_wizard(
                                 printer=printer,
-                                registration_no=str(created.registration_no).strip(),
+                                registration_no=update_reg,
                                 name=str(name or "").strip(),
                                 email=str(email or "").strip(),
                                 folder=str(folder or "").strip(),
@@ -850,7 +883,7 @@ class RicohService:
                             LOGGER.info(
                                 "Address create wizard(auto-update): ip=%s reg=%s status=success",
                                 printer.ip,
-                                str(created.registration_no or "").strip(),
+                                update_reg,
                             )
                             try:
                                 verify_raw = self.get_address_list_ajax_with_client(session, printer)
@@ -859,14 +892,14 @@ class RicohService:
                                     (
                                         e
                                         for e in verify_entries
-                                        if str(e.registration_no or "").strip() == str(created.registration_no).strip()
+                                        if str(e.registration_no or "").strip() == update_reg
                                     ),
                                     created,
                                 )
                                 LOGGER.info(
                                     "Address create wizard(auto-update-verify): ip=%s reg=%s email=%s folder=%s verify_entries=%s",
                                     printer.ip,
-                                    str(created.registration_no or "").strip(),
+                                    update_reg,
                                     str(created.email_address or ""),
                                     str(created.folder or ""),
                                     len(verify_entries),
@@ -875,7 +908,7 @@ class RicohService:
                                 LOGGER.exception(
                                     "Address create wizard(auto-update-verify): ip=%s reg=%s status=error",
                                     printer.ip,
-                                    str(created.registration_no or "").strip(),
+                                    update_reg,
                                 )
                                 pass
                         except Exception as exc:  # noqa: BLE001
@@ -883,7 +916,7 @@ class RicohService:
                             LOGGER.exception(
                                 "Address create wizard(auto-update): ip=%s reg=%s status=error error=%s",
                                 printer.ip,
-                                str(created.registration_no or "").strip(),
+                                update_reg,
                                 auto_update_error,
                             )
                 LOGGER.info(
