@@ -8,7 +8,10 @@
   </div>
 
   <form id="scan-target-form" class="inline-form">
-    <input id="scan-ip" placeholder="Printer IP" />
+    <select id="scan-device-select">
+      <option value="">Select device...</option>
+    </select>
+    <input id="scan-ip" placeholder="Printer IP (auto from device)" readonly />
     <input id="scan-user" placeholder="User (optional)" />
     <input id="scan-password" type="password" placeholder="Password (optional)" />
   </form>

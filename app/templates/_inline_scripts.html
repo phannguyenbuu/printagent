@@ -581,22 +581,89 @@ async function initDevicesPage() {
 }
 
 function getScanTarget() {
-  const ip = (document.getElementById("scan-ip")?.value || "").trim();
+  const selectedIp = (document.getElementById("scan-device-select")?.value || "").trim();
+  const ipFromField = (document.getElementById("scan-ip")?.value || "").trim();
+  const ip = selectedIp || ipFromField;
   const user = (document.getElementById("scan-user")?.value || "").trim();
   const password = (document.getElementById("scan-password")?.value || "").trim();
   return { ip, user, password };
 }
 
-async function ensureScanTargetDefaults() {
+function syncScanDeviceIpField() {
+  const select = document.getElementById("scan-device-select");
   const ipInput = document.getElementById("scan-ip");
+  if (!select || !ipInput) return;
+  ipInput.value = String(select.value || "").trim();
+}
+
+async function refreshScanDevices(forceBackendRefresh = true) {
+  const select = document.getElementById("scan-device-select");
+  if (!select) return [];
+  const selectedBefore = String(select.value || "").trim();
+  const req = forceBackendRefresh
+    ? jsonFetch("/api/devices/refresh", { method: "POST" })
+    : jsonFetch("/api/devices");
+  const data = await req;
+  const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
+  const rankSource = (source) => {
+    const s = String(source || "").toLowerCase();
+    if (s === "api") return 3;
+    if (s === "test") return 2;
+    return 1;
+  };
+  const byIp = new Map();
+  for (const row of rawDevices) {
+    const ip = String(row?.ip || "").trim();
+    const type = String(row?.type || "").toLowerCase();
+    if (!ip || type !== "ricoh") continue;
+    const prev = byIp.get(ip);
+    if (!prev || rankSource(row?.source) > rankSource(prev?.source)) {
+      byIp.set(ip, row);
+    }
+  }
+  const devices = Array.from(byIp.values()).sort((a, b) => {
+    const nameA = String(a?.name || "").toLowerCase();
+    const nameB = String(b?.name || "").toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+  const options = [`<option value="">Select device...</option>`];
+  for (const d of devices) {
+    const ip = String(d?.ip || "").trim();
+    const name = String(d?.name || ip).trim();
+    options.push(`<option value="${ip.replaceAll('"', "&quot;")}">${name} (${ip})</option>`);
+  }
+  select.innerHTML = options.join("");
+  const stillExists = devices.some((d) => String(d?.ip || "").trim() === selectedBefore);
+  if (selectedBefore && stillExists) {
+    select.value = selectedBefore;
+  } else if (devices.length) {
+    select.value = String(devices[0].ip || "").trim();
+  } else {
+    select.value = "";
+  }
+  syncScanDeviceIpField();
+  return devices;
+}
+
+async function ensureScanTargetDefaults() {
+  const select = document.getElementById("scan-device-select");
   const userInput = document.getElementById("scan-user");
-  if (!ipInput) return;
-  if (String(ipInput.value || "").trim()) return;
+  if (!select) return;
+  try {
+    const devices = await refreshScanDevices(true);
+    if (devices.length) return;
+  } catch (_err) {
+    // Fallback below.
+  }
   try {
     const cfg = await jsonFetch("/api/dashboard/config");
     const testIp = String(cfg?.env?.TEST_IP || "").trim();
     const testUser = String(cfg?.env?.TEST_USER || "").trim();
-    if (testIp) ipInput.value = testIp;
+    if (testIp) {
+      select.innerHTML = `<option value="${testIp.replaceAll('"', "&quot;")}">Test Printer (${testIp})</option>`;
+      select.value = testIp;
+      syncScanDeviceIpField();
+    }
     if (userInput && !String(userInput.value || "").trim() && testUser) {
       userInput.value = testUser;
     }
@@ -638,6 +705,7 @@ function renderScanAddressRows(entries) {
 
 async function loadScanAddressList() {
   const out = document.getElementById("scan-output");
+  await refreshScanDevices(true);
   const target = getScanTarget();
   if (!target.ip) throw new Error("Missing printer IP");
   const query = new URLSearchParams(target).toString();
@@ -652,8 +720,16 @@ async function initScanPage() {
   const targetForm = document.getElementById("scan-target-form");
   const createForm = document.getElementById("scan-create-form");
   const modifyForm = document.getElementById("scan-modify-form");
+  const deviceSelect = document.getElementById("scan-device-select");
   const out = document.getElementById("scan-output");
   if (!targetForm || !createForm || !modifyForm) return;
+
+  if (deviceSelect && !deviceSelect.dataset.bound) {
+    deviceSelect.dataset.bound = "1";
+    deviceSelect.addEventListener("change", () => {
+      syncScanDeviceIpField();
+    });
+  }
 
   if (!targetForm.dataset.bound) {
     targetForm.dataset.bound = "1";
