@@ -881,11 +881,13 @@ function bindResultModal() {
       const payload = {
         ip,
         registration_no: reg,
+        entry_id: entryId,
         name: val("name"),
         email: val("email"),
         folder: val("folder"),
         user_code: String(row.dataset.userCode || "").trim(),
         fields: {},
+        recreate_on_fail: true,
       };
       const data = await jsonFetch("/api/scan/address-modify", {
         method: "POST",
