@@ -32,10 +32,6 @@ function hasMeaningfulScanEntryValue(row) {
   const values = [
     row.registration_no,
     row.name,
-    row.user_code,
-    row.email_address,
-    row.folder,
-    row.date_last_used,
   ];
   return values.some((v) => {
     const t = String(v ?? "").trim();
@@ -1074,7 +1070,7 @@ async function loadDevices(forceRefresh = false) {
   if (!body) return;
   body.innerHTML = `
     <tr>
-      <td colspan="6">
+      <td colspan="7">
         <div class="table-loading">
           <span class="spinner"></span>
           <span>Loading printers...</span>
@@ -1111,19 +1107,21 @@ async function loadDevices(forceRefresh = false) {
   }
   const devices = Array.from(dedupMap.values());
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="6">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
     .map((d) => {
       const hasIp = Boolean(d.ip);
       const canQuery = hasIp;
+      const mac = d.mac_id || "-";
       return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
         <td>
           <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
         </td>
         <td>${d.ip || "-"}</td>
+        <td class="device-mac" data-ip="${d.ip || ""}">${mac}</td>
         <td>${d.port_name || "-"}</td>
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
@@ -1131,6 +1129,19 @@ async function loadDevices(forceRefresh = false) {
       </tr>`;
     })
     .join("");
+
+  const macCells = Array.from(body.querySelectorAll("td.device-mac[data-ip]"));
+  for (const cell of macCells) {
+    const ip = String(cell.dataset.ip || "").trim();
+    if (!ip) continue;
+    try {
+      const data = await jsonFetch(`/api/device/interface?ip=${encodeURIComponent(ip)}`);
+      const mac = Array.isArray(data.macs) && data.macs.length ? data.macs[0] : "-";
+      cell.textContent = mac;
+    } catch (_err) {
+      // Keep existing value (mac_id or "-") on failure.
+    }
+  }
 
   body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
     btn.addEventListener("click", async () => {

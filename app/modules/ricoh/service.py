@@ -113,6 +113,14 @@ class RicohService:
     def read_status(self, printer: Printer) -> str:
         return self._http_get(f"http://{printer.ip}/web/guest/en/websys/webArch/getStatus.cgi")
 
+    def read_network_interface(self, printer: Printer) -> str:
+        session = self.create_http_client_auth_form_only(printer)
+        target = "/web/entry/en/websys/netw/getInterface.cgi"
+        try:
+            return self.authenticate_and_get(session, printer, target)
+        except Exception:  # noqa: BLE001
+            return self._http_get(f"http://{printer.ip}/web/guest/en/websys/netw/getInterface.cgi", session=session)
+
     def process_device_info(self, printer: Printer, should_post: bool) -> dict[str, Any]:
         html = self.read_device_info(printer)
         payload = {

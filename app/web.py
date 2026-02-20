@@ -1492,6 +1492,30 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
         return jsonify({"ok": False, "error": f"Unsupported action: {action}"}), 400
 
+    @app.get("/api/device/interface")
+    def api_device_interface() -> Any:
+        ip = _normalize_ipv4(str(request.args.get("ip", "")).strip())
+        user = str(request.args.get("user", "")).strip()
+        password = str(request.args.get("password", "")).strip()
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        effective_user = user or "admin"
+        effective_password = password or "admin"
+        target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
+        target.user = effective_user
+        target.password = effective_password
+        try:
+            html = ricoh_service.read_network_interface(target)
+            raw_macs = re.findall(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", html or "")
+            macs = []
+            for item in raw_macs:
+                normalized = _normalize_mac(item)
+                if normalized and normalized not in macs:
+                    macs.append(normalized)
+            return jsonify({"ok": True, "ip": ip, "macs": macs, "raw_len": len(html or "")})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc), "ip": ip}), 500
+
     @app.get("/api/log-jobs")
     def api_log_jobs() -> Any:
         counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
