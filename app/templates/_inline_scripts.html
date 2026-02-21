@@ -135,6 +135,9 @@ async function refreshSingleDeviceMachineState(node) {
   node.disabled = true;
   setDeviceControlText(node, "Loading...", true);
   const data = await jsonFetch(`/api/devices/machine-state?ip=${encodeURIComponent(ip)}`);
+  if (!data?.ok) {
+    throw new Error(String(data?.error || "Unable to read machine state"));
+  }
   applyDeviceMachineState(node, data?.state || {});
 }
 

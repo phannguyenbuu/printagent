@@ -1528,32 +1528,78 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         if not ip:
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         trace_id = f"machine-state-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-        target = _resolve_target_printer(ip=ip)
-        if not str(target.user or "").strip():
-            target.user = config.get_string("test.user") or "admin"
-        if target.password is None or str(target.password).strip() == "":
-            target.password = config.get_string("test.password") or "admin"
-        LOGGER.info(
-            "Machine state request: trace_id=%s ip=%s user=%s has_password=%s remote_addr=%s",
-            trace_id,
-            ip,
-            str(target.user or ""),
-            bool(str(target.password or "").strip()),
-            request.remote_addr or "-",
-        )
-        try:
-            state = ricoh_service.read_machine_control_state(target)
+        user_arg = str(request.args.get("user", "")).strip()
+        password_arg = str(request.args.get("password", "")).strip()
+
+        base_target = _resolve_target_printer(ip=ip, user=user_arg, password=password_arg)
+        resolved_user = str(base_target.user or "").strip()
+        resolved_password = str(base_target.password or "").strip()
+        config_user = str(config.get_string("test.user") or "").strip()
+        config_password = str(config.get_string("test.password") or "").strip()
+
+        attempts: list[tuple[str, str, str]] = []
+        # Priority: explicit query -> resolved target -> test credential -> admin/admin.
+        if user_arg or password_arg:
+            attempts.append(("query", user_arg, password_arg))
+        if resolved_user or resolved_password:
+            attempts.append(("resolved", resolved_user, resolved_password))
+        if config_user or config_password:
+            attempts.append(("config", config_user, config_password))
+        attempts.append(("admin_default", "admin", "admin"))
+
+        # Deduplicate same credential pairs.
+        unique_attempts: list[tuple[str, str, str]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for label, user_value, password_value in attempts:
+            pair = (str(user_value or ""), str(password_value or ""))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            unique_attempts.append((label, pair[0], pair[1]))
+
+        last_error = ""
+        for label, user_value, password_value in unique_attempts:
+            target = _resolve_target_printer(ip=ip, user=user_value, password=password_value)
+            target.user = user_value
+            target.password = password_value
             LOGGER.info(
-                "Machine state success: trace_id=%s ip=%s enabled=%s method=%s",
+                "Machine state request: trace_id=%s ip=%s attempt=%s user=%s has_password=%s remote_addr=%s",
                 trace_id,
                 ip,
-                bool(state.get("enabled", False)),
-                str(state.get("method", "")),
+                label,
+                str(target.user or ""),
+                bool(str(target.password or "").strip()),
+                request.remote_addr or "-",
             )
-            return jsonify({"ok": True, "ip": ip, "state": state, "trace_id": trace_id})
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("Machine state failed: trace_id=%s ip=%s", trace_id, ip)
-            return jsonify({"ok": False, "error": str(exc), "ip": ip, "trace_id": trace_id}), 500
+            try:
+                state = ricoh_service.read_machine_control_state(target)
+                LOGGER.info(
+                    "Machine state success: trace_id=%s ip=%s attempt=%s enabled=%s method=%s",
+                    trace_id,
+                    ip,
+                    label,
+                    bool(state.get("enabled", False)),
+                    str(state.get("method", "")),
+                )
+                return jsonify({"ok": True, "ip": ip, "state": state, "trace_id": trace_id, "auth_attempt": label})
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                LOGGER.warning(
+                    "Machine state attempt failed: trace_id=%s ip=%s attempt=%s error=%s",
+                    trace_id,
+                    ip,
+                    label,
+                    exc,
+                )
+
+        return jsonify(
+            {
+                "ok": False,
+                "error": last_error or "Unable to read machine state",
+                "ip": ip,
+                "trace_id": trace_id,
+            }
+        )
 
     @app.get("/api/device/interface")
     def api_device_interface() -> Any:
@@ -1562,22 +1608,63 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         password = str(request.args.get("password", "")).strip()
         if not ip:
             return jsonify({"ok": False, "error": "Missing ip"}), 400
-        effective_user = user or "admin"
-        effective_password = password or "admin"
-        target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
-        target.user = effective_user
-        target.password = effective_password
-        try:
-            html = ricoh_service.read_network_interface(target)
-            raw_macs = re.findall(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", html or "")
-            macs = []
-            for item in raw_macs:
-                normalized = _normalize_mac(item)
-                if normalized and normalized not in macs:
-                    macs.append(normalized)
-            return jsonify({"ok": True, "ip": ip, "macs": macs, "raw_len": len(html or "")})
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": str(exc), "ip": ip}), 500
+        trace_id = f"iface-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        base_target = _resolve_target_printer(ip=ip, user=user, password=password)
+        resolved_user = str(base_target.user or "").strip()
+        resolved_password = str(base_target.password or "").strip()
+        config_user = str(config.get_string("test.user") or "").strip()
+        config_password = str(config.get_string("test.password") or "").strip()
+
+        attempts: list[tuple[str, str, str]] = []
+        if user or password:
+            attempts.append(("query", user, password))
+        if resolved_user or resolved_password:
+            attempts.append(("resolved", resolved_user, resolved_password))
+        if config_user or config_password:
+            attempts.append(("config", config_user, config_password))
+        attempts.append(("admin_default", "admin", "admin"))
+        attempts.append(("guest", "", ""))
+
+        unique_attempts: list[tuple[str, str, str]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for label, user_value, password_value in attempts:
+            pair = (str(user_value or ""), str(password_value or ""))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            unique_attempts.append((label, pair[0], pair[1]))
+
+        last_error = ""
+        for label, user_value, password_value in unique_attempts:
+            target = _resolve_target_printer(ip=ip, user=user_value, password=password_value)
+            target.user = user_value
+            target.password = password_value
+            try:
+                html = ricoh_service.read_network_interface(target)
+                raw_macs = re.findall(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", html or "")
+                macs = []
+                for item in raw_macs:
+                    normalized = _normalize_mac(item)
+                    if normalized and normalized not in macs:
+                        macs.append(normalized)
+                LOGGER.info(
+                    "Device interface success: trace_id=%s ip=%s attempt=%s macs=%s",
+                    trace_id,
+                    ip,
+                    label,
+                    len(macs),
+                )
+                return jsonify({"ok": True, "ip": ip, "macs": macs, "raw_len": len(html or ""), "trace_id": trace_id, "auth_attempt": label})
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                LOGGER.warning(
+                    "Device interface attempt failed: trace_id=%s ip=%s attempt=%s error=%s",
+                    trace_id,
+                    ip,
+                    label,
+                    exc,
+                )
+        return jsonify({"ok": False, "error": last_error or "Unable to read interface", "ip": ip, "trace_id": trace_id})
 
     @app.get("/api/log-jobs")
     def api_log_jobs() -> Any:
