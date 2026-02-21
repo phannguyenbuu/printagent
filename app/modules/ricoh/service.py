@@ -122,17 +122,20 @@ class RicohService:
             return self._http_get(f"http://{printer.ip}/web/guest/en/websys/netw/getInterface.cgi", session=session)
 
     def process_device_info(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html = self.read_device_info(printer)
-        payload = {
-            "printer_name": printer.name,
-            "ip": printer.ip,
-            "html": html,
-            "device_info": self.parse_device_info(html),
-            "timestamp": self._timestamp(),
-        }
-        if should_post:
-            self.api_client.post_data(payload)
-        return payload
+        try:
+            html = self.read_device_info(printer)
+            payload = {
+                "printer_name": printer.name,
+                "ip": printer.ip,
+                "html": html,
+                "device_info": self.parse_device_info(html),
+                "timestamp": self._timestamp(),
+            }
+            if should_post:
+                self.api_client.post_data(payload)
+            return payload
+        finally:
+            self._logout_after_collect(printer, source="device_info")
 
     def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
         try:
@@ -490,17 +493,20 @@ class RicohService:
         return ""
 
     def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
-        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
-        session = self.create_http_client(printer)
-        html = self.authenticate_and_get(session, printer, config_url)
-        method = self._extract_user_authentication_method(html)
-        enabled = method == "RADIO_OFF"
-        return {
-            "enabled": enabled,
-            "method": method,
-            "known": bool(method),
-            "source": config_url,
-        }
+        try:
+            config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
+            session = self.create_http_client(printer)
+            html = self.authenticate_and_get(session, printer, config_url)
+            method = self._extract_user_authentication_method(html)
+            enabled = method == "RADIO_OFF"
+            return {
+                "enabled": enabled,
+                "method": method,
+                "known": bool(method),
+                "source": config_url,
+            }
+        finally:
+            self._logout_after_collect(printer, source="machine_state")
 
     def _submit_user_authentication_settings(
         self,
@@ -586,36 +592,50 @@ class RicohService:
                         attempt + 1,
                         verify_exc,
                     )
-            raise
+            # Do not fail hard here: command may still be applied on device side.
+            # UI will refresh and verify actual machine state immediately after action.
+            LOGGER.warning(
+                "Machine control timeout unresolved; treating as accepted and relying on follow-up verification: "
+                "ip=%s desired_method=%s",
+                printer.ip,
+                desired_method,
+            )
+            return
 
     def enable_machine(self, printer: Printer) -> None:
-        # Device Enable => EasySecurity OFF.
-        self._submit_user_authentication_settings(
-            printer,
-            method="RADIO_OFF",
-            copier_bw=False,
-            printer_bw=False,
-            printer_pc_control=False,
-            document_server=False,
-            fax=False,
-            scanner=False,
-            browser=False,
-        )
+        try:
+            # Device Enable => EasySecurity OFF.
+            self._submit_user_authentication_settings(
+                printer,
+                method="RADIO_OFF",
+                copier_bw=False,
+                printer_bw=False,
+                printer_pc_control=False,
+                document_server=False,
+                fax=False,
+                scanner=False,
+                browser=False,
+            )
+        finally:
+            self._logout_after_collect(printer, source="enable_machine")
 
     def lock_machine(self, printer: Printer) -> None:
-        # Device Disable => UserCode ON with all restrictions from requested profile:
-        # Copier B&W=ON, Printer B&W=ON, PC Control=OFF, Document Server/Fax/Scanner/Browser=ON.
-        self._submit_user_authentication_settings(
-            printer,
-            method="UA_USER_CODE",
-            copier_bw=True,
-            printer_bw=True,
-            printer_pc_control=False,
-            document_server=True,
-            fax=True,
-            scanner=True,
-            browser=True,
-        )
+        try:
+            # Device Disable => UserCode ON with all restrictions from requested profile:
+            # Copier B&W=ON, Printer B&W=ON, PC Control=OFF, Document Server/Fax/Scanner/Browser=ON.
+            self._submit_user_authentication_settings(
+                printer,
+                method="UA_USER_CODE",
+                copier_bw=True,
+                printer_bw=True,
+                printer_pc_control=False,
+                document_server=True,
+                fax=True,
+                scanner=True,
+                browser=True,
+            )
+        finally:
+            self._logout_after_collect(printer, source="disable_machine")
 
     def disable_machine(self, printer: Printer) -> None:
         self.lock_machine(printer)
