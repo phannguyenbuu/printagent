@@ -539,13 +539,54 @@ class RicohService:
             ("userCodeScaner", "true" if scanner else "false"),
             ("userCodeMfpBrowser", "true" if browser else "false"),
         ]
-        resp = session.post(
-            f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
-            data=form,
-            headers={"Referer": f"http://{printer.ip}{config_url}"},
-            timeout=10,
-        )
-        resp.raise_for_status()
+        desired_method = str(method or "").strip().upper()
+        try:
+            resp = session.post(
+                f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
+                data=form,
+                headers={"Referer": f"http://{printer.ip}{config_url}"},
+                timeout=25,
+            )
+            resp.raise_for_status()
+            return
+        except requests.exceptions.Timeout as exc:
+            # Some Ricoh models apply settings but respond slowly.
+            LOGGER.warning(
+                "Machine control post timeout; verifying state: ip=%s desired_method=%s error=%s",
+                printer.ip,
+                desired_method,
+                exc,
+            )
+            for attempt in range(3):
+                if attempt > 0:
+                    time.sleep(1.5)
+                try:
+                    verify_html = self.authenticate_and_get(session, printer, config_url)
+                    current_method = self._extract_user_authentication_method(verify_html)
+                    if current_method == desired_method:
+                        LOGGER.info(
+                            "Machine control confirmed after timeout: ip=%s method=%s attempt=%s",
+                            printer.ip,
+                            current_method,
+                            attempt + 1,
+                        )
+                        return
+                    LOGGER.info(
+                        "Machine control verify mismatch after timeout: ip=%s desired=%s current=%s attempt=%s",
+                        printer.ip,
+                        desired_method,
+                        current_method,
+                        attempt + 1,
+                    )
+                except Exception as verify_exc:  # noqa: BLE001
+                    LOGGER.warning(
+                        "Machine control verify attempt failed: ip=%s desired=%s attempt=%s error=%s",
+                        printer.ip,
+                        desired_method,
+                        attempt + 1,
+                        verify_exc,
+                    )
+            raise
 
     def enable_machine(self, printer: Printer) -> None:
         # Device Enable => EasySecurity OFF.
