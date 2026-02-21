@@ -110,6 +110,49 @@ const resultModalState = {
   isolated: false,
 };
 let devicesPollingStatusTimer = null;
+const deviceControlState = new Map();
+
+function loadDeviceControlState() {
+  try {
+    const raw = localStorage.getItem("device_control_state_v1");
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return;
+    Object.entries(data).forEach(([ip, enabled]) => {
+      const key = String(ip || "").trim();
+      if (!key) return;
+      deviceControlState.set(key, Boolean(enabled));
+    });
+  } catch (_err) {
+    // Ignore broken local storage.
+  }
+}
+
+function saveDeviceControlState() {
+  try {
+    const payload = {};
+    deviceControlState.forEach((enabled, ip) => {
+      payload[ip] = Boolean(enabled);
+    });
+    localStorage.setItem("device_control_state_v1", JSON.stringify(payload));
+  } catch (_err) {
+    // Ignore local storage failures.
+  }
+}
+
+function getDeviceDesiredEnabled(ip) {
+  const key = String(ip || "").trim();
+  if (!key) return true;
+  if (!deviceControlState.has(key)) return true;
+  return Boolean(deviceControlState.get(key));
+}
+
+function setDeviceDesiredEnabled(ip, enabled) {
+  const key = String(ip || "").trim();
+  if (!key) return;
+  deviceControlState.set(key, Boolean(enabled));
+  saveDeviceControlState();
+}
 
 function setResultModalView(tab) {
   const summaryBtn = document.getElementById("result-modal-tab-summary");
@@ -999,16 +1042,22 @@ function getDeviceFilterMode() {
 
 function renderDevicesPollingStatus(status, errorText = "") {
   const badge = document.getElementById("devices-polling-status");
+  const toggle = document.getElementById("devices-polling-toggle");
   if (!badge) return;
   badge.classList.remove("ok", "warn", "off", "loading");
   if (errorText) {
     badge.classList.add("warn");
     badge.textContent = "Polling: error";
     badge.title = errorText;
+    if (toggle) {
+      toggle.disabled = false;
+      toggle.title = errorText;
+    }
     return;
   }
+  const enabled = Boolean(status?.enabled);
   const running = Boolean(status?.running);
-  if (running) {
+  if (enabled && running) {
     badge.classList.add("ok");
     badge.textContent = "Polling: ON";
   } else {
@@ -1017,7 +1066,12 @@ function renderDevicesPollingStatus(status, errorText = "") {
   }
   const interval = Number(status?.interval_seconds || 0);
   const lastCycle = String(status?.last_cycle_at || "").trim();
-  badge.title = `running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
+  badge.title = `enabled=${enabled} running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
+  if (toggle) {
+    toggle.checked = enabled;
+    toggle.disabled = false;
+    toggle.title = enabled ? "Polling enabled" : "Polling disabled";
+  }
 }
 
 async function loadDevicesPollingStatus() {
@@ -1070,7 +1124,7 @@ async function loadDevices(forceRefresh = false) {
   if (!body) return;
   body.innerHTML = `
     <tr>
-      <td colspan="7">
+      <td colspan="8">
         <div class="table-loading">
           <span class="spinner"></span>
           <span>Loading printers...</span>
@@ -1107,7 +1161,7 @@ async function loadDevices(forceRefresh = false) {
   }
   const devices = Array.from(dedupMap.values());
   if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="7">No devices found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
     return;
   }
   body.innerHTML = devices
@@ -1115,6 +1169,7 @@ async function loadDevices(forceRefresh = false) {
       const hasIp = Boolean(d.ip);
       const canQuery = hasIp;
       const mac = d.mac_id || "-";
+      const desiredEnabled = hasIp ? getDeviceDesiredEnabled(d.ip) : true;
       return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
         <td>
@@ -1126,6 +1181,15 @@ async function loadDevices(forceRefresh = false) {
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
         <td>${d.source || "-"}</td>
+        <td>
+          <div class="device-control-wrap">
+            <label class="mini-switch">
+              <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" ${desiredEnabled ? "checked" : ""} ${hasIp ? "" : "disabled"} />
+              <span class="mini-slider"></span>
+            </label>
+            <span class="device-control-text">${desiredEnabled ? "Enable" : "Disable"}</span>
+          </div>
+        </td>
       </tr>`;
     })
     .join("");
@@ -1168,12 +1232,60 @@ async function loadDevices(forceRefresh = false) {
     });
   });
 
+  body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
+    node.addEventListener("change", async () => {
+      const ip = String(node.dataset.ip || "").trim();
+      const textNode = node.closest(".device-control-wrap")?.querySelector(".device-control-text");
+      if (!ip) {
+        node.checked = !node.checked;
+        return;
+      }
+      const desiredEnabled = Boolean(node.checked);
+      if (textNode) textNode.textContent = desiredEnabled ? "Enable" : "Disable";
+      node.disabled = true;
+      try {
+        const action = desiredEnabled ? "enable_machine" : "disable_machine";
+        const result = await runAction(ip, action, { silent: true });
+        if (!result?.ok) {
+          throw new Error(String(result?.error || "Action failed"));
+        }
+        setDeviceDesiredEnabled(ip, desiredEnabled);
+      } catch (_err) {
+        node.checked = !desiredEnabled;
+        if (textNode) textNode.textContent = node.checked ? "Enable" : "Disable";
+      } finally {
+        node.disabled = false;
+      }
+    });
+  });
+
   applyValidPrinterFilter();
 }
 
 async function initDevicesPage() {
   bindResultModal();
+  loadDeviceControlState();
   startDevicesPollingStatusLoop();
+  const pollingToggle = document.getElementById("devices-polling-toggle");
+  if (pollingToggle && !pollingToggle.dataset.bound) {
+    pollingToggle.dataset.bound = "1";
+    pollingToggle.addEventListener("change", async () => {
+      const desiredEnabled = Boolean(pollingToggle.checked);
+      pollingToggle.disabled = true;
+      try {
+        const data = await jsonFetch("/api/polling/toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: desiredEnabled }),
+        });
+        renderDevicesPollingStatus(data?.status || {}, "");
+      } catch (_err) {
+        pollingToggle.checked = !desiredEnabled;
+      } finally {
+        pollingToggle.disabled = false;
+      }
+    });
+  }
   const validOnlyInput = document.getElementById("valid-printer-only");
   if (validOnlyInput && !validOnlyInput.dataset.bound) {
     validOnlyInput.dataset.bound = "1";

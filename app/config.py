@@ -96,6 +96,9 @@ class AppConfig:
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
+    def set_value(self, key: str, value: Any) -> None:
+        self._set_nested(self._data, key, value)
+
     @property
     def api_url(self) -> str:
         return self.get_string("api_url", "").rstrip("/")

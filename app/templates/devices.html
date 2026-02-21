@@ -9,6 +9,13 @@
         <input id="valid-printer-only" type="checkbox" />
         Valid printer only
       </label>
+      <div class="inline-check">
+        <span>Polling</span>
+        <label class="mini-switch" title="Toggle polling bridge">
+          <input id="devices-polling-toggle" type="checkbox" />
+          <span class="mini-slider"></span>
+        </label>
+      </div>
       <span id="devices-polling-status" class="badge">Polling: checking...</span>
     </div>
     <span>Device inventory loaded from backend API and local Windows printers</span>
@@ -24,11 +31,12 @@
           <th>Connection</th>
           <th>Type</th>
           <th>Source</th>
+          <th>Enable</th>
         </tr>
       </thead>
       <tbody id="device-table-body">
         <tr>
-          <td colspan="7">Loading...</td>
+          <td colspan="8">Loading...</td>
         </tr>
       </tbody>
     </table>

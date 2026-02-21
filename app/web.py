@@ -1543,6 +1543,30 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
         return jsonify(bridge.status())
 
+    @app.post("/api/polling/toggle")
+    def api_polling_toggle() -> Any:
+        body = request.get_json(silent=True) or {}
+        enabled_raw = body.get("enabled", None)
+        if enabled_raw is None:
+            return jsonify({"ok": False, "error": "Missing enabled"}), 400
+        if isinstance(enabled_raw, bool):
+            enabled = enabled_raw
+        else:
+            enabled = str(enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+
+        app_cfg: AppConfig = app.config["APP_CONFIG"]
+        bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        store: ConfigStore = app.config["CONFIG_STORE"]
+
+        app_cfg.set_value("polling.enabled", enabled)
+        store.save_env_overrides({"POLLING_ENABLED": "true" if enabled else "false"})
+
+        if enabled:
+            ok, message = bridge.start()
+            return jsonify({"ok": ok, "message": message, "status": bridge.status()})
+        bridge.stop()
+        return jsonify({"ok": True, "message": "Polling stopped", "status": bridge.status()})
+
     @app.post("/api/ws/connect")
     def api_ws_connect() -> Any:
         ok, message = ws_client.connect()
