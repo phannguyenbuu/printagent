@@ -467,6 +467,41 @@ class RicohService:
             raise ValueError("wimToken not found")
         return match.group(1)
 
+    @staticmethod
+    def _extract_user_authentication_method(html: str) -> str:
+        for match in re.finditer(r"<input[^>]*>", html, re.I | re.S):
+            tag = match.group(0)
+            name_match = re.search(r"name=['\"]([^'\"]+)['\"]", tag, re.I)
+            if not name_match or name_match.group(1).strip() != "userAuthenticationMethod":
+                continue
+            if re.search(r"\bchecked\b", tag, re.I):
+                value_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I | re.S)
+                return str(value_match.group(1) if value_match else "").strip().upper()
+        hidden_match = re.search(
+            r"<input[^>]*name=['\"]userAuthenticationMethod['\"][^>]*value=['\"]([^'\"]*)['\"][^>]*>",
+            html,
+            re.I | re.S,
+        )
+        if hidden_match:
+            return str(hidden_match.group(1) or "").strip().upper()
+        generic_match = re.search(r"\b(RADIO_OFF|UA_[A-Z_]+)\b", html)
+        if generic_match:
+            return str(generic_match.group(1) or "").strip().upper()
+        return ""
+
+    def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
+        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
+        session = self.create_http_client(printer)
+        html = self.authenticate_and_get(session, printer, config_url)
+        method = self._extract_user_authentication_method(html)
+        enabled = method == "RADIO_OFF"
+        return {
+            "enabled": enabled,
+            "method": method,
+            "known": bool(method),
+            "source": config_url,
+        }
+
     def _submit_user_authentication_settings(
         self,
         printer: Printer,

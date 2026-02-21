@@ -110,48 +110,54 @@ const resultModalState = {
   isolated: false,
 };
 let devicesPollingStatusTimer = null;
-const deviceControlState = new Map();
 
-function loadDeviceControlState() {
-  try {
-    const raw = localStorage.getItem("device_control_state_v1");
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== "object") return;
-    Object.entries(data).forEach(([ip, enabled]) => {
-      const key = String(ip || "").trim();
-      if (!key) return;
-      deviceControlState.set(key, Boolean(enabled));
-    });
-  } catch (_err) {
-    // Ignore broken local storage.
-  }
+function setDeviceControlText(node, text, loading = false) {
+  const textNode = node?.closest(".device-control-wrap")?.querySelector(".device-control-text");
+  if (!textNode) return;
+  textNode.textContent = String(text || "");
+  textNode.classList.toggle("loading", Boolean(loading));
 }
 
-function saveDeviceControlState() {
-  try {
-    const payload = {};
-    deviceControlState.forEach((enabled, ip) => {
-      payload[ip] = Boolean(enabled);
-    });
-    localStorage.setItem("device_control_state_v1", JSON.stringify(payload));
-  } catch (_err) {
-    // Ignore local storage failures.
-  }
+function applyDeviceMachineState(node, state) {
+  if (!node) return;
+  const enabled = Boolean(state?.enabled);
+  const method = String(state?.method || "").trim();
+  node.checked = enabled;
+  node.disabled = false;
+  node.dataset.machineLoaded = "1";
+  node.title = method ? `method=${method}` : "";
+  setDeviceControlText(node, enabled ? "Enable" : "Disable", false);
 }
 
-function getDeviceDesiredEnabled(ip) {
-  const key = String(ip || "").trim();
-  if (!key) return true;
-  if (!deviceControlState.has(key)) return true;
-  return Boolean(deviceControlState.get(key));
+async function refreshSingleDeviceMachineState(node) {
+  const ip = String(node?.dataset?.ip || "").trim();
+  if (!node || !ip) return;
+  node.disabled = true;
+  setDeviceControlText(node, "Loading...", true);
+  const data = await jsonFetch(`/api/devices/machine-state?ip=${encodeURIComponent(ip)}`);
+  applyDeviceMachineState(node, data?.state || {});
 }
 
-function setDeviceDesiredEnabled(ip, enabled) {
-  const key = String(ip || "").trim();
-  if (!key) return;
-  deviceControlState.set(key, Boolean(enabled));
-  saveDeviceControlState();
+async function refreshDeviceMachineStates(body) {
+  const nodes = Array.from(body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]'));
+  await Promise.all(
+    nodes.map(async (node) => {
+      const ip = String(node.dataset.ip || "").trim();
+      if (!ip) {
+        node.disabled = true;
+        node.checked = false;
+        setDeviceControlText(node, "N/A", false);
+        return;
+      }
+      try {
+        await refreshSingleDeviceMachineState(node);
+      } catch (_err) {
+        node.disabled = false;
+        node.dataset.machineLoaded = "0";
+        setDeviceControlText(node, "Error", false);
+      }
+    })
+  );
 }
 
 function setResultModalView(tab) {
@@ -1169,7 +1175,6 @@ async function loadDevices(forceRefresh = false) {
       const hasIp = Boolean(d.ip);
       const canQuery = hasIp;
       const mac = d.mac_id || "-";
-      const desiredEnabled = hasIp ? getDeviceDesiredEnabled(d.ip) : true;
       return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
         <td>
@@ -1184,10 +1189,10 @@ async function loadDevices(forceRefresh = false) {
         <td>
           <div class="device-control-wrap">
             <label class="mini-switch">
-              <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" ${desiredEnabled ? "checked" : ""} ${hasIp ? "" : "disabled"} />
+              <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" disabled />
               <span class="mini-slider"></span>
             </label>
-            <span class="device-control-text">${desiredEnabled ? "Enable" : "Disable"}</span>
+            <span class="device-control-text">${hasIp ? "Loading..." : "N/A"}</span>
           </div>
         </td>
       </tr>`;
@@ -1235,43 +1240,54 @@ async function loadDevices(forceRefresh = false) {
   body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
     node.addEventListener("change", async () => {
       const ip = String(node.dataset.ip || "").trim();
-      const textNode = node.closest(".device-control-wrap")?.querySelector(".device-control-text");
       if (!ip) {
         node.checked = !node.checked;
         return;
       }
+      const previousChecked = !Boolean(node.checked);
       const desiredEnabled = Boolean(node.checked);
-      if (textNode) textNode.textContent = desiredEnabled ? "Enable" : "Disable";
       node.disabled = true;
+      setDeviceControlText(node, "Applying...", true);
       try {
         const action = desiredEnabled ? "enable_machine" : "disable_machine";
         const result = await runAction(ip, action, { silent: true });
         if (!result?.ok) {
           throw new Error(String(result?.error || "Action failed"));
         }
-        setDeviceDesiredEnabled(ip, desiredEnabled);
-      } catch (_err) {
-        node.checked = !desiredEnabled;
-        if (textNode) textNode.textContent = node.checked ? "Enable" : "Disable";
-      } finally {
+        setDeviceControlText(node, "Verifying...", true);
+        await refreshSingleDeviceMachineState(node);
+      } catch (err) {
+        node.checked = previousChecked;
         node.disabled = false;
+        setDeviceControlText(node, node.checked ? "Enable" : "Disable", false);
+        const message = String(err?.message || err || "Toggle failed");
+        const out = document.getElementById("collect-output");
+        if (out) out.textContent = message;
+        else alert(message);
       }
     });
   });
+
+  await refreshDeviceMachineStates(body);
 
   applyValidPrinterFilter();
 }
 
 async function initDevicesPage() {
   bindResultModal();
-  loadDeviceControlState();
   startDevicesPollingStatusLoop();
   const pollingToggle = document.getElementById("devices-polling-toggle");
   if (pollingToggle && !pollingToggle.dataset.bound) {
     pollingToggle.dataset.bound = "1";
     pollingToggle.addEventListener("change", async () => {
       const desiredEnabled = Boolean(pollingToggle.checked);
+      const badge = document.getElementById("devices-polling-status");
       pollingToggle.disabled = true;
+      if (badge) {
+        badge.classList.remove("ok", "warn", "off");
+        badge.classList.add("loading");
+        badge.textContent = "Polling: applying...";
+      }
       try {
         const data = await jsonFetch("/api/polling/toggle", {
           method: "POST",
@@ -1279,8 +1295,12 @@ async function initDevicesPage() {
           body: JSON.stringify({ enabled: desiredEnabled }),
         });
         renderDevicesPollingStatus(data?.status || {}, "");
-      } catch (_err) {
+      } catch (err) {
         pollingToggle.checked = !desiredEnabled;
+        const message = String(err?.message || err || "Toggle polling failed");
+        const out = document.getElementById("collect-output");
+        if (out) out.textContent = message;
+        else alert(message);
       } finally {
         pollingToggle.disabled = false;
       }

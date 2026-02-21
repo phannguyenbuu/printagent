@@ -1358,10 +1358,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         request_data = request.get_json(silent=True) or {}
         ip = str(request_data.get("ip", "")).strip()
         action = str(request_data.get("action", "")).strip().lower()
+        trace_id = f"device-action-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         if not ip:
             return jsonify({"ok": False, "error": "Missing ip"}), 400
         if not action:
             return jsonify({"ok": False, "error": "Missing action"}), 400
+        LOGGER.info("Device action request: trace_id=%s ip=%s action=%s remote_addr=%s", trace_id, ip, action, request.remote_addr or "-")
 
         target = _resolve_target_printer(ip=ip)
 
@@ -1382,11 +1384,37 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 ws_client.send("device_info", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "enable_machine":
+                if not str(target.user or "").strip():
+                    target.user = config.get_string("test.user") or "admin"
+                if target.password is None or str(target.password).strip() == "":
+                    target.password = config.get_string("test.password") or "admin"
+                LOGGER.info(
+                    "Device action apply: trace_id=%s ip=%s action=%s user=%s has_password=%s",
+                    trace_id,
+                    ip,
+                    action,
+                    str(target.user or ""),
+                    bool(str(target.password or "").strip()),
+                )
                 ricoh_service.enable_machine(target)
+                LOGGER.info("Device action success: trace_id=%s ip=%s action=%s", trace_id, ip, action)
                 ws_client.send("machine_enabled", {"ip": target.ip, "name": target.name})
                 return jsonify({"ok": True, "action": action, "message": "Machine enabled successfully (EasySecurity OFF)"})
             if action in {"lock_machine", "disable_machine"}:
+                if not str(target.user or "").strip():
+                    target.user = config.get_string("test.user") or "admin"
+                if target.password is None or str(target.password).strip() == "":
+                    target.password = config.get_string("test.password") or "admin"
+                LOGGER.info(
+                    "Device action apply: trace_id=%s ip=%s action=%s user=%s has_password=%s",
+                    trace_id,
+                    ip,
+                    action,
+                    str(target.user or ""),
+                    bool(str(target.password or "").strip()),
+                )
                 ricoh_service.disable_machine(target)
+                LOGGER.info("Device action success: trace_id=%s ip=%s action=%s", trace_id, ip, action)
                 ws_client.send("machine_locked", {"ip": target.ip, "name": target.name})
                 ws_client.send("machine_disabled", {"ip": target.ip, "name": target.name})
                 return jsonify({"ok": True, "action": action, "message": "Machine disabled successfully (UserCode profile applied)"})
@@ -1489,9 +1517,43 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     }
                 )
         except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Device action failed: trace_id=%s ip=%s action=%s", trace_id, ip, action)
             return jsonify({"ok": False, "error": str(exc), "action": action}), 500
 
         return jsonify({"ok": False, "error": f"Unsupported action: {action}"}), 400
+
+    @app.get("/api/devices/machine-state")
+    def api_device_machine_state() -> Any:
+        ip = _normalize_ipv4(str(request.args.get("ip", "")).strip())
+        if not ip:
+            return jsonify({"ok": False, "error": "Missing ip"}), 400
+        trace_id = f"machine-state-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        target = _resolve_target_printer(ip=ip)
+        if not str(target.user or "").strip():
+            target.user = config.get_string("test.user") or "admin"
+        if target.password is None or str(target.password).strip() == "":
+            target.password = config.get_string("test.password") or "admin"
+        LOGGER.info(
+            "Machine state request: trace_id=%s ip=%s user=%s has_password=%s remote_addr=%s",
+            trace_id,
+            ip,
+            str(target.user or ""),
+            bool(str(target.password or "").strip()),
+            request.remote_addr or "-",
+        )
+        try:
+            state = ricoh_service.read_machine_control_state(target)
+            LOGGER.info(
+                "Machine state success: trace_id=%s ip=%s enabled=%s method=%s",
+                trace_id,
+                ip,
+                bool(state.get("enabled", False)),
+                str(state.get("method", "")),
+            )
+            return jsonify({"ok": True, "ip": ip, "state": state, "trace_id": trace_id})
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Machine state failed: trace_id=%s ip=%s", trace_id, ip)
+            return jsonify({"ok": False, "error": str(exc), "ip": ip, "trace_id": trace_id}), 500
 
     @app.get("/api/device/interface")
     def api_device_interface() -> Any:
