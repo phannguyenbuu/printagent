@@ -108,22 +108,31 @@ class RicohService:
     def _webarch_prefix_candidates() -> list[str]:
         return [
             "/web/entry/en/websys/webArch",
+            "/web/entry/en/websys/webarch",
             "/web/guest/en/websys/webArch",
+            "/web/guest/en/websys/webarch",
         ]
 
     def _resolve_webarch_prefix(self, session: requests.Session, printer: Printer) -> str:
         base_url = f"http://{printer.ip}"
         errors: list[str] = []
         for prefix in self._webarch_prefix_candidates():
-            target = f"{prefix}/mainFrame.cgi"
-            try:
-                response = session.get(urljoin(base_url, target), timeout=10)
-                response.raise_for_status()
-                LOGGER.info("Resolved webArch prefix: ip=%s prefix=%s", printer.ip, prefix)
-                return prefix
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{prefix}:{exc}")
-                continue
+            # Different Ricoh models expose different entry points.
+            probe_targets = [
+                f"{prefix}/mainFrame.cgi?open=websys/easySecurity/getEasySecurity.cgi",
+                f"{prefix}/mainFrame.cgi",
+                f"{prefix}/authForm.cgi",
+                f"{prefix}/login.cgi",
+            ]
+            for target in probe_targets:
+                try:
+                    response = session.get(urljoin(base_url, target), timeout=10)
+                    response.raise_for_status()
+                    LOGGER.info("Resolved webArch prefix: ip=%s prefix=%s probe=%s", printer.ip, prefix, target)
+                    return prefix
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{target}:{exc}")
+                    continue
         raise RuntimeError("unable to resolve webArch prefix; " + "; ".join(errors))
 
     def read_counter(self, printer: Printer) -> str:
