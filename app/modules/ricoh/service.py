@@ -104,6 +104,28 @@ class RicohService:
         response.raise_for_status()
         return response.text
 
+    @staticmethod
+    def _webarch_prefix_candidates() -> list[str]:
+        return [
+            "/web/entry/en/websys/webArch",
+            "/web/guest/en/websys/webArch",
+        ]
+
+    def _resolve_webarch_prefix(self, session: requests.Session, printer: Printer) -> str:
+        base_url = f"http://{printer.ip}"
+        errors: list[str] = []
+        for prefix in self._webarch_prefix_candidates():
+            target = f"{prefix}/mainFrame.cgi"
+            try:
+                response = session.get(urljoin(base_url, target), timeout=10)
+                response.raise_for_status()
+                LOGGER.info("Resolved webArch prefix: ip=%s prefix=%s", printer.ip, prefix)
+                return prefix
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{prefix}:{exc}")
+                continue
+        raise RuntimeError("unable to resolve webArch prefix; " + "; ".join(errors))
+
     def read_counter(self, printer: Printer) -> str:
         return self._http_get(f"http://{printer.ip}/web/guest/en/websys/status/getUnificationCounter.cgi")
 
@@ -289,11 +311,11 @@ class RicohService:
         if not printer.user:
             raise ValueError("username is required for login")
         base_url = f"http://{printer.ip}"
-        session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
+        webarch_prefix = self._resolve_webarch_prefix(session, printer)
         errors: list[str] = []
         # 1) Prefer authForm.cgi flow (common on older Ricoh Web Image Monitor).
         try:
-            auth_url = urljoin(base_url, "/web/guest/en/websys/webArch/authForm.cgi")
+            auth_url = urljoin(base_url, f"{webarch_prefix}/authForm.cgi")
             auth_page = session.get(auth_url, timeout=10)
             auth_page.raise_for_status()
             auth_html = auth_page.text
@@ -328,7 +350,8 @@ class RicohService:
             errors.append(f"authForm flow failed: {exc}")
 
         # 2) Fallback to legacy login.cgi flow.
-        login_page = session.get(urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"), timeout=10)
+        login_url = urljoin(base_url, f"{webarch_prefix}/login.cgi")
+        login_page = session.get(login_url, timeout=10)
         login_page.raise_for_status()
         html = login_page.text
         token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", html)
@@ -340,9 +363,9 @@ class RicohService:
             "open": "",
         }
         resp = session.post(
-            urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"),
+            login_url,
             data=form,
-            headers={"Referer": urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi")},
+            headers={"Referer": login_url},
             timeout=10,
         )
         resp.raise_for_status()
@@ -354,8 +377,8 @@ class RicohService:
         if not printer.user:
             raise ValueError("username is required for login")
         base_url = f"http://{printer.ip}"
-        session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
-        auth_url = urljoin(base_url, "/web/guest/en/websys/webArch/authForm.cgi")
+        webarch_prefix = self._resolve_webarch_prefix(session, printer)
+        auth_url = urljoin(base_url, f"{webarch_prefix}/authForm.cgi")
         auth_page = session.get(auth_url, timeout=10)
         auth_page.raise_for_status()
         auth_html = auth_page.text
@@ -432,7 +455,7 @@ class RicohService:
             self._reset_web_session(session, printer)
             self._login(session, printer)
         else:
-            session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
+            self._resolve_webarch_prefix(session, printer)
         return session
 
     def create_http_client_auth_form_only(self, printer: Printer) -> requests.Session:
@@ -442,7 +465,7 @@ class RicohService:
             self._reset_web_session(session, printer)
             self._login_auth_form_only(session, printer)
         else:
-            session.get(f"http://{printer.ip}/web/guest/en/websys/webArch/mainFrame.cgi", timeout=10).raise_for_status()
+            self._resolve_webarch_prefix(session, printer)
         return session
 
     def authenticate_and_get(self, session: requests.Session, printer: Printer, target_url: str) -> str:
