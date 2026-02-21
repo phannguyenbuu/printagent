@@ -467,7 +467,19 @@ class RicohService:
             raise ValueError("wimToken not found")
         return match.group(1)
 
-    def enable_machine(self, printer: Printer) -> None:
+    def _submit_user_authentication_settings(
+        self,
+        printer: Printer,
+        *,
+        method: str,
+        copier_bw: bool,
+        printer_bw: bool,
+        printer_pc_control: bool,
+        document_server: bool,
+        fax: bool,
+        scanner: bool,
+        browser: bool,
+    ) -> None:
         config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
         session = self.create_http_client(printer)
         html = self.authenticate_and_get(session, printer, config_url)
@@ -478,43 +490,20 @@ class RicohService:
             ("accessConf", "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"),
             ("title", "MENU_USERAUTH"),
             ("userAuthenticationRW", "3"),
-            ("userAuthenticationMethod", "UA_USER_CODE"),
-            ("printerJob", "UA_ALL"),
-            ("userCodeDocumentBox", "false"),
-            ("userCodeFax", "false"),
-            ("userCodeScaner", "false"),
-            ("userCodeMfpBrowser", "false"),
+            ("userAuthenticationMethod", method),
+            # Copier/Printer have hidden defaults + checkbox values in Ricoh forms.
+            ("userCodeCopy", "true" if copier_bw else "false"),
+            ("userCodeCopy", ""),
+            ("userCodeCopy", ""),
+            ("userCodeCopy", ""),
+            ("userCodePrinter", "true" if printer_bw else "false"),
+            ("userCodePrinter", "true" if printer_pc_control else "false"),
+            ("userCodePrinter", ""),
+            ("userCodeDocumentBox", "true" if document_server else "false"),
+            ("userCodeFax", "true" if fax else "false"),
+            ("userCodeScaner", "true" if scanner else "false"),
+            ("userCodeMfpBrowser", "true" if browser else "false"),
         ]
-        for value in ["RADIO_OFF", "UA_USER_CODE", "UA_LOCAL_AUTHENTICATION", "UA_NT_AUTHENTICATION", "UA_LDAP_AUTHENTICATION", "UA_RDH_AUTHENTICATION"]:
-            form.append(("userAuthenticationMethodInfo", value))
-        for _ in range(5):
-            form.extend(
-                [
-                    ("exclusionHostIpv6Select", "false"),
-                    ("exclusionHostIpv6RangeFrom", "::"),
-                    ("exclusionHostIpv6RangeTo", "::"),
-                    ("exclusionHostIpv6MaskBase", "::"),
-                    ("exclusionHostIpv6MaskLen", "128"),
-                ]
-            )
-        form.extend(
-            [
-                ("userCodeCopy", "false"),
-                ("userCodeCopybox", ""),
-                ("userCodeCopy", ""),
-                ("userCodeCopybox", ""),
-                ("userCodeCopy", ""),
-                ("userCodeCopybox", ""),
-                ("userCodeCopy", ""),
-                ("userCodePrinter", "false"),
-                ("userCodePrinterbox", ""),
-                ("userCodePrinter", ""),
-                ("userCodePrinterbox", "true"),
-                ("userCodePrinter", "true"),
-            ]
-        )
-        for _ in range(33):
-            form.extend([("userCodeSdkAplibox", ""), ("userCodeSdkApli", "")])
         resp = session.post(
             f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
             data=form,
@@ -522,37 +511,38 @@ class RicohService:
             timeout=10,
         )
         resp.raise_for_status()
+
+    def enable_machine(self, printer: Printer) -> None:
+        # Device Enable => EasySecurity OFF.
+        self._submit_user_authentication_settings(
+            printer,
+            method="RADIO_OFF",
+            copier_bw=False,
+            printer_bw=False,
+            printer_pc_control=False,
+            document_server=False,
+            fax=False,
+            scanner=False,
+            browser=False,
+        )
 
     def lock_machine(self, printer: Printer) -> None:
-        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
-        session = self.create_http_client(printer)
-        html = self.authenticate_and_get(session, printer, config_url)
-        wim_token = self._extract_wim_token(html)
-        form: list[tuple[str, str]] = [
-            ("wimToken", wim_token),
-            ("accessConf", "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"),
-            ("title", "MENU_USERAUTH"),
-            ("userAuthenticationRW", "3"),
-            ("userAuthenticationMethod", "UA_USER_CODE"),
-            ("userCodeCopy", "true"),
-            ("userCodeCopy", ""),
-            ("userCodeCopy", ""),
-            ("userCodeCopy", ""),
-            ("userCodePrinter", "true"),
-            ("userCodePrinter", "false"),
-            ("userCodePrinter", ""),
-            ("userCodeDocumentBox", "true"),
-            ("userCodeFax", "true"),
-            ("userCodeScaner", "true"),
-            ("userCodeMfpBrowser", "true"),
-        ]
-        resp = session.post(
-            f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
-            data=form,
-            headers={"Referer": f"http://{printer.ip}{config_url}"},
-            timeout=10,
+        # Device Disable => UserCode ON with all restrictions from requested profile:
+        # Copier B&W=ON, Printer B&W=ON, PC Control=OFF, Document Server/Fax/Scanner/Browser=ON.
+        self._submit_user_authentication_settings(
+            printer,
+            method="UA_USER_CODE",
+            copier_bw=True,
+            printer_bw=True,
+            printer_pc_control=False,
+            document_server=True,
+            fax=True,
+            scanner=True,
+            browser=True,
         )
-        resp.raise_for_status()
+
+    def disable_machine(self, printer: Printer) -> None:
+        self.lock_machine(printer)
 
     def read_address_list_with_client(self, session: requests.Session, printer: Printer) -> str:
         urls = [

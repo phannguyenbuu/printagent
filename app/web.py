@@ -1384,11 +1384,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             if action == "enable_machine":
                 ricoh_service.enable_machine(target)
                 ws_client.send("machine_enabled", {"ip": target.ip, "name": target.name})
-                return jsonify({"ok": True, "action": action, "message": "Machine enabled successfully"})
-            if action == "lock_machine":
-                ricoh_service.lock_machine(target)
+                return jsonify({"ok": True, "action": action, "message": "Machine enabled successfully (EasySecurity OFF)"})
+            if action in {"lock_machine", "disable_machine"}:
+                ricoh_service.disable_machine(target)
                 ws_client.send("machine_locked", {"ip": target.ip, "name": target.name})
-                return jsonify({"ok": True, "action": action, "message": "Machine locked successfully"})
+                ws_client.send("machine_disabled", {"ip": target.ip, "name": target.name})
+                return jsonify({"ok": True, "action": action, "message": "Machine disabled successfully (UserCode profile applied)"})
             if action == "address_list":
                 trace_id = f"action-scan-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
                 payload = ricoh_service.process_address_list(target, trace_id=trace_id)
