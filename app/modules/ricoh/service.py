@@ -525,10 +525,12 @@ class RicohService:
         session = self.create_http_client(printer)
         html = self.authenticate_and_get(session, printer, config_url)
         wim_token = self._extract_wim_token(html)
+        hidden_vars = self._extract_hidden_inputs(html)
+        access_conf = hidden_vars.get("accessConf") or "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"
 
         form: list[tuple[str, str]] = [
             ("wimToken", wim_token),
-            ("accessConf", "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"),
+            ("accessConf", access_conf),
             ("title", "MENU_USERAUTH"),
             ("userAuthenticationRW", "3"),
             ("userAuthenticationMethod", method),
@@ -542,10 +544,19 @@ class RicohService:
             ("userCodePrinter", ""),
             ("userCodeDocumentBox", "true" if document_server else "false"),
             ("userCodeFax", "true" if fax else "false"),
+            ("userCodeScanner", "true" if scanner else "false"),
             ("userCodeScaner", "true" if scanner else "false"),
-            ("userCodeMfpBrowser", "true" if browser else "false"),
-        ]
+        form.append(("userCodeMfpBrowser", "true" if browser else "false"))
+        
         desired_method = str(method or "").strip().upper()
+        LOGGER.info(
+            "Submitting machine control: ip=%s method=%s copier_bw=%s printer_bw=%s scanner=%s",
+            printer.ip,
+            desired_method,
+            copier_bw,
+            printer_bw,
+            scanner,
+        )
         try:
             resp = session.post(
                 f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
@@ -554,6 +565,9 @@ class RicohService:
                 timeout=25,
             )
             resp.raise_for_status()
+            if "Application Error" in resp.text or "Error has occurred" in resp.text or "not have the privilege" in resp.text:
+                LOGGER.warning("Ricoh control error response: %s", resp.text[:500])
+                raise RuntimeError(f"Ricoh reported an error: {resp.text[:200].strip()}")
             return
         except requests.exceptions.Timeout as exc:
             # Some Ricoh models apply settings but respond slowly.
