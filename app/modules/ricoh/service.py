@@ -546,6 +546,7 @@ class RicohService:
             ("userCodeFax", "true" if fax else "false"),
             ("userCodeScanner", "true" if scanner else "false"),
             ("userCodeScaner", "true" if scanner else "false"),
+        ]
         form.append(("userCodeMfpBrowser", "true" if browser else "false"))
         
         desired_method = str(method or "").strip().upper()
