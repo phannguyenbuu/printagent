@@ -495,8 +495,19 @@ class RicohService:
     def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
         try:
             config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
-            session = self.create_http_client(printer)
-            html = self.authenticate_and_get(session, printer, config_url)
+            try:
+                session = self.create_http_client(printer)
+                html = self.authenticate_and_get(session, printer, config_url)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as exc:
+                LOGGER.warning("Machine control state fetch failed: ip=%s error=%s", printer.ip, exc)
+                return {
+                    "enabled": False,
+                    "method": "",
+                    "known": False,
+                    "source": config_url,
+                    "error": str(exc),
+                }
+
             method = self._extract_user_authentication_method(html)
             enabled = method == "RADIO_OFF"
             return {
