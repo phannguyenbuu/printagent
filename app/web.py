@@ -401,10 +401,12 @@ def _scan_devices_payload(
     api_devices = _load_printers(api_client)
     local_devices = _load_local_windows_printers()
     
+    scan_results: dict[str, bool] = {}
     if force_refresh:
         try:
             scanner = SubnetScanner(max_workers=100)
-            scanner.scan_subnet()
+            results = scanner.scan_subnet()
+            scan_results = {r["ip"]: r["is_printer"] for r in results}
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Quick subnet scan failed: %s", exc)
 
@@ -419,7 +421,7 @@ def _scan_devices_payload(
             # Keep field name mac_id for UI compatibility, but value follows legacy ref logic (machine_id).
             "mac_id": machine_id_map.get(p.ip, neighbor_mac_map.get(p.ip, "")),
             "type": p.printer_type or "unknown",
-            "status": p.status or "unknown",
+            "status": p.status or "online" if p.ip in neighbor_mac_map else "offline",
             "user": p.user,
             "port_name": "",
             "port_monitor": "",
@@ -452,8 +454,40 @@ def _scan_devices_payload(
             resolved = machine_id_map.get(ip, neighbor_mac_map.get(ip, ""))
             if resolved:
                 local["mac_id"] = resolved
+            if ip in neighbor_mac_map and local.get("status") == "unknown":
+                local["status"] = "online"
         payload.append(local)
         existing_keys.add(key)
+
+    # 3) Add remaining network-discovered devices (active IPs in ARP not matched to API/local).
+    for ip, mac in neighbor_mac_map.items():
+        if not ip or ip == "127.0.0.1":
+             continue
+        key = f"ip:{ip}"
+        if key in existing_keys:
+            continue
+        
+        # If valid_only is on, only add it if it's likely a printer (based on port scan if available).
+        is_printer = scan_results.get(ip)
+        if valid_only and is_printer is False:
+             continue
+             
+        row = {
+            "id": 0,
+            "name": f"Discovered: {ip}",
+            "ip": ip,
+            "mac_id": mac,
+            "type": "ricoh" if is_printer else "network",
+            "status": "online",
+            "user": "",
+            "port_name": "",
+            "port_monitor": "",
+            "connection_type": "ip",
+            "source": "network",
+        }
+        payload.append(row)
+        existing_keys.add(key)
+
     return payload
 
 
