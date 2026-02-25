@@ -524,24 +524,35 @@ class RicohService:
 
     @staticmethod
     def _extract_user_authentication_method(html: str) -> str:
-        for match in re.finditer(r"<input[^>]*>", html, re.I | re.S):
+        # 1. Look for <select name="userAuthenticationMethod">
+        select_match = re.search(r"<select[^>]+name=['\"]userAuthenticationMethod['\"][^>]*>(.*?)</select>", html, re.I | re.S)
+        if select_match:
+            inner_html = select_match.group(1)
+            # Find the <option selected ... value="VAL">
+            for opt in re.finditer(r"<option[^>]+selected[^>]*>", inner_html, re.I | re.S):
+                tag = opt.group(0)
+                val_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I)
+                if val_match:
+                    return val_match.group(1).strip().upper()
+            # If nothing selected, Ricoh usually defaults to the first option, but we prefer finding explicit 'selected'.
+
+        # 2. Look for <input type="radio" ... checked>
+        for match in re.finditer(r"<input[^>]+type=['\"]radio['\"][^>]*>", html, re.I | re.S):
             tag = match.group(0)
-            name_match = re.search(r"name=['\"]([^'\"]+)['\"]", tag, re.I)
-            if not name_match or name_match.group(1).strip() != "userAuthenticationMethod":
-                continue
-            if re.search(r"\bchecked\b", tag, re.I):
-                value_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I | re.S)
-                return str(value_match.group(1) if value_match else "").strip().upper()
+            if re.search(r"name=['\"]userAuthenticationMethod['\"]", tag, re.I) and re.search(r"\bchecked\b", tag, re.I):
+                val_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I)
+                if val_match:
+                    return val_match.group(1).strip().upper()
+
+        # 3. Look for <input type="hidden"> (sometimes Ricoh locks the setting and uses hidden)
         hidden_match = re.search(
-            r"<input[^>]*name=['\"]userAuthenticationMethod['\"][^>]*value=['\"]([^'\"]*)['\"][^>]*>",
+            r"<input[^>]+type=['\"]hidden['\"][^>]*name=['\"]userAuthenticationMethod['\"][^>]*value=['\"]([^'\"]*)['\"]",
             html,
             re.I | re.S,
         )
         if hidden_match:
-            return str(hidden_match.group(1) or "").strip().upper()
-        generic_match = re.search(r"\b(RADIO_OFF|UA_[A-Z_]+)\b", html)
-        if generic_match:
-            return str(generic_match.group(1) or "").strip().upper()
+            return hidden_match.group(1).strip().upper()
+
         return ""
 
     def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
@@ -561,7 +572,9 @@ class RicohService:
                 }
 
             method = self._extract_user_authentication_method(html)
-            enabled = method == "RADIO_OFF"
+            # RADIO_OFF and UA_USER_CODE are the common ones. 
+            # On some models, "OFF" or "0" might be used.
+            enabled = method in {"RADIO_OFF", "OFF", "0", "UA_NONE"}
             return {
                 "enabled": enabled,
                 "method": method,
