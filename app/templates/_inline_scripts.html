@@ -1285,6 +1285,8 @@
             throw new Error(String(result?.error || "Action failed"));
           }
           setDeviceControlText(node, "Verifying...", true);
+          // Wait 3s to let the machine UI catch up before checking.
+          await new Promise((r) => setTimeout(r, 3000));
           await refreshSingleDeviceMachineState(node);
         } catch (err) {
           node.checked = previousChecked;

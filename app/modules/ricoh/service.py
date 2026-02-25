@@ -649,6 +649,9 @@ class RicohService:
                      resp.raise_for_status()
                 else:
                     raise RuntimeError(f"Ricoh reported an error: {resp.text[:200].strip()}")
+            # Safety delay: Ricoh often needs a moment to actually commit the setting
+            # before the next HTTP GET for verification hits it.
+            time.sleep(1.5)
             return
         except requests.exceptions.Timeout as exc:
             # Some Ricoh models apply settings but respond slowly.
