@@ -468,12 +468,14 @@ def _scan_devices_payload(
             LOGGER.info("MAC missing for Ricoh device %s, attempting remote fetch via CGI...", ip)
             mac = ricoh_service.fetch_mac_address_direct(ip)
              
+        is_ricoh = bool(is_ricoh_result or is_ricoh_mac or is_known_ricoh)
+             
         row = {
             "id": 0,
             "name": f"Discovered: {ip}",
             "ip": ip,
             "mac_id": mac,
-            "type": "ricoh",
+            "type": "ricoh" if is_ricoh else "unknown",
             "status": "online",
             "user": "",
             "port_name": "",
