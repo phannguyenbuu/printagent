@@ -1,4 +1,4 @@
-api_url: "http://127.0.0.1:5000/api"
+api_url: "http://31.97.76.62:8005/api"
 user_token: ""
 database_url: "sqlite:///storage/data/agent_config.db"
 
