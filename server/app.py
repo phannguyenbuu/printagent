@@ -875,6 +875,7 @@ def create_app() -> Flask:
             }
         )
 
+    @app.get("/api/devices")
     @app.get("/api/devices/list")
     def devices_list() -> Any:
         lead = _to_text(request.args.get("lead"))
