@@ -289,66 +289,89 @@ class RicohService:
         if not printer.user:
             raise ValueError("username is required for login")
         base_url = f"http://{printer.ip}"
-        session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
-        errors: list[str] = []
-        # 1) Prefer authForm.cgi flow (common on older Ricoh Web Image Monitor).
-        try:
-            auth_url = urljoin(base_url, "/web/guest/en/websys/webArch/authForm.cgi")
-            auth_page = session.get(auth_url, timeout=10)
-            auth_page.raise_for_status()
-            auth_html = auth_page.text
-            action_match = re.search(r"<form[^>]*action=['\"]([^'\"]+)['\"]", auth_html, re.I)
-            # Resolve relative form action against authForm URL to keep full webArch path.
-            post_url = urljoin(auth_url, action_match.group(1)) if action_match else auth_url
-            token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", auth_html)
-            wim_token = token_match.group(1) if token_match else ""
-            encoded_user = base64.b64encode(printer.user.encode("utf-8")).decode("ascii")
-            encoded_password = base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii")
-            form = {
-                "userid": encoded_user,
-                "password": encoded_password,
-                "loginUserName": printer.user,
-                "loginPassword": printer.password or "",
-                "wimToken": wim_token,
-                "open": "",
-                "title": "",
-            }
-            resp = session.post(
-                post_url,
-                data=form,
-                headers={"Referer": auth_url},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            text = resp.text
-            if "authForm.cgi" not in text and "login.cgi" not in text and "Login User Name" not in text:
-                return
-            errors.append("authForm flow still on login page")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"authForm flow failed: {exc}")
+        
+        for attempt in range(2):
+            errors: list[str] = []
+            try:
+                session.get(urljoin(base_url, "/web/guest/en/websys/webArch/mainFrame.cgi"), timeout=10).raise_for_status()
+                
+                # 1) Prefer authForm.cgi flow (common on older Ricoh Web Image Monitor).
+                try:
+                    auth_url = urljoin(base_url, "/web/guest/en/websys/webArch/authForm.cgi")
+                    auth_page = session.get(auth_url, timeout=10)
+                    auth_page.raise_for_status()
+                    auth_html = auth_page.text
+                    action_match = re.search(r"<form[^>]*action=['\"]([^'\"]+)['\"]", auth_html, re.I)
+                    # Resolve relative form action against authForm URL to keep full webArch path.
+                    post_url = urljoin(auth_url, action_match.group(1)) if action_match else auth_url
+                    token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", auth_html)
+                    wim_token = token_match.group(1) if token_match else ""
+                    encoded_user = base64.b64encode(printer.user.encode("utf-8")).decode("ascii")
+                    encoded_password = base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii")
+                    form = {
+                        "userid": encoded_user,
+                        "password": encoded_password,
+                        "loginUserName": printer.user,
+                        "loginPassword": printer.password or "",
+                        "wimToken": wim_token,
+                        "open": "",
+                        "title": "",
+                    }
+                    resp = session.post(
+                        post_url,
+                        data=form,
+                        headers={"Referer": auth_url},
+                        timeout=10,
+                    )
+                    resp.raise_for_status()
+                    text = resp.text
+                    if "authForm.cgi" not in text and "login.cgi" not in text and "Login User Name" not in text:
+                        self._warmup_address_context(session, printer)
+                        return
+                    errors.append("authForm flow still on login page")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"authForm flow failed: {exc}")
 
-        # 2) Fallback to legacy login.cgi flow.
-        login_page = session.get(urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"), timeout=10)
-        login_page.raise_for_status()
-        html = login_page.text
-        token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", html)
-        wim_token = token_match.group(1) if token_match else "689773994"
-        form = {
-            "userid": base64.b64encode(printer.user.encode("utf-8")).decode("ascii"),
-            "password": base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii"),
-            "wimToken": wim_token,
-            "open": "",
-        }
-        resp = session.post(
-            urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"),
-            data=form,
-            headers={"Referer": urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi")},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        if "login.cgi" in resp.text or "Login User Name" in resp.text or "authForm.cgi" in resp.text:
-            raise RuntimeError("login failed; " + "; ".join(errors))
-        self._warmup_address_context(session, printer)
+                # 2) Fallback to legacy login.cgi flow.
+                login_page = session.get(urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"), timeout=10)
+                login_page.raise_for_status()
+                html = login_page.text
+                token_match = re.search(r"name=['\"]wimToken['\"]\s+value=['\"]([^'\"]+)['\"]", html)
+                wim_token = token_match.group(1) if token_match else "689773994"
+                form = {
+                    "userid": base64.b64encode(printer.user.encode("utf-8")).decode("ascii"),
+                    "password": base64.b64encode((printer.password or "").encode("utf-8")).decode("ascii"),
+                    "wimToken": wim_token,
+                    "open": "",
+                }
+                resp = session.post(
+                    urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi"),
+                    data=form,
+                    headers={"Referer": urljoin(base_url, "/web/guest/en/websys/webArch/login.cgi")},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                if "login.cgi" in resp.text or "Login User Name" in resp.text or "authForm.cgi" in resp.text:
+                    raise RuntimeError("login failed; " + "; ".join(errors))
+                
+                self._warmup_address_context(session, printer)
+                return
+
+            except requests.exceptions.HTTPError as exc:
+                if attempt == 0 and exc.response.status_code == 500:
+                    LOGGER.warning("Ricoh logic 500 error for %s, attempting session reset and retry", printer.ip)
+                    try:
+                        self._reset_web_session(session, printer)
+                    except Exception as reset_exc:  # noqa: BLE001
+                        LOGGER.debug("Session reset during retry failed: %s", reset_exc)
+                    time.sleep(2)
+                    continue
+                raise
+            except Exception:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                raise
 
     def _login_auth_form_only(self, session: requests.Session, printer: Printer) -> None:
         if not printer.user:
