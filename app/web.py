@@ -460,6 +460,11 @@ def _scan_devices_payload(
 
         if not (is_ricoh_result or is_ricoh_mac or is_known_ricoh):
              continue
+
+        # D) Remote MAC fetch if ARP failed (useful for cross-VLAN discovery)
+        if not mac:
+            LOGGER.info("MAC missing for Ricoh device %s, attempting remote fetch via CGI...", ip)
+            mac = ricoh_service.fetch_mac_address_direct(ip)
              
         row = {
             "id": 0,

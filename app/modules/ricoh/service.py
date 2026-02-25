@@ -121,6 +121,40 @@ class RicohService:
         except Exception:  # noqa: BLE001
             return self._http_get(f"http://{printer.ip}/web/guest/en/websys/netw/getInterface.cgi", session=session)
 
+    def fetch_mac_address_direct(self, ip: str) -> str:
+        """
+        Attempts to fetch the MAC address directly from the Ricoh printer's CGI.
+        Tries default credentials: admin/admin and admin/[empty].
+        """
+        creds = [("admin", "admin"), ("admin", "")]
+        target = "/web/entry/en/websys/netw/getInterface.cgi"
+
+        for user, password in creds:
+            try:
+                printer = Printer(id=0, name="Probe", ip=ip, user=user, password=password, printer_type="ricoh")
+                session = self.create_http_client(printer)
+                html = self.authenticate_and_get(session, printer, target)
+
+                # Check if we got the actual page or just a redirect/login page
+                if "getInterface.cgi" in html or "MAC" in html or "Ethernet" in html:
+                    parsed = self.parse_device_info(html)
+                    mac = parsed.get("mac_address")
+                    if mac:
+                        LOGGER.info("Direct MAC fetch success for %s: %s (creds: %s/%s)", ip, mac, user, password)
+                        return mac
+            except Exception as exc:
+                LOGGER.debug("Direct MAC fetch attempt failed for %s (%s/%s): %s", ip, user, password, exc)
+                continue
+            finally:
+                # Cleanup session on printer if possible
+                try:
+                    p = Printer(id=0, name="Probe", ip=ip, user=user, password=password, printer_type="ricoh")
+                    self.reset_web_session(p)
+                except Exception:
+                    pass
+
+        return "Error auth"
+
     def process_device_info(self, printer: Printer, should_post: bool) -> dict[str, Any]:
         try:
             html = self.read_device_info(printer)
