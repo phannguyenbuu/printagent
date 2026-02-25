@@ -1359,7 +1359,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         ignored_prefixes = store.get_ignore_printer_prefixes()
         refresh_arg = str(request.args.get("refresh", "") or "").strip().lower()
         force_refresh = refresh_arg in {"1", "true", "yes", "y"}
-        mode = "all"
+        mode = "valid_only"
 
         if not force_refresh:
             cached_devices, cached_at_str = _load_devices_cache()
@@ -1394,7 +1394,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_devices_refresh() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
-        mode = "all"
+        mode = "valid_only"
         # Button refresh always forces a full subnet scan to populate ARP cache.
         payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode, force_refresh=True)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

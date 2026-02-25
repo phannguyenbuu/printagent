@@ -146,6 +146,17 @@
     await Promise.all(
       nodes.map(async (node) => {
         const ip = String(node.dataset.ip || "").trim();
+        const row = node.closest("tr");
+        const name = row?.dataset?.printerName || "";
+
+        // Skip non-Ricoh machines to avoid heavy polling of random network devices.
+        if (!isValidPrinterName(name)) {
+          node.disabled = true;
+          node.checked = false;
+          setDeviceControlText(node, "N/A", false);
+          return;
+        }
+
         if (!ip) {
           node.disabled = true;
           node.checked = false;
@@ -1046,8 +1057,8 @@
 
   function getDeviceFilterMode() {
     const validOnlyInput = document.getElementById("valid-printer-only");
-    // Checked = Show All, Unchecked = Valid printer only
-    return validOnlyInput?.checked ? "all" : "valid_only";
+    // Checked = Valid printer only, Unchecked = Show All
+    return validOnlyInput?.checked ? "valid_only" : "all";
   }
 
   function renderDevicesPollingStatus(status, errorText = "") {
@@ -1122,9 +1133,9 @@
   function applyValidPrinterFilter() {
     const body = document.getElementById("device-table-body");
     if (!body) return;
-    const showAll = getDeviceFilterMode() === "all";
+    const validOnly = getDeviceFilterMode() === "valid_only";
     body.querySelectorAll("tr[data-printer-name]").forEach((row) => {
-      if (showAll) {
+      if (!validOnly) {
         row.style.display = "";
         return;
       }
@@ -1320,8 +1331,8 @@
       validOnlyInput.dataset.bound = "1";
       try {
         const cfg = await jsonFetch("/api/dashboard/config");
-        const mode = String(cfg?.device_filters?.filter_mode || "all");
-        validOnlyInput.checked = mode === "all";
+        const mode = String(cfg?.device_filters?.filter_mode || "valid_only");
+        validOnlyInput.checked = mode === "valid_only";
       } catch (_e) {
         validOnlyInput.checked = true;
       }
