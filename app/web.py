@@ -20,6 +20,7 @@ from app.services.api_client import APIClient, Printer
 from app.services.polling_bridge import PollingBridge
 from app.services.updater import AutoUpdater
 from app.services.ws_client import WSClient
+from app.utils.scanner import SubnetScanner
 
 
 LOGGER = logging.getLogger(__name__)
@@ -386,6 +387,7 @@ def _scan_devices_payload(
     ricoh_service: RicohService,
     ignored_prefixes: list[str],
     filter_mode: str = "all",
+    force_refresh: bool = False,
 ) -> list[dict[str, Any]]:
     def dedupe_key(item: dict[str, Any]) -> str:
         ip_val = str(item.get("ip", "") or "").strip()
@@ -398,6 +400,14 @@ def _scan_devices_payload(
     valid_only = str(filter_mode or "").strip().lower() == "valid_only"
     api_devices = _load_printers(api_client)
     local_devices = _load_local_windows_printers()
+    
+    if force_refresh:
+        try:
+            scanner = SubnetScanner(max_workers=100)
+            scanner.scan_subnet()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Quick subnet scan failed: %s", exc)
+
     neighbor_mac_map = _load_neighbor_mac_map()
     machine_id_map = _resolve_device_machine_ids(ricoh_service, api_devices)
 
@@ -1339,7 +1349,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 except Exception:  # noqa: BLE001
                     pass
 
-        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode, force_refresh=force_refresh)
         _save_devices_cache(payload)
         return jsonify(
             {
@@ -1355,7 +1365,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         store: ConfigStore = app.config["CONFIG_STORE"]
         ignored_prefixes = store.get_ignore_printer_prefixes()
         mode = "all"
-        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
+        # Button refresh always forces a full subnet scan to populate ARP cache.
+        payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode, force_refresh=True)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _save_devices_cache(payload)
         return jsonify({"ok": True, "devices": payload, "cached": False, "cached_at": now, "filter_mode": mode})
