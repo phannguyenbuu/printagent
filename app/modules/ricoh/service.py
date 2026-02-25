@@ -529,12 +529,17 @@ class RicohService:
         if select_match:
             inner_html = select_match.group(1)
             # Find the <option selected ... value="VAL">
-            for opt in re.finditer(r"<option[^>]+selected[^>]*>", inner_html, re.I | re.S):
+            first_val = ""
+            for opt in re.finditer(r"<option[^>]+value=['\"]([^'\"]*)['\"][^>]*>(.*?)</option>", inner_html, re.I | re.S):
                 tag = opt.group(0)
-                val_match = re.search(r"value=['\"]([^'\"]*)['\"]", tag, re.I)
-                if val_match:
-                    return val_match.group(1).strip().upper()
-            # If nothing selected, Ricoh usually defaults to the first option, but we prefer finding explicit 'selected'.
+                val = opt.group(1).strip().upper()
+                if not first_val:
+                    first_val = val
+                if re.search(r"\bselected\b", tag, re.I):
+                    return val
+            # If nothing explicitly selected, Ricoh usually defaults to the first option
+            if first_val:
+                return first_val
 
         # 2. Look for <input type="radio" ... checked>
         for match in re.finditer(r"<input[^>]+type=['\"]radio['\"][^>]*>", html, re.I | re.S):
@@ -572,9 +577,9 @@ class RicohService:
                 }
 
             method = self._extract_user_authentication_method(html)
-            # RADIO_OFF and UA_USER_CODE are the common ones. 
-            # On some models, "OFF" or "0" might be used.
-            enabled = method in {"RADIO_OFF", "OFF", "0", "UA_NONE"}
+            # RADIO_OFF, OFF, 0, UA_NONE, UA_OFF all indicate authentication is OFF (Enabled machine).
+            # UA_USER_CODE, UA_BASIC, UA_LDAP etc. indicate authentication is ON (Disabled/Locked machine).
+            enabled = method in {"RADIO_OFF", "OFF", "0", "UA_NONE", "UA_OFF", "OFF_MODE"}
             return {
                 "enabled": enabled,
                 "method": method,
