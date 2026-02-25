@@ -70,15 +70,30 @@ class RicohService:
             if printer.printer_type.lower() != "ricoh":
                 continue
             try:
+                # First time login logic: if we don't have credentials in the local/server memory yet,
+                # perform one discovery login to capture and persist them.
+                if not printer.user:
+                    LOGGER.info("No credentials for %s (%s), attempting discovery login...", printer.name, printer.ip)
+                    try:
+                        # This will cycle through candidate (admin/admin etc.) and update printer.user on success.
+                        self.create_http_client(printer, authenticated=True)
+                        LOGGER.info("Discovery login successful for %s (%s) => user=%s", printer.name, printer.ip, printer.user)
+                    except Exception as e:
+                        LOGGER.warning("Discovery login failed for %s (%s): %s", printer.name, printer.ip, e)
+
+                # Public data fetch (no login triggered)
                 html = self.read_counter(printer)
                 payload = {
                     "printer_name": printer.name,
                     "ip": printer.ip,
                     "html": html,
                     "timestamp": self._timestamp(),
+                    "auth_user": printer.user,
+                    "auth_password": printer.password,
+                    "mac_address": printer.mac_address,
                 }
                 self.api_client.post_data(payload)
-                LOGGER.info("Posted counter data for %s (%s)", printer.name, printer.ip)
+                LOGGER.info("Posted counter data for %s (%s) [public]", printer.name, printer.ip)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Failed processing printer %s (%s): %s", printer.name, printer.ip, exc)
 
@@ -105,17 +120,17 @@ class RicohService:
         return response.text
 
     def read_counter(self, printer: Printer) -> str:
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=False)
         target = "/web/guest/en/websys/status/getUnificationCounter.cgi"
         return self.authenticate_and_get(session, printer, target)
 
     def read_device_info(self, printer: Printer) -> str:
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=False)
         target = "/web/guest/en/websys/status/configuration.cgi"
         return self.authenticate_and_get(session, printer, target)
 
     def read_status(self, printer: Printer) -> str:
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=False)
         target = "/web/guest/en/websys/webArch/getStatus.cgi"
         return self.authenticate_and_get(session, printer, target)
 
@@ -135,7 +150,7 @@ class RicohService:
         target = "/web/entry/en/websys/netw/getInterface.cgi"
         try:
             printer = Printer(id=0, name="Probe", ip=ip, printer_type="ricoh")
-            session = self.create_http_client(printer)
+            session = self.create_http_client(printer, authenticated=True)
             
             # _login will automatically try provided creds (none here) + admin/admin + admin/[empty]
             self._login(session, printer)
@@ -321,10 +336,11 @@ class RicohService:
                 parsed[key] = re.sub(r"[^\d]", "", match.group(1))
         return parsed
 
-    def _login(self, session: requests.Session, printer: Printer, credential_candidates: list[tuple[str, str]] | None = None) -> None:
+    def _login(self, session: requests.Session, printer: Printer, credential_candidates: list[tuple[str, str]] | None = None) -> tuple[str, str]:
         """
         Unified login logic that tries multiple credential pairs.
         Cycles through candidates: (user, password).
+        Returns successfully used (user, password) tuple.
         """
         base_url = f"http://{printer.ip}"
         
@@ -378,7 +394,9 @@ class RicohService:
                         if "authForm.cgi" not in resp.text and "login.cgi" not in resp.text and "Login User Name" not in resp.text:
                             LOGGER.info("Login success: ip=%s user=%s (authForm)", printer.ip, user)
                             self._warmup_address_context(session, printer)
-                            return
+                            printer.user = user
+                            printer.password = password or ""
+                            return (user, password or "")
                         errors.append("authForm flow still on login page")
                     except Exception as exc:
                         errors.append(f"authForm flow failed: {exc}")
@@ -399,7 +417,9 @@ class RicohService:
                     if "login.cgi" not in resp.text and "Login User Name" not in resp.text and "authForm.cgi" not in resp.text:
                         LOGGER.info("Login success: ip=%s user=%s (login.cgi)", printer.ip, user)
                         self._warmup_address_context(session, printer)
-                        return
+                        printer.user = user
+                        printer.password = password or ""
+                        return (user, password or "")
                     
                     last_exception = RuntimeError(f"Login failed for {user}; " + "; ".join(errors))
                 except requests.exceptions.HTTPError as exc:
@@ -448,8 +468,7 @@ class RicohService:
 
     def reset_web_session(self, printer: Printer) -> None:
         # Public hook used by web layer before address-book operations.
-        session = requests.Session()
-        session.headers.update({"User-Agent": "printer-agent/0.1"})
+        session = self.create_http_client(printer, authenticated=True)
         self._reset_web_session(session, printer)
 
     def _warmup_address_context(self, session: requests.Session, printer: Printer) -> None:
@@ -465,15 +484,16 @@ class RicohService:
             except Exception:  # noqa: BLE001
                 continue
 
-    def create_http_client(self, printer: Printer, credential_candidates: list[tuple[str, str]] | None = None) -> requests.Session:
+    def create_http_client(self, printer: Printer, credential_candidates: list[tuple[str, str]] | None = None, authenticated: bool = True) -> requests.Session:
         """
-        Creates an authenticated session using the unified login logic.
+        Creates a session. If authenticated=True, performs login.
         """
         session = requests.Session()
         session.headers.update({"User-Agent": "printer-agent/0.1"})
         
-        # Unified login handles reset, mainFrame check, and credential cycling
-        self._login(session, printer, credential_candidates=credential_candidates)
+        if authenticated:
+            # Unified login handles reset, mainFrame check, and credential cycling
+            self._login(session, printer, credential_candidates=credential_candidates)
         return session
 
     def create_http_client_auth_form_only(self, printer: Printer) -> requests.Session:
@@ -492,12 +512,15 @@ class RicohService:
             response.raise_for_status()
             html = response.text
             
-            # If we hit a login page, re-authenticate using unified logic
+            # If we hit a login page and we are NOT on a guest page, re-authenticate using unified logic.
+            # Guest pages (/web/guest/) generally don't need auth, so hitting login there might mean
+            # a real session issue or just a machine state that doesn't allow guest access.
             if "authForm.cgi" in html or "login.cgi" in html or "Login User Name" in html:
-                self._login(session, printer)
-                response = session.get(url, timeout=10)
-                response.raise_for_status()
-                html = response.text
+                if "/web/guest/" not in url:
+                    self._login(session, printer)
+                    response = session.get(url, timeout=10)
+                    response.raise_for_status()
+                    html = response.text
                 
             # Handle special permission/warmup issues
             if "PERMISSION_E" in html:
@@ -603,7 +626,7 @@ class RicohService:
         browser: bool,
     ) -> None:
         config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=True)
         html = self.authenticate_and_get(session, printer, config_url)
         wim_token = self._extract_wim_token(html)
         hidden_vars = self._extract_hidden_inputs(html)
@@ -797,7 +820,7 @@ class RicohService:
         return self.authenticate_and_get(session, printer, "/web/guest/en/address/adrsList.cgi")
 
     def read_address_list(self, printer: Printer) -> str:
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=True)
         return self.read_address_list_with_client(session, printer)
 
     @staticmethod
@@ -2006,7 +2029,7 @@ class RicohService:
         return entries
 
     def process_address_list(self, printer: Printer, trace_id: str = "") -> dict[str, Any]:
-        session = self.create_http_client(printer)
+        session = self.create_http_client(printer, authenticated=True)
         easysecurity_html = ""
         try:
             easysecurity_html = self.authenticate_and_get(

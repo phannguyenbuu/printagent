@@ -335,6 +335,8 @@ def _upsert_printer_from_polling(
     touch_seen: bool = True,
     mark_online_on_create: bool = True,
     mac_address: str = "",
+    auth_user: str = "",
+    auth_password: str = "",
 ) -> Printer:
     printer_ip = _to_text(ip)
     printer_mac = _to_text(mac_address)
@@ -380,6 +382,8 @@ def _upsert_printer_from_polling(
             is_online=bool(mark_online_on_create),
             online_changed_at=event_time,
             mac_address=printer_mac,
+            auth_user=_to_text(auth_user),
+            auth_password=_to_text(auth_password),
         )
         session.add(row)
         session.flush()
@@ -411,6 +415,10 @@ def _upsert_printer_from_polling(
     row.printer_name = printer_name_value or row.printer_name
     row.ip = printer_ip if printer_ip else row.ip
     row.mac_address = printer_mac if printer_mac else row.mac_address
+    if _to_text(auth_user):
+        row.auth_user = _to_text(auth_user)
+    if _to_text(auth_password):
+        row.auth_password = _to_text(auth_password)
     if touch_seen:
         row.updated_at = datetime.now(timezone.utc)
     return row
@@ -1009,6 +1017,8 @@ def create_app() -> Flask:
                         "online_changed_at": r.online_changed_at.isoformat() if r.online_changed_at else "",
                         "last_seen_at": r.updated_at.isoformat() if r.updated_at else "",
                         "label": f"{r.lan_uid} / {r.printer_name}",
+                        "user": r.auth_user or "",
+                        "password": r.auth_password or "",
                     }
                     for r in rows
                 ]
@@ -1756,6 +1766,8 @@ def create_app() -> Flask:
                     touch_seen=False,
                     mark_online_on_create=False,
                     mac_address=_to_text(item.get("mac_address")),
+                    auth_user=_to_text(item.get("auth_user") or item.get("user")),
+                    auth_password=_to_text(item.get("auth_password") or item.get("password")),
                 )
                 if existed is None:
                     inserted += 1
@@ -1921,6 +1933,8 @@ def create_app() -> Flask:
                     ip=ip,
                     event_time=timestamp,
                     mac_address=device_mac_address,
+                    auth_user=_to_text(body.get("auth_user")),
+                    auth_password=_to_text(body.get("auth_password")),
                 )
             if printer_row is not None:
                 _set_printer_online_state(session=session, printer=printer_row, is_online=True, changed_at=timestamp)

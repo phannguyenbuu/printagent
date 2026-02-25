@@ -1196,7 +1196,7 @@
     }
     const devices = Array.from(dedupMap.values());
     if (!devices.length) {
-      body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="9">No devices found.</td></tr>`;
       return;
     }
     body.innerHTML = devices
@@ -1204,6 +1204,7 @@
         const hasIp = Boolean(d.ip);
         const canQuery = hasIp;
         const mac = d.mac_id || "-";
+        const userDisplay = (d.user && d.password) ? `${d.user} / ${d.password}` : (d.user || "-");
         return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-printer-type="${d.type || "unknown"}">
         <td>
@@ -1215,6 +1216,7 @@
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
         <td>${d.source || "-"}</td>
+        <td>${userDisplay}</td>
         <td>
           <div class="device-control-wrap">
             <label class="mini-switch">

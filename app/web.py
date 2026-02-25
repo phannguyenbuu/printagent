@@ -426,6 +426,7 @@ def _scan_devices_payload(
             "type": p.printer_type or "unknown",
             "status": p.status or ("online" if p.ip in neighbor_mac_map else "offline"),
             "user": p.user,
+            "password": p.password,
             "port_name": "",
             "port_monitor": "",
             "connection_type": "ip" if p.ip else "unknown",
