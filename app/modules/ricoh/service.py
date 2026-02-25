@@ -591,9 +591,14 @@ class RicohService:
         hidden_vars = self._extract_hidden_inputs(html)
         access_conf = hidden_vars.get("accessConf") or "MDowOjA6MDoxOjE6MTowOjA6MDowOjA6"
 
-        form: list[tuple[str, str]] = [
+        form: list[tuple[str, str]] = []
+        # Add all discovered hidden inputs first
+        for k, v in hidden_vars.items():
+            if k not in {"wimToken", "userAuthenticationMethod", "userCodeCopy", "userCodePrinter", "userCodeDocumentBox", "userCodeFax", "userCodeScanner", "userCodeScaner", "userCodeMfpBrowser"}:
+                 form.append((k, v))
+        
+        form.extend([
             ("wimToken", wim_token),
-            ("accessConf", access_conf),
             ("title", "MENU_USERAUTH"),
             ("userAuthenticationRW", "3"),
             ("userAuthenticationMethod", method),
@@ -609,7 +614,7 @@ class RicohService:
             ("userCodeFax", "true" if fax else "false"),
             ("userCodeScanner", "true" if scanner else "false"),
             ("userCodeScaner", "true" if scanner else "false"),
-        ]
+        ])
         form.append(("userCodeMfpBrowser", "true" if browser else "false"))
         
         desired_method = str(method or "").strip().upper()
@@ -631,7 +636,19 @@ class RicohService:
             resp.raise_for_status()
             if "Application Error" in resp.text or "Error has occurred" in resp.text or "not have the privilege" in resp.text:
                 LOGGER.warning("Ricoh control error response: %s", resp.text[:500])
-                raise RuntimeError(f"Ricoh reported an error: {resp.text[:200].strip()}")
+                # Check for session expiration specifically
+                if "session has expired" in resp.text.lower():
+                     LOGGER.info("Session expired during control POST, retrying once...")
+                     self._login(session, printer)
+                     resp = session.post(
+                        f"http://{printer.ip}/web/entry/en/websys/config/setUserAuthenticationManager.cgi",
+                        data=form,
+                        headers={"Referer": f"http://{printer.ip}{config_url}"},
+                        timeout=25,
+                     )
+                     resp.raise_for_status()
+                else:
+                    raise RuntimeError(f"Ricoh reported an error: {resp.text[:200].strip()}")
             return
         except requests.exceptions.Timeout as exc:
             # Some Ricoh models apply settings but respond slowly.

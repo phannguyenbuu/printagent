@@ -148,9 +148,10 @@
         const ip = String(node.dataset.ip || "").trim();
         const row = node.closest("tr");
         const name = row?.dataset?.printerName || "";
+        const type = row?.dataset?.printerType || "";
 
         // Skip non-Ricoh machines to avoid heavy polling of random network devices.
-        if (!isValidPrinterName(name)) {
+        if (!isValidPrinter(name, type)) {
           node.disabled = true;
           node.checked = false;
           setDeviceControlText(node, "N/A", false);
@@ -1123,11 +1124,19 @@
     }, 5000);
   }
 
-  function isValidPrinterName(name) {
+  function isValidPrinter(name, type) {
+    const t = String(type || "").toLowerCase();
+    if (t === "ricoh") return true;
+    if (t === "unknown") {
+      const lowered = String(name || "").toLowerCase();
+      // If it was discovered but not identified as Ricoh, it's NOT a valid printer for our purposes.
+      if (lowered.includes("discovered:")) return false;
+    }
+
     const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
-    const lowered = String(name || "").trim().toLowerCase();
-    if (!lowered) return true;
-    return !blockedPrefixes.some((prefix) => lowered.startsWith(prefix));
+    const loweredName = String(name || "").trim().toLowerCase();
+    if (!loweredName) return true;
+    return !blockedPrefixes.some((prefix) => loweredName.startsWith(prefix));
   }
 
   function applyValidPrinterFilter() {
@@ -1140,7 +1149,8 @@
         return;
       }
       const name = row.dataset.printerName || "";
-      row.style.display = !isValidPrinterName(name) ? "none" : "";
+      const type = row.dataset.printerType || "";
+      row.style.display = !isValidPrinter(name, type) ? "none" : "";
     });
   }
 
@@ -1195,7 +1205,7 @@
         const canQuery = hasIp;
         const mac = d.mac_id || "-";
         return `
-      <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
+      <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-printer-type="${d.type || "unknown"}">
         <td>
           <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
         </td>
