@@ -399,7 +399,6 @@ def _scan_devices_payload(
 
     valid_only = str(filter_mode or "").strip().lower() == "valid_only"
     api_devices = _load_printers(api_client)
-    local_devices = _load_local_windows_printers()
     
     scan_results: dict[str, bool] = {}
     if force_refresh:
@@ -429,7 +428,7 @@ def _scan_devices_payload(
             "source": "api",
         }
         for p in api_devices
-        if p.ip and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
+        if p.ip and (p.printer_type == "ricoh") and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
     ]
 
     payload: list[dict[str, Any]] = []
@@ -443,23 +442,7 @@ def _scan_devices_payload(
         payload.append(row)
         existing_keys.add(key)
 
-    for local in local_devices:
-        key = dedupe_key(local)
-        if key in existing_keys:
-            continue
-        if valid_only and _should_ignore_device(str(local.get("name", "")), ignored_prefixes):
-            continue
-        ip = str(local.get("ip", "") or "")
-        if ip:
-            resolved = machine_id_map.get(ip, neighbor_mac_map.get(ip, ""))
-            if resolved:
-                local["mac_id"] = resolved
-            if ip in neighbor_mac_map and local.get("status") == "unknown":
-                local["status"] = "online"
-        payload.append(local)
-        existing_keys.add(key)
-
-    # 3) Add remaining network-discovered devices (active IPs in ARP not matched to API/local).
+    # 3) Add network-discovered devices (only those identified as printers/Ricoh)
     for ip, mac in neighbor_mac_map.items():
         if not ip or ip == "127.0.0.1":
              continue
@@ -467,9 +450,10 @@ def _scan_devices_payload(
         if key in existing_keys:
             continue
         
-        # If valid_only is on, only add it if it's likely a printer (based on port scan if available).
-        is_printer = scan_results.get(ip)
-        if valid_only and is_printer is False:
+        # Strictly only add if it was identified as a printer during port scan
+        # or if it exists in machine_id_map (already verified as Ricoh)
+        is_printer = scan_results.get(ip) or (ip in machine_id_map)
+        if not is_printer:
              continue
              
         row = {
@@ -477,7 +461,7 @@ def _scan_devices_payload(
             "name": f"Discovered: {ip}",
             "ip": ip,
             "mac_id": mac,
-            "type": "ricoh" if is_printer else "network",
+            "type": "ricoh",
             "status": "online",
             "user": "",
             "port_name": "",
