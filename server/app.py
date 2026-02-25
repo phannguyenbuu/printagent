@@ -334,8 +334,10 @@ def _upsert_printer_from_polling(
     event_time: datetime,
     touch_seen: bool = True,
     mark_online_on_create: bool = True,
+    mac_address: str = "",
 ) -> Printer:
     printer_ip = _to_text(ip)
+    printer_mac = _to_text(mac_address)
     printer_name_value = _to_text(printer_name) or "Unknown Printer"
     row = None
     if printer_ip:
@@ -377,6 +379,7 @@ def _upsert_printer_from_polling(
             enabled_changed_at=event_time,
             is_online=bool(mark_online_on_create),
             online_changed_at=event_time,
+            mac_address=printer_mac,
         )
         session.add(row)
         session.flush()
@@ -407,6 +410,7 @@ def _upsert_printer_from_polling(
     row.agent_uid = agent_uid or row.agent_uid
     row.printer_name = printer_name_value or row.printer_name
     row.ip = printer_ip if printer_ip else row.ip
+    row.mac_address = printer_mac if printer_mac else row.mac_address
     if touch_seen:
         row.updated_at = datetime.now(timezone.utc)
     return row
@@ -498,6 +502,7 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS auth_password VARCHAR(255) NOT NULL DEFAULT \'\';'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS mac_address VARCHAR(64) NOT NULL DEFAULT \'\';'))
         session.commit()
 
     lead_key_map = cfg.lead_keys()
@@ -1658,6 +1663,7 @@ def create_app() -> Flask:
                     event_time=timestamp,
                     touch_seen=False,
                     mark_online_on_create=False,
+                    mac_address=_to_text(item.get("mac_address")),
                 )
                 if existed is None:
                     inserted += 1
@@ -1780,6 +1786,7 @@ def create_app() -> Flask:
         timestamp = _parse_timestamp(body.get("timestamp"))
         counter_data = body.get("counter_data") if isinstance(body.get("counter_data"), dict) else {}
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
+        device_mac_address = _to_text(body.get("mac_address")) or _to_text((status_data.get("other_info") or "")[:64])
         LOGGER.info(
             "polling request: lead=%s lan=%s agent=%s printer=%s ip=%s ts=%s counter_keys=%s status_keys=%s",
             lead,
@@ -1821,6 +1828,7 @@ def create_app() -> Flask:
                     printer_name=printer_name,
                     ip=ip,
                     event_time=timestamp,
+                    mac_address=device_mac_address,
                 )
             if printer_row is not None:
                 _set_printer_online_state(session=session, printer=printer_row, is_online=True, changed_at=timestamp)
@@ -1995,6 +2003,77 @@ def create_app() -> Flask:
                 "skipped_disabled": skipped_disabled,
             }
         )
+
+    @app.get("/api/public/crm/printers")
+    def public_crm_printers() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        if not lead:
+            return jsonify({"ok": False, "error": "Missing lead parameter"}), 400
+
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        expected_token = lead_key_map.get(lead)
+        if not expected_token or sent_token != expected_token:
+            return jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401
+
+        with session_factory() as session:
+            # Join Printer with AgentNode and LanSite to get full identifiers
+            stmt = (
+                select(Printer, AgentNode.hostname, LanSite.lan_name)
+                .join(AgentNode, (Printer.lead == AgentNode.lead) & (Printer.lan_uid == AgentNode.lan_uid) & (Printer.agent_uid == AgentNode.agent_uid), isouter=True)
+                .join(LanSite, (Printer.lead == LanSite.lead) & (Printer.lan_uid == LanSite.lan_uid), isouter=True)
+                .where(Printer.lead == lead)
+            )
+            results = session.execute(stmt).all()
+
+            output = []
+            for row in results:
+                p: Printer = row[0]
+                hostname = row[1] or "Unknown"
+                lan_name = row[2] or "Unknown"
+
+                # Get latest counter for this printer
+                latest_counter = session.execute(
+                    select(CounterInfor)
+                    .where(CounterInfor.lead == lead, CounterInfor.lan_uid == p.lan_uid, CounterInfor.ip == p.ip)
+                    .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+
+                # Get latest status for this printer
+                latest_status = session.execute(
+                    select(StatusInfor)
+                    .where(StatusInfor.lead == lead, StatusInfor.lan_uid == p.lan_uid, StatusInfor.ip == p.ip)
+                    .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+
+                # Get baseline to calculate actual counter value
+                baseline_row = session.execute(
+                    select(CounterBaseline)
+                    .where(CounterBaseline.lead == lead, CounterBaseline.lan_uid == p.lan_uid, CounterBaseline.ip == p.ip)
+                ).scalar_one_or_none()
+                base = baseline_row.raw_payload if baseline_row and isinstance(baseline_row.raw_payload, dict) else {}
+
+                total_bw = 0
+                if latest_counter:
+                    total_bw = _apply_baseline(latest_counter.total, base, "total") or 0
+
+                output.append({
+                    "lan_uid": p.lan_uid,
+                    "agent_uid": p.agent_uid,
+                    "lan_name": lan_name,
+                    "hostname": hostname,
+                    "printer_name": p.printer_name,
+                    "ip": p.ip,
+                    "mac": p.mac_address,
+                    "counter": total_bw,
+                    "status": latest_status.system_status if latest_status else "Unknown",
+                    "alerts": latest_status.printer_alerts if latest_status else "",
+                    "toner": latest_status.toner_black if latest_status else "Unknown",
+                    "last_seen_at": p.updated_at.isoformat() if p.updated_at else ""
+                })
+
+        return jsonify({"ok": True, "printers": output})
 
     return app
 

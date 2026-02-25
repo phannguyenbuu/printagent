@@ -17,6 +17,7 @@ class Printer:
     password: str = ""
     printer_type: str = ""
     status: str = ""
+    mac_address: str = ""
 
 
 class APIClient:
@@ -66,6 +67,7 @@ class APIClient:
                     password=str(item.get("password", "") or ""),
                     printer_type=str(item.get("printer_type", item.get("type", "")) or ""),
                     status=str(item.get("status", "") or ""),
+                    mac_address=str(item.get("mac_id", item.get("mac_address", "")) or ""),
                 )
             )
         return printers

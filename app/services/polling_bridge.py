@@ -585,6 +585,7 @@ if ($r) { $r }
                 {
                     "printer_name": str(printer.name or "").strip(),
                     "ip": str(printer.ip or "").strip(),
+                    "mac_address": str(printer.mac_address or "").strip(),
                     "printer_type": str(printer.printer_type or "").strip(),
                     "status": str(printer.status or "").strip(),
                     "user": str(printer.user or "").strip(),
@@ -781,6 +782,7 @@ if ($r) { $r }
                         "local_ip": local_ip,
                         "printer_name": counter_payload.get("printer_name", printer.name),
                         "ip": counter_payload.get("ip", printer.ip),
+                        "mac_address": printer.mac_address,
                         "timestamp": counter_payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         "counter_data": counter_data,
                         "status_data": status_payload.get("status_data", {}),

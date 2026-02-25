@@ -27,6 +27,7 @@ HISTORY_FILE = Path("storage/data/live_overview_history.csv")
 COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
 STATUS_LOG_FILE = Path("storage/data/log_status.csv")
 DEVICES_CACHE_FILE = Path("storage/data/devices_cache.json")
+CACHE_TTL_SECONDS = 300
 SCAN_PROTOCOL_PREFS_FILE = Path("storage/data/scan_protocol_prefs.json")
 
 
@@ -1321,16 +1322,22 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         mode = "all"
 
         if not force_refresh:
-            cached_devices, cached_at = _load_devices_cache()
-            if cached_devices:
-                return jsonify(
-                    {
-                        "devices": cached_devices,
-                        "cached": True,
-                        "cached_at": cached_at,
-                        "filter_mode": mode,
-                    }
-                )
+            cached_devices, cached_at_str = _load_devices_cache()
+            if cached_devices and cached_at_str:
+                try:
+                    cached_at = datetime.strptime(cached_at_str, "%Y-%m-%d %H:%M:%S")
+                    age = (datetime.now() - cached_at).total_seconds()
+                    if age < CACHE_TTL_SECONDS:
+                        return jsonify(
+                            {
+                                "devices": cached_devices,
+                                "cached": True,
+                                "cached_at": cached_at_str,
+                                "filter_mode": mode,
+                            }
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
 
         payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode)
         _save_devices_cache(payload)
