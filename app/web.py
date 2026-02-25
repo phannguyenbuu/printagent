@@ -442,7 +442,7 @@ def _scan_devices_payload(
         payload.append(row)
         existing_keys.add(key)
 
-    # 3) Add network-discovered devices (only those identified as printers/Ricoh)
+    # 3) Add network-discovered devices (only those identified as Ricoh photostatic machines)
     for ip, mac in neighbor_mac_map.items():
         if not ip or ip == "127.0.0.1":
              continue
@@ -450,10 +450,15 @@ def _scan_devices_payload(
         if key in existing_keys:
             continue
         
-        # Strictly only add if it was identified as a printer during port scan
-        # or if it exists in machine_id_map (already verified as Ricoh)
-        is_printer = scan_results.get(ip) or (ip in machine_id_map)
-        if not is_printer:
+        # Strictly identify if it's a Ricoh machine using multiple signals:
+        # A) Explicit scan result (Web UI probe + Port check)
+        # B) MAC OUI prefix match
+        # C) Existing match in Ricoh service machine_id_map
+        is_ricoh_result = scan_results.get(ip)
+        is_ricoh_mac = SubnetScanner.is_ricoh_mac(mac)
+        is_known_ricoh = ip in machine_id_map
+
+        if not (is_ricoh_result or is_ricoh_mac or is_known_ricoh):
              continue
              
         row = {
