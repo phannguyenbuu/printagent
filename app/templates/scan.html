@@ -24,6 +24,13 @@
     <button type="submit" class="btn ghost">Create</button>
   </form>
 
+  <div class="panel-subtitle">🪄 Auto Setup (Requires Admin)</div>
+  <form id="scan-auto-setup-form" class="inline-form">
+    <input id="scan-auto-username" placeholder="Windows Username" required />
+    <button type="submit" class="btn ghost gold">Setup SMB & Scan</button>
+    <span class="tip">Creates local folder, SMB share, and printer entry.</span>
+  </form>
+
   <form id="scan-modify-form" class="inline-form">
     <input id="scan-modify-registration-no" placeholder="Registration No" required />
     <input id="scan-modify-name" placeholder="Name (optional)" />
@@ -45,7 +52,9 @@
         </tr>
       </thead>
       <tbody id="scan-address-table-body">
-        <tr><td colspan="6">No data</td></tr>
+        <tr>
+          <td colspan="6">No data</td>
+        </tr>
       </tbody>
     </table>
   </div>

@@ -1349,6 +1349,36 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         LOGGER.info("Scan release session: polling_start_ok=%s message=%s", ok, message)
         return jsonify({"ok": True, "polling_start_ok": ok, "message": message, "status": bridge.status()})
 
+    @app.post("/api/shares/create")
+    def api_shares_create() -> Any:
+        body = request.get_json(silent=True) or {}
+        username = str(body.get("username", "")).strip()
+        if not username:
+            return jsonify({"ok": False, "error": "Missing username"}), 400
+        
+        res = ricoh_service.share_manager.setup_auto_share(username)
+        return jsonify(res)
+
+    @app.post("/api/scan/setup-auto")
+    def api_scan_setup_auto() -> Any:
+        body = request.get_json(silent=True) or {}
+        ip = _normalize_ipv4(str(body.get("ip", "")).strip())
+        username = str(body.get("username", "")).strip()
+        fields = body.get("fields", {})
+
+        if not ip or not username:
+            return jsonify({"ok": False, "error": "Missing ip or username"}), 400
+
+        target = _resolve_target_printer(ip=ip)
+        res = ricoh_service.setup_scan_destination(target, username, fields=fields)
+        
+        if res.get("ok"):
+            LOGGER.info("Auto-scan setup success: ip=%s username=%s", ip, username)
+        else:
+            LOGGER.warning("Auto-scan setup failed: ip=%s username=%s error=%s", ip, username, res.get("error"))
+            
+        return jsonify(res)
+
     @app.get("/api/overview")
     def api_overview() -> Any:
         devices = _load_printers(api_client)
