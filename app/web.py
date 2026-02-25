@@ -220,7 +220,9 @@ Get-NetNeighbor -AddressFamily IPv4 |
     return mapping
 
 
-def _resolve_device_machine_ids(service: RicohService, devices: list[Printer]) -> dict[str, str]:
+def _resolve_device_machine_ids(
+    service: RicohService, devices: list[Printer], neighbor_mac_map: dict[str, str] | None = None
+) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for device in devices:
         ip = str(device.ip or "").strip()
@@ -242,6 +244,9 @@ def _resolve_device_machine_ids(service: RicohService, devices: list[Printer]) -
                 mapping[ip] = mac_address
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("Cannot resolve machine_id for %s (%s): %s", device.name, ip, exc)
+            # Persistence: Fallback to neighbor_mac_map if available
+            if neighbor_mac_map and ip in neighbor_mac_map:
+                mapping[ip] = neighbor_mac_map[ip]
     return mapping
 
 
@@ -410,17 +415,16 @@ def _scan_devices_payload(
             LOGGER.warning("Quick subnet scan failed: %s", exc)
 
     neighbor_mac_map = _load_neighbor_mac_map()
-    machine_id_map = _resolve_device_machine_ids(ricoh_service, api_devices)
+    machine_id_map = _resolve_device_machine_ids(ricoh_service, api_devices, neighbor_mac_map)
 
     api_payload = [
         {
             "id": p.id,
             "name": p.name or "Printer",
             "ip": p.ip,
-            # Keep field name mac_id for UI compatibility, but value follows legacy ref logic (machine_id).
-            "mac_id": machine_id_map.get(p.ip, neighbor_mac_map.get(p.ip, "")),
+            "mac_id": machine_id_map.get(p.ip) or neighbor_mac_map.get(p.ip, ""),
             "type": p.printer_type or "unknown",
-            "status": p.status or "online" if p.ip in neighbor_mac_map else "offline",
+            "status": p.status or ("online" if p.ip in neighbor_mac_map else "offline"),
             "user": p.user,
             "port_name": "",
             "port_monitor": "",
@@ -428,7 +432,7 @@ def _scan_devices_payload(
             "source": "api",
         }
         for p in api_devices
-        if p.ip and (p.printer_type == "ricoh") and (not valid_only or not _should_ignore_device(p.name, ignored_prefixes))
+        if p.ip and (not valid_only or (p.printer_type == "ricoh" and not _should_ignore_device(p.name, ignored_prefixes)))
     ]
 
     payload: list[dict[str, Any]] = []
@@ -450,15 +454,13 @@ def _scan_devices_payload(
         if key in existing_keys:
             continue
         
-        # Strictly identify if it's a Ricoh machine using multiple signals:
-        # A) Explicit scan result (Web UI probe + Port check)
-        # B) MAC OUI prefix match
-        # C) Existing match in Ricoh service machine_id_map
+        # Signal identification:
         is_ricoh_result = scan_results.get(ip)
         is_ricoh_mac = SubnetScanner.is_ricoh_mac(mac)
         is_known_ricoh = ip in machine_id_map
 
-        if not (is_ricoh_result or is_ricoh_mac or is_known_ricoh):
+        # If Show All is OFF, strictly filter for Ricoh devices.
+        if valid_only and not (is_ricoh_result or is_ricoh_mac or is_known_ricoh):
              continue
 
         # D) Remote MAC fetch if ARP failed (useful for cross-VLAN discovery)

@@ -1,276 +1,276 @@
 ﻿<script>
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
-}
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
 
-function avg(values) {
-  if (!values.length) return 0;
-  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
-}
+  function avg(values) {
+    if (!values.length) return 0;
+    return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+  }
 
-function makePath(values, width, height, pad) {
-  if (!values.length) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const spread = Math.max(max - min, 1);
-  return values
-    .map((value, idx) => {
-      const x = pad + (idx * (width - pad * 2)) / Math.max(values.length - 1, 1);
-      const normalized = (value - min) / spread;
-      const y = height - pad - normalized * (height - pad * 2);
-      return `${idx === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
-}
+  function makePath(values, width, height, pad) {
+    if (!values.length) return "";
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const spread = Math.max(max - min, 1);
+    return values
+      .map((value, idx) => {
+        const x = pad + (idx * (width - pad * 2)) / Math.max(values.length - 1, 1);
+        const normalized = (value - min) / spread;
+        const y = height - pad - normalized * (height - pad * 2);
+        return `${idx === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }
 
-function jsonString(value) {
-  return JSON.stringify(value, null, 2);
-}
+  function jsonString(value) {
+    return JSON.stringify(value, null, 2);
+  }
 
-function hasMeaningfulScanEntryValue(row) {
-  if (!row || typeof row !== "object") return false;
-  const values = [
-    row.registration_no,
-    row.name,
-  ];
-  return values.some((v) => {
-    const t = String(v ?? "").trim();
-    return t && t !== "-" && t.toLowerCase() !== "summary";
-  });
-}
-
-function formatCounterResult(payload) {
-  const data = payload || {};
-  const counter = data.counter_data || {};
-  const status = data.status_data || {};
-  const lines = [];
-  lines.push("COUNTER DATA");
-  lines.push(`printer_name: ${data.printer_name || "-"}`);
-  lines.push(`ip: ${data.ip || "-"}`);
-  lines.push(`timestamp: ${data.timestamp || "-"}`);
-  lines.push("");
-  lines.push("counter_data:");
-  const orderedKeys = [
-    "total",
-    "copier_bw",
-    "printer_bw",
-    "fax_bw",
-    "send_tx_total_bw",
-    "send_tx_total_color",
-    "fax_transmission_total",
-    "scanner_send_bw",
-    "scanner_send_color",
-    "coverage_copier_bw",
-    "coverage_printer_bw",
-    "coverage_fax_bw",
-    "a3_dlt",
-    "duplex",
-  ];
-  orderedKeys.forEach((key) => {
-    lines.push(`  - ${key}: ${counter[key] || "0"}`);
-  });
-  lines.push("");
-  lines.push("status_data:");
-  const statusKeys = Object.keys(status).sort();
-  if (!statusKeys.length) {
-    lines.push("  - (empty)");
-  } else {
-    statusKeys.forEach((key) => {
-      lines.push(`  - ${key}: ${status[key]}`);
+  function hasMeaningfulScanEntryValue(row) {
+    if (!row || typeof row !== "object") return false;
+    const values = [
+      row.registration_no,
+      row.name,
+    ];
+    return values.some((v) => {
+      const t = String(v ?? "").trim();
+      return t && t !== "-" && t.toLowerCase() !== "summary";
     });
   }
-  return lines.join("\n");
-}
 
-function buildCounterHtmlPreview(payload) {
-  const data = payload || {};
-  const rawHtml = String(data.html || "");
-  if (!rawHtml) return "";
-  const ip = String(data.ip || "").trim();
-  const baseTag = ip ? `<base href="http://${ip}/">` : "";
-  let prepared = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-  if (baseTag) {
-    if (/<head[^>]*>/i.test(prepared)) {
-      prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+  function formatCounterResult(payload) {
+    const data = payload || {};
+    const counter = data.counter_data || {};
+    const status = data.status_data || {};
+    const lines = [];
+    lines.push("COUNTER DATA");
+    lines.push(`printer_name: ${data.printer_name || "-"}`);
+    lines.push(`ip: ${data.ip || "-"}`);
+    lines.push(`timestamp: ${data.timestamp || "-"}`);
+    lines.push("");
+    lines.push("counter_data:");
+    const orderedKeys = [
+      "total",
+      "copier_bw",
+      "printer_bw",
+      "fax_bw",
+      "send_tx_total_bw",
+      "send_tx_total_color",
+      "fax_transmission_total",
+      "scanner_send_bw",
+      "scanner_send_color",
+      "coverage_copier_bw",
+      "coverage_printer_bw",
+      "coverage_fax_bw",
+      "a3_dlt",
+      "duplex",
+    ];
+    orderedKeys.forEach((key) => {
+      lines.push(`  - ${key}: ${counter[key] || "0"}`);
+    });
+    lines.push("");
+    lines.push("status_data:");
+    const statusKeys = Object.keys(status).sort();
+    if (!statusKeys.length) {
+      lines.push("  - (empty)");
     } else {
-      prepared = `${baseTag}${prepared}`;
+      statusKeys.forEach((key) => {
+        lines.push(`  - ${key}: ${status[key]}`);
+      });
     }
+    return lines.join("\n");
   }
-  return prepared;
-}
 
-const resultModalState = {
-  activeTab: "summary",
-  ip: "",
-  printerName: "",
-  counterPayload: null,
-  scanPayload: null,
-  scanLoadedIp: "",
-  protocol: "",
-  isolated: false,
-};
-let devicesPollingStatusTimer = null;
-
-function setDeviceControlText(node, text, loading = false) {
-  const textNode = node?.closest(".device-control-wrap")?.querySelector(".device-control-text");
-  if (!textNode) return;
-  textNode.textContent = String(text || "");
-  textNode.classList.toggle("loading", Boolean(loading));
-}
-
-function applyDeviceMachineState(node, state) {
-  if (!node) return;
-  const enabled = Boolean(state?.enabled);
-  const method = String(state?.method || "").trim();
-  node.checked = enabled;
-  node.disabled = false;
-  node.dataset.machineLoaded = "1";
-  node.title = method ? `method=${method}` : "";
-  setDeviceControlText(node, enabled ? "Enable" : "Disable", false);
-}
-
-async function refreshSingleDeviceMachineState(node) {
-  const ip = String(node?.dataset?.ip || "").trim();
-  if (!node || !ip) return;
-  node.disabled = true;
-  setDeviceControlText(node, "Loading...", true);
-  const data = await jsonFetch(`/api/devices/machine-state?ip=${encodeURIComponent(ip)}`);
-  if (!data?.ok) {
-    throw new Error(String(data?.error || "Unable to read machine state"));
-  }
-  applyDeviceMachineState(node, data?.state || {});
-}
-
-async function refreshDeviceMachineStates(body) {
-  const nodes = Array.from(body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]'));
-  await Promise.all(
-    nodes.map(async (node) => {
-      const ip = String(node.dataset.ip || "").trim();
-      if (!ip) {
-        node.disabled = true;
-        node.checked = false;
-        setDeviceControlText(node, "N/A", false);
-        return;
+  function buildCounterHtmlPreview(payload) {
+    const data = payload || {};
+    const rawHtml = String(data.html || "");
+    if (!rawHtml) return "";
+    const ip = String(data.ip || "").trim();
+    const baseTag = ip ? `<base href="http://${ip}/">` : "";
+    let prepared = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+    if (baseTag) {
+      if (/<head[^>]*>/i.test(prepared)) {
+        prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+      } else {
+        prepared = `${baseTag}${prepared}`;
       }
-      try {
-        await refreshSingleDeviceMachineState(node);
-      } catch (_err) {
-        node.disabled = false;
-        node.dataset.machineLoaded = "0";
-        setDeviceControlText(node, "Error", false);
-      }
-    })
-  );
-}
-
-function setResultModalView(tab) {
-  const summaryBtn = document.getElementById("result-modal-tab-summary");
-  const htmlBtn = document.getElementById("result-modal-tab-html");
-  const scanBtn = document.getElementById("result-modal-tab-scan");
-  const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
-  const createBtn = document.getElementById("result-modal-tab-create-address");
-  const modalBody = document.getElementById("result-modal-counter-body");
-  const htmlFrame = document.getElementById("result-modal-counter-html");
-  const scanPanel = document.getElementById("result-modal-panel-scan");
-  const createPanel = document.getElementById("result-modal-panel-create-address");
-  if (!summaryBtn || !htmlBtn || !scanBtn || !scanHtmlTopBtn || !createBtn || !modalBody || !htmlFrame || !scanPanel || !createPanel) return;
-  const htmlEnabled = htmlBtn.dataset.enabled === "1";
-  let target = tab === "scan" || tab === "scan_html" || tab === "create" ? tab : "summary";
-  if (tab === "html" && htmlEnabled) target = "html";
-  resultModalState.activeTab = target;
-  summaryBtn.classList.toggle("active", target === "summary");
-  htmlBtn.classList.toggle("active", target === "html");
-  scanBtn.classList.toggle("active", target === "scan");
-  scanHtmlTopBtn.classList.toggle("active", target === "scan_html");
-  createBtn.classList.toggle("active", target === "create");
-  modalBody.hidden = target !== "summary";
-  htmlFrame.hidden = target !== "html";
-  scanPanel.hidden = !(target === "scan" || target === "scan_html");
-  createPanel.hidden = target !== "create";
-}
-
-async function jsonFetch(url, options = {}) {
-  const res = await fetch(url, options);
-  let body = {};
-  try {
-    body = await res.json();
-  } catch (_e) {
-    body = {};
+    }
+    return prepared;
   }
-  if (!res.ok) {
-    const message = body.error || body.message || `HTTP ${res.status}`;
-    throw new Error(message);
-  }
-  return body;
-}
 
-function showConfirmModal(message, options = {}) {
-  const modal = document.getElementById("confirm-modal");
-  const titleEl = document.getElementById("confirm-modal-title");
-  const messageEl = document.getElementById("confirm-modal-message");
-  const okBtn = document.getElementById("confirm-modal-ok");
-  const cancelBtn = document.getElementById("confirm-modal-cancel");
-  if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
-    return Promise.resolve(window.confirm(message));
-  }
-  titleEl.textContent = options.title || "Confirm";
-  messageEl.textContent = message;
-  modal.hidden = false;
-  return new Promise((resolve) => {
-    const cleanup = (result) => {
-      modal.hidden = true;
-      resolve(result);
-    };
-    const onOk = () => cleanup(true);
-    const onCancel = () => cleanup(false);
-    const onBackdrop = (event) => {
-      if (event.target === modal) onCancel();
-    };
-    const onKey = (event) => {
-      if (event.key === "Escape") onCancel();
-    };
-    okBtn.addEventListener("click", onOk, { once: true });
-    cancelBtn.addEventListener("click", onCancel, { once: true });
-    modal.addEventListener("click", onBackdrop, { once: true });
-    document.addEventListener("keydown", onKey, { once: true });
-  });
-}
+  const resultModalState = {
+    activeTab: "summary",
+    ip: "",
+    printerName: "",
+    counterPayload: null,
+    scanPayload: null,
+    scanLoadedIp: "",
+    protocol: "",
+    isolated: false,
+  };
+  let devicesPollingStatusTimer = null;
 
-function renderTrendChart(el, labels, seriesA, seriesB, seriesC) {
-  if (!el) return;
-  const width = 900;
-  const height = 320;
-  const pad = 30;
-  const grid = [];
-  for (let i = 0; i < 5; i++) {
-    const y = pad + ((height - pad * 2) / 4) * i;
-    grid.push(`<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="#e6edf7" stroke-width="1" />`);
+  function setDeviceControlText(node, text, loading = false) {
+    const textNode = node?.closest(".device-control-wrap")?.querySelector(".device-control-text");
+    if (!textNode) return;
+    textNode.textContent = String(text || "");
+    textNode.classList.toggle("loading", Boolean(loading));
   }
-  const labelNodes = labels
-    .map((label, idx) => {
-      const x = pad + (idx * (width - pad * 2)) / Math.max(labels.length - 1, 1);
-      return `<text x="${x}" y="${height - 8}" font-size="11" fill="#728197" text-anchor="middle">${label}</text>`;
-    })
-    .join("");
 
-  el.innerHTML = `
+  function applyDeviceMachineState(node, state) {
+    if (!node) return;
+    const enabled = Boolean(state?.enabled);
+    const method = String(state?.method || "").trim();
+    node.checked = enabled;
+    node.disabled = false;
+    node.dataset.machineLoaded = "1";
+    node.title = method ? `method=${method}` : "";
+    setDeviceControlText(node, enabled ? "Enable" : "Disable", false);
+  }
+
+  async function refreshSingleDeviceMachineState(node) {
+    const ip = String(node?.dataset?.ip || "").trim();
+    if (!node || !ip) return;
+    node.disabled = true;
+    setDeviceControlText(node, "Loading...", true);
+    const data = await jsonFetch(`/api/devices/machine-state?ip=${encodeURIComponent(ip)}`);
+    if (!data?.ok) {
+      throw new Error(String(data?.error || "Unable to read machine state"));
+    }
+    applyDeviceMachineState(node, data?.state || {});
+  }
+
+  async function refreshDeviceMachineStates(body) {
+    const nodes = Array.from(body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]'));
+    await Promise.all(
+      nodes.map(async (node) => {
+        const ip = String(node.dataset.ip || "").trim();
+        if (!ip) {
+          node.disabled = true;
+          node.checked = false;
+          setDeviceControlText(node, "N/A", false);
+          return;
+        }
+        try {
+          await refreshSingleDeviceMachineState(node);
+        } catch (_err) {
+          node.disabled = false;
+          node.dataset.machineLoaded = "0";
+          setDeviceControlText(node, "Error", false);
+        }
+      })
+    );
+  }
+
+  function setResultModalView(tab) {
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const scanBtn = document.getElementById("result-modal-tab-scan");
+    const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const createBtn = document.getElementById("result-modal-tab-create-address");
+    const modalBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    const scanPanel = document.getElementById("result-modal-panel-scan");
+    const createPanel = document.getElementById("result-modal-panel-create-address");
+    if (!summaryBtn || !htmlBtn || !scanBtn || !scanHtmlTopBtn || !createBtn || !modalBody || !htmlFrame || !scanPanel || !createPanel) return;
+    const htmlEnabled = htmlBtn.dataset.enabled === "1";
+    let target = tab === "scan" || tab === "scan_html" || tab === "create" ? tab : "summary";
+    if (tab === "html" && htmlEnabled) target = "html";
+    resultModalState.activeTab = target;
+    summaryBtn.classList.toggle("active", target === "summary");
+    htmlBtn.classList.toggle("active", target === "html");
+    scanBtn.classList.toggle("active", target === "scan");
+    scanHtmlTopBtn.classList.toggle("active", target === "scan_html");
+    createBtn.classList.toggle("active", target === "create");
+    modalBody.hidden = target !== "summary";
+    htmlFrame.hidden = target !== "html";
+    scanPanel.hidden = !(target === "scan" || target === "scan_html");
+    createPanel.hidden = target !== "create";
+  }
+
+  async function jsonFetch(url, options = {}) {
+    const res = await fetch(url, options);
+    let body = {};
+    try {
+      body = await res.json();
+    } catch (_e) {
+      body = {};
+    }
+    if (!res.ok) {
+      const message = body.error || body.message || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    return body;
+  }
+
+  function showConfirmModal(message, options = {}) {
+    const modal = document.getElementById("confirm-modal");
+    const titleEl = document.getElementById("confirm-modal-title");
+    const messageEl = document.getElementById("confirm-modal-message");
+    const okBtn = document.getElementById("confirm-modal-ok");
+    const cancelBtn = document.getElementById("confirm-modal-cancel");
+    if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
+      return Promise.resolve(window.confirm(message));
+    }
+    titleEl.textContent = options.title || "Confirm";
+    messageEl.textContent = message;
+    modal.hidden = false;
+    return new Promise((resolve) => {
+      const cleanup = (result) => {
+        modal.hidden = true;
+        resolve(result);
+      };
+      const onOk = () => cleanup(true);
+      const onCancel = () => cleanup(false);
+      const onBackdrop = (event) => {
+        if (event.target === modal) onCancel();
+      };
+      const onKey = (event) => {
+        if (event.key === "Escape") onCancel();
+      };
+      okBtn.addEventListener("click", onOk, { once: true });
+      cancelBtn.addEventListener("click", onCancel, { once: true });
+      modal.addEventListener("click", onBackdrop, { once: true });
+      document.addEventListener("keydown", onKey, { once: true });
+    });
+  }
+
+  function renderTrendChart(el, labels, seriesA, seriesB, seriesC) {
+    if (!el) return;
+    const width = 900;
+    const height = 320;
+    const pad = 30;
+    const grid = [];
+    for (let i = 0; i < 5; i++) {
+      const y = pad + ((height - pad * 2) / 4) * i;
+      grid.push(`<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="#e6edf7" stroke-width="1" />`);
+    }
+    const labelNodes = labels
+      .map((label, idx) => {
+        const x = pad + (idx * (width - pad * 2)) / Math.max(labels.length - 1, 1);
+        return `<text x="${x}" y="${height - 8}" font-size="11" fill="#728197" text-anchor="middle">${label}</text>`;
+      })
+      .join("");
+
+    el.innerHTML = `
     ${grid.join("")}
     <path d="${makePath(seriesA, width, height, pad)}" fill="none" stroke="#2e78ff" stroke-width="4" stroke-linecap="round" />
     <path d="${makePath(seriesB, width, height, pad)}" fill="none" stroke="#ff7a1a" stroke-width="4" stroke-linecap="round" />
     <path d="${makePath(seriesC, width, height, pad)}" fill="none" stroke="#10b8b8" stroke-width="4" stroke-linecap="round" />
     ${labelNodes}
   `;
-}
+  }
 
-function renderBars(el, labels, a, b, c) {
-  if (!el) return;
-  const maxVal = Math.max(...a, ...b, ...c, 1);
-  el.innerHTML = labels
-    .map((label, i) => {
-      const ha = clamp((a[i] / maxVal) * 100, 4, 100);
-      const hb = clamp((b[i] / maxVal) * 100, 4, 100);
-      const hc = clamp((c[i] / maxVal) * 100, 4, 100);
-      return `
+  function renderBars(el, labels, a, b, c) {
+    if (!el) return;
+    const maxVal = Math.max(...a, ...b, ...c, 1);
+    el.innerHTML = labels
+      .map((label, i) => {
+        const ha = clamp((a[i] / maxVal) * 100, 4, 100);
+        const hb = clamp((b[i] / maxVal) * 100, 4, 100);
+        const hc = clamp((c[i] / maxVal) * 100, 4, 100);
+        return `
       <div class="bar-col">
         <div class="bar-stack">
           <div class="bar a" style="height:${ha}%"></div>
@@ -279,145 +279,145 @@ function renderBars(el, labels, a, b, c) {
         </div>
         <div class="bar-label">${label}</div>
       </div>`;
-    })
-    .join("");
-}
+      })
+      .join("");
+  }
 
-async function loadOverview() {
-  const data = await jsonFetch("/api/overview");
-  const stats = data.stats || {};
-  const trend = data.trend || {};
-  const alerts = data.alerts || [];
+  async function loadOverview() {
+    const data = await jsonFetch("/api/overview");
+    const stats = data.stats || {};
+    const trend = data.trend || {};
+    const alerts = data.alerts || [];
 
-  const byId = (id) => document.getElementById(id);
-  if (byId("stat-total")) byId("stat-total").textContent = stats.total_devices ?? "--";
-  if (byId("stat-ricoh")) byId("stat-ricoh").textContent = stats.ricoh_devices ?? "--";
-  if (byId("stat-active")) byId("stat-active").textContent = stats.active_devices ?? "--";
-  if (byId("stat-offline")) byId("stat-offline").textContent = stats.offline_devices ?? "--";
-  const copierTotal = byId("stat-copier-total");
-  const printTotal = byId("stat-print-total");
-  const scanTotal = byId("stat-scan-total");
-  if (copierTotal) copierTotal.textContent = stats.copier_pages_total ?? "--";
-  if (printTotal) printTotal.textContent = stats.print_pages_total ?? "--";
-  if (scanTotal) scanTotal.textContent = stats.scan_pages_total ?? "--";
+    const byId = (id) => document.getElementById(id);
+    if (byId("stat-total")) byId("stat-total").textContent = stats.total_devices ?? "--";
+    if (byId("stat-ricoh")) byId("stat-ricoh").textContent = stats.ricoh_devices ?? "--";
+    if (byId("stat-active")) byId("stat-active").textContent = stats.active_devices ?? "--";
+    if (byId("stat-offline")) byId("stat-offline").textContent = stats.offline_devices ?? "--";
+    const copierTotal = byId("stat-copier-total");
+    const printTotal = byId("stat-print-total");
+    const scanTotal = byId("stat-scan-total");
+    if (copierTotal) copierTotal.textContent = stats.copier_pages_total ?? "--";
+    if (printTotal) printTotal.textContent = stats.print_pages_total ?? "--";
+    if (scanTotal) scanTotal.textContent = stats.scan_pages_total ?? "--";
 
-  renderBars(
-    byId("bar-chart"),
-    trend.labels || [],
-    trend.copier_pages || [],
-    trend.print_pages || [],
-    trend.scan_pages || []
-  );
+    renderBars(
+      byId("bar-chart"),
+      trend.labels || [],
+      trend.copier_pages || [],
+      trend.print_pages || [],
+      trend.scan_pages || []
+    );
 
-  renderTrendChart(
-    byId("trend-chart"),
-    trend.labels || [],
-    trend.copier_pages || [],
-    trend.print_pages || [],
-    trend.scan_pages || []
-  );
+    renderTrendChart(
+      byId("trend-chart"),
+      trend.labels || [],
+      trend.copier_pages || [],
+      trend.print_pages || [],
+      trend.scan_pages || []
+    );
 
-  renderTrendChart(
-    byId("analytics-chart"),
-    trend.labels || [],
-    trend.copier_pages || [],
-    trend.print_pages || [],
-    trend.scan_pages || []
-  );
+    renderTrendChart(
+      byId("analytics-chart"),
+      trend.labels || [],
+      trend.copier_pages || [],
+      trend.print_pages || [],
+      trend.scan_pages || []
+    );
 
-  if (byId("avg-copier")) byId("avg-copier").textContent = avg(trend.copier_pages || []);
-  if (byId("avg-print")) byId("avg-print").textContent = avg(trend.print_pages || []);
-  if (byId("avg-scan")) byId("avg-scan").textContent = avg(trend.scan_pages || []);
+    if (byId("avg-copier")) byId("avg-copier").textContent = avg(trend.copier_pages || []);
+    if (byId("avg-print")) byId("avg-print").textContent = avg(trend.print_pages || []);
+    if (byId("avg-scan")) byId("avg-scan").textContent = avg(trend.scan_pages || []);
 
-  const alertsEl = byId("alerts");
-  if (alertsEl) {
-    alertsEl.innerHTML = alerts
-      .map(
-        (item) => `
+    const alertsEl = byId("alerts");
+    if (alertsEl) {
+      alertsEl.innerHTML = alerts
+        .map(
+          (item) => `
       <div class="alert-item">
         <div>${item.title}</div>
         <div class="count">${item.count}</div>
       </div>`
-      )
-      .join("");
+        )
+        .join("");
+    }
   }
-}
 
-async function runAction(ip, action, options = {}) {
-  const silent = Boolean(options.silent);
-  const out = document.getElementById("collect-output");
-  if (out) out.textContent = `Running ${action} on ${ip}...`;
-  const simplifyError = (raw) => {
-    const msg = String(raw || "");
-    const lowered = msg.toLowerCase();
-    if (
-      lowered.includes("connecttimeout") ||
-      lowered.includes("timed out") ||
-      lowered.includes("max retries exceeded")
-    ) {
-      return `Device ${ip || ""} is unreachable (connection timeout).`;
-    }
-    if (lowered.includes("connection refused")) {
-      return `Device ${ip || ""} refused the connection.`;
-    }
-    if (lowered.includes("name or service not known") || lowered.includes("nodename nor servname")) {
-      return `Cannot resolve device address: ${ip || "unknown host"}.`;
-    }
-    return `Action "${action}" failed for ${ip || "selected device"}.`;
-  };
-
-  try {
-    const data = await jsonFetch("/api/devices/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ip, action }),
-    });
-    if (data.ok) {
-      if (out) out.textContent = jsonString(data);
-      if (!out && !silent) {
-        let msg = data.message || `${action} succeeded`;
-        if (action === "counter") {
-          const c = data?.payload?.counter_data || {};
-          msg = `Counter ${ip}: total=${c.total || "-"}, copier_bw=${c.copier_bw || "-"}, printer_bw=${c.printer_bw || "-"}, scanner_bw=${c.scanner_send_bw || "-"}`;
-        } else if (action === "status") {
-          const s = data?.payload?.status_data || {};
-          msg = `Status ${ip}: system=${s.system_status || "-"}, printer=${s.printer_status || s.printer_alerts || "-"}`;
-        }
-        alert(msg);
+  async function runAction(ip, action, options = {}) {
+    const silent = Boolean(options.silent);
+    const out = document.getElementById("collect-output");
+    if (out) out.textContent = `Running ${action} on ${ip}...`;
+    const simplifyError = (raw) => {
+      const msg = String(raw || "");
+      const lowered = msg.toLowerCase();
+      if (
+        lowered.includes("connecttimeout") ||
+        lowered.includes("timed out") ||
+        lowered.includes("max retries exceeded")
+      ) {
+        return `Device ${ip || ""} is unreachable (connection timeout).`;
       }
-      return data;
-    }
-    const friendly = simplifyError(data.error || "Unknown error");
-    if (out) out.textContent = friendly;
-    if (!out && !silent) alert(friendly);
-    return { ...data, ok: false, error: friendly };
-  } catch (err) {
-    const friendly = simplifyError(err?.message || err);
-    if (out) out.textContent = friendly;
-    if (!out && !silent) alert(friendly);
-    return { ok: false, error: friendly };
-  }
-}
+      if (lowered.includes("connection refused")) {
+        return `Device ${ip || ""} refused the connection.`;
+      }
+      if (lowered.includes("name or service not known") || lowered.includes("nodename nor servname")) {
+        return `Cannot resolve device address: ${ip || "unknown host"}.`;
+      }
+      return `Action "${action}" failed for ${ip || "selected device"}.`;
+    };
 
-function renderResultModalScanRows(entries) {
-  const body = document.getElementById("result-modal-scan-body");
-  if (!body) return;
-  const rows = Array.isArray(entries)
-    ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
-    : [];
-  if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
-    return;
+    try {
+      const data = await jsonFetch("/api/devices/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip, action }),
+      });
+      if (data.ok) {
+        if (out) out.textContent = jsonString(data);
+        if (!out && !silent) {
+          let msg = data.message || `${action} succeeded`;
+          if (action === "counter") {
+            const c = data?.payload?.counter_data || {};
+            msg = `Counter ${ip}: total=${c.total || "-"}, copier_bw=${c.copier_bw || "-"}, printer_bw=${c.printer_bw || "-"}, scanner_bw=${c.scanner_send_bw || "-"}`;
+          } else if (action === "status") {
+            const s = data?.payload?.status_data || {};
+            msg = `Status ${ip}: system=${s.system_status || "-"}, printer=${s.printer_status || s.printer_alerts || "-"}`;
+          }
+          alert(msg);
+        }
+        return data;
+      }
+      const friendly = simplifyError(data.error || "Unknown error");
+      if (out) out.textContent = friendly;
+      if (!out && !silent) alert(friendly);
+      return { ...data, ok: false, error: friendly };
+    } catch (err) {
+      const friendly = simplifyError(err?.message || err);
+      if (out) out.textContent = friendly;
+      if (!out && !silent) alert(friendly);
+      return { ok: false, error: friendly };
+    }
   }
-  body.innerHTML = rows
-    .map((row) => {
-      const reg = row.registration_no || "";
-      const name = row.name || "-";
-      const userCode = row.user_code || "";
-      const entryId = row.entry_id || "";
-      const email = row.email_address || "-";
-      const folder = row.folder || "-";
-      return `
+
+  function renderResultModalScanRows(entries) {
+    const body = document.getElementById("result-modal-scan-body");
+    if (!body) return;
+    const rows = Array.isArray(entries)
+      ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+      : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((row) => {
+        const reg = row.registration_no || "";
+        const name = row.name || "-";
+        const userCode = row.user_code || "";
+        const entryId = row.entry_id || "";
+        const email = row.email_address || "-";
+        const folder = row.folder || "-";
+        return `
         <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}" data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td class="scan-actions">
             <button class="btn action scan-row-apply" type="button" title="Apply" disabled>&#10003;</button>
@@ -429,709 +429,714 @@ function renderResultModalScanRows(entries) {
           <td><input class="scan-inline-input scan-reg-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
         </tr>
       `;
-    })
-    .join("");
-}
+      })
+      .join("");
+  }
 
-function getSelectedScanProtocol() {
-  const checked = document.querySelector('input[name="result-modal-scan-protocol"]:checked');
-  return String(checked?.value || "").trim();
-}
+  function getSelectedScanProtocol() {
+    const checked = document.querySelector('input[name="result-modal-scan-protocol"]:checked');
+    return String(checked?.value || "").trim();
+  }
 
-function setSelectedScanProtocol(value) {
-  const protocol = String(value || "").trim();
-  document.querySelectorAll('input[name="result-modal-scan-protocol"]').forEach((node) => {
-    node.checked = String(node.value || "") === protocol;
-  });
-}
+  function setSelectedScanProtocol(value) {
+    const protocol = String(value || "").trim();
+    document.querySelectorAll('input[name="result-modal-scan-protocol"]').forEach((node) => {
+      node.checked = String(node.value || "") === protocol;
+    });
+  }
 
-function setResultModalScanView(mode) {
-  const htmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
-  const listWrap = document.getElementById("result-modal-scan-list-wrap");
-  const htmlFrame = document.getElementById("result-modal-scan-html");
-  if (!listWrap || !htmlFrame) return;
-  const htmlEnabled = String(htmlTopBtn?.dataset.enabled || "0") === "1";
-  const target = mode === "html" && htmlEnabled ? "html" : "list";
-  listWrap.hidden = target !== "list";
-  htmlFrame.hidden = target !== "html";
-}
+  function setResultModalScanView(mode) {
+    const htmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const listWrap = document.getElementById("result-modal-scan-list-wrap");
+    const htmlFrame = document.getElementById("result-modal-scan-html");
+    if (!listWrap || !htmlFrame) return;
+    const htmlEnabled = String(htmlTopBtn?.dataset.enabled || "0") === "1";
+    const target = mode === "html" && htmlEnabled ? "html" : "list";
+    listWrap.hidden = target !== "list";
+    htmlFrame.hidden = target !== "html";
+  }
 
-function buildScanHtmlPreview(payload) {
-  const data = payload || {};
-  const rawHtml = String(data.easysecurity_html || data.html || "");
-  if (!rawHtml.trim()) return "";
-  const ip = String(data.ip || "").trim();
-  const baseTag = ip ? `<base href="http://${ip}/">` : "";
-  let prepared = rawHtml;
-  if (baseTag) {
-    if (/<head[^>]*>/i.test(prepared)) {
-      prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
-    } else {
-      prepared = `${baseTag}${prepared}`;
+  function buildScanHtmlPreview(payload) {
+    const data = payload || {};
+    const rawHtml = String(data.easysecurity_html || data.html || "");
+    if (!rawHtml.trim()) return "";
+    const ip = String(data.ip || "").trim();
+    const baseTag = ip ? `<base href="http://${ip}/">` : "";
+    let prepared = rawHtml;
+    if (baseTag) {
+      if (/<head[^>]*>/i.test(prepared)) {
+        prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+      } else {
+        prepared = `${baseTag}${prepared}`;
+      }
+    }
+    return prepared;
+  }
+
+  async function loadResultModalScanProtocol() {
+    const hint = document.getElementById("result-modal-scan-protocol-hint");
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) {
+      if (hint) hint.textContent = "Missing printer IP";
+      return;
+    }
+    try {
+      const query = new URLSearchParams({ ip }).toString();
+      const data = await jsonFetch(`/api/scan/protocol?${query}`);
+      const protocol = String(data?.protocol || "SMBv2/3").trim();
+      setSelectedScanProtocol(protocol);
+      resultModalState.protocol = protocol;
+      if (hint) {
+        const detected = String(data?.detected || "").trim();
+        hint.textContent = detected
+          ? `Detected: ${detected} | Current: ${protocol}`
+          : `Current: ${protocol}`;
+      }
+    } catch (err) {
+      if (hint) hint.textContent = String(err?.message || err);
     }
   }
-  return prepared;
-}
 
-async function loadResultModalScanProtocol() {
-  const hint = document.getElementById("result-modal-scan-protocol-hint");
-  const ip = String(resultModalState.ip || "").trim();
-  if (!ip) {
-    if (hint) hint.textContent = "Missing printer IP";
-    return;
-  }
-  try {
-    const query = new URLSearchParams({ ip }).toString();
-    const data = await jsonFetch(`/api/scan/protocol?${query}`);
-    const protocol = String(data?.protocol || "SMBv2/3").trim();
-    setSelectedScanProtocol(protocol);
-    resultModalState.protocol = protocol;
-    if (hint) {
-      const detected = String(data?.detected || "").trim();
-      hint.textContent = detected
-        ? `Detected: ${detected} | Current: ${protocol}`
-        : `Current: ${protocol}`;
+  async function loadResultModalScanAddressList() {
+    const out = document.getElementById("result-modal-scan-output");
+    const htmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const htmlFrame = document.getElementById("result-modal-scan-html");
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) {
+      if (out) out.textContent = "Missing printer IP";
+      renderResultModalScanRows([]);
+      if (htmlBtn) {
+        htmlBtn.dataset.enabled = "0";
+        htmlBtn.disabled = true;
+      }
+      if (htmlFrame) htmlFrame.srcdoc = "";
+      return;
     }
-  } catch (err) {
-    if (hint) hint.textContent = String(err?.message || err);
-  }
-}
-
-async function loadResultModalScanAddressList() {
-  const out = document.getElementById("result-modal-scan-output");
-  const htmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
-  const htmlFrame = document.getElementById("result-modal-scan-html");
-  const ip = String(resultModalState.ip || "").trim();
-  if (!ip) {
-    if (out) out.textContent = "Missing printer IP";
-    renderResultModalScanRows([]);
+    if (out) out.textContent = `Loading address list for ${ip}...`;
+    await ensureScanIsolationForModal();
+    const payload = await fetchScanAddressListForIp(ip, true);
+    const entries = payload.address_list || [];
+    resultModalState.scanPayload = payload;
+    resultModalState.scanLoadedIp = ip;
+    renderResultModalScanRows(entries);
+    const scanHtmlPreview = buildScanHtmlPreview(payload);
     if (htmlBtn) {
+      htmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
+      htmlBtn.disabled = !scanHtmlPreview;
+    }
+    if (htmlFrame) {
+      htmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
+    }
+    if (out) out.textContent = jsonString(payload);
+    await loadResultModalScanProtocol();
+  }
+
+  async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
+    const targetIp = String(ip || "").trim();
+    if (!targetIp) {
+      throw new Error("Missing printer IP");
+    }
+    if (forceRefreshDevices) {
+      await jsonFetch("/api/devices/refresh", { method: "POST" });
+    }
+    const query = new URLSearchParams({ ip: targetIp, mode: "adrsListAll" }).toString();
+    const data = await jsonFetch(`/api/scan/address-list?${query}`);
+    return data.payload || {};
+  }
+
+  async function loadCounterStatusForModal() {
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    const [counterSettled, statusSettled] = await Promise.allSettled([
+      runAction(ip, "counter", { silent: true }),
+      runAction(ip, "status", { silent: true }),
+    ]);
+    const counterResult =
+      counterSettled.status === "fulfilled"
+        ? counterSettled.value
+        : { ok: false, error: String(counterSettled.reason || "counter failed") };
+    const statusResult =
+      statusSettled.status === "fulfilled"
+        ? statusSettled.value
+        : { ok: false, error: String(statusSettled.reason || "status failed") };
+    if (!counterResult.ok && !statusResult.ok) {
+      throw new Error(counterResult.error || statusResult.error || "Counter/Status failed");
+    }
+    const counterPayload = counterResult.payload || {};
+    const statusPayload = statusResult.payload || {};
+    resultModalState.counterPayload = {
+      printer_name: counterPayload.printer_name || statusPayload.printer_name || resultModalState.printerName || "Local Printer",
+      ip: counterPayload.ip || statusPayload.ip || ip,
+      timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
+      counter_data: counterPayload.counter_data || {},
+      status_data: statusPayload.status_data || {},
+      html: counterPayload.html || "",
+    };
+    return resultModalState.counterPayload;
+  }
+
+  async function ensureScanIsolationForModal() {
+    if (resultModalState.isolated) return;
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    await jsonFetch("/api/scan/isolate-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    resultModalState.isolated = true;
+    loadDevicesPollingStatus().catch(() => { });
+  }
+
+  async function releaseScanIsolationForModal() {
+    if (!resultModalState.isolated) return;
+    try {
+      await jsonFetch("/api/scan/release-session", { method: "POST" });
+    } finally {
+      resultModalState.isolated = false;
+      loadDevicesPollingStatus().catch(() => { });
+    }
+  }
+
+  async function forceResetScanIsolationForModal() {
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    try {
+      await jsonFetch("/api/scan/release-session", { method: "POST" });
+    } catch (_err) {
+      // Best effort: continue to isolate even if release failed.
+    }
+    await jsonFetch("/api/scan/isolate-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    resultModalState.isolated = true;
+    loadDevicesPollingStatus().catch(() => { });
+  }
+
+  function showResultModal(title, payload) {
+    const modal = document.getElementById("result-modal");
+    const modalTitle = document.getElementById("result-modal-title");
+    const modalLoading = document.getElementById("result-modal-loading");
+    const tools = document.getElementById("result-modal-tools");
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const counterBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    const scanOut = document.getElementById("result-modal-scan-output");
+    if (
+      !modal ||
+      !modalTitle ||
+      !counterBody ||
+      !modalLoading ||
+      !tools ||
+      !summaryBtn ||
+      !htmlBtn ||
+      !htmlFrame ||
+      !scanOut
+    ) {
+      return;
+    }
+
+    modalTitle.textContent = title;
+    modalLoading.hidden = true;
+    resultModalState.counterPayload = payload || {};
+    resultModalState.ip = String(payload?.ip || "").trim();
+    resultModalState.printerName = String(payload?.printer_name || "").trim();
+    resultModalState.scanPayload = null;
+    resultModalState.scanLoadedIp = "";
+    resultModalState.protocol = "";
+    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+    const createOut = document.getElementById("result-modal-create-output");
+    const createName = document.getElementById("result-modal-create-name");
+    const createEmail = document.getElementById("result-modal-create-email");
+    const createFolder = document.getElementById("result-modal-create-folder");
+    const createUserCode = document.getElementById("result-modal-create-user-code");
+    if (scanHtmlBtn) {
+      scanHtmlBtn.dataset.enabled = "0";
+      scanHtmlBtn.disabled = true;
+    }
+    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
+    if (createOut) createOut.textContent = "Open Create Address tab to create a new entry.";
+    if (createName) createName.value = "";
+    if (createEmail) createEmail.value = "";
+    if (createFolder) createFolder.value = "";
+    if (createUserCode) createUserCode.value = "";
+    setCreateAddressLoading(false);
+    scanOut.textContent = "Open Scan tab to load Address List.";
+    renderResultModalScanRows([]);
+    setSelectedScanProtocol("SMBv2/3");
+    setResultModalScanView("list");
+
+    const htmlPreview = buildCounterHtmlPreview(payload);
+    const htmlReady = Boolean(htmlPreview);
+    if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
+      counterBody.textContent = formatCounterResult(payload);
+      htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
+      htmlBtn.disabled = false;
+      htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+      tools.hidden = false;
+      setResultModalView("summary");
+    } else {
+      counterBody.textContent = jsonString(payload || {});
       htmlBtn.dataset.enabled = "0";
       htmlBtn.disabled = true;
+      htmlFrame.srcdoc = "";
+      tools.hidden = false;
+      setResultModalView("summary");
     }
-    if (htmlFrame) htmlFrame.srcdoc = "";
-    return;
-  }
-  if (out) out.textContent = `Loading address list for ${ip}...`;
-  await ensureScanIsolationForModal();
-  const payload = await fetchScanAddressListForIp(ip, true);
-  const entries = payload.address_list || [];
-  resultModalState.scanPayload = payload;
-  resultModalState.scanLoadedIp = ip;
-  renderResultModalScanRows(entries);
-  const scanHtmlPreview = buildScanHtmlPreview(payload);
-  if (htmlBtn) {
-    htmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
-    htmlBtn.disabled = !scanHtmlPreview;
-  }
-  if (htmlFrame) {
-    htmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
-  }
-  if (out) out.textContent = jsonString(payload);
-  await loadResultModalScanProtocol();
-}
-
-async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
-  const targetIp = String(ip || "").trim();
-  if (!targetIp) {
-    throw new Error("Missing printer IP");
-  }
-  if (forceRefreshDevices) {
-    await jsonFetch("/api/devices/refresh", { method: "POST" });
-  }
-  const query = new URLSearchParams({ ip: targetIp, mode: "adrsListAll" }).toString();
-  const data = await jsonFetch(`/api/scan/address-list?${query}`);
-  return data.payload || {};
-}
-
-async function loadCounterStatusForModal() {
-  const ip = String(resultModalState.ip || "").trim();
-  if (!ip) return;
-  const [counterSettled, statusSettled] = await Promise.allSettled([
-    runAction(ip, "counter", { silent: true }),
-    runAction(ip, "status", { silent: true }),
-  ]);
-  const counterResult =
-    counterSettled.status === "fulfilled"
-      ? counterSettled.value
-      : { ok: false, error: String(counterSettled.reason || "counter failed") };
-  const statusResult =
-    statusSettled.status === "fulfilled"
-      ? statusSettled.value
-      : { ok: false, error: String(statusSettled.reason || "status failed") };
-  if (!counterResult.ok && !statusResult.ok) {
-    throw new Error(counterResult.error || statusResult.error || "Counter/Status failed");
-  }
-  const counterPayload = counterResult.payload || {};
-  const statusPayload = statusResult.payload || {};
-  resultModalState.counterPayload = {
-    printer_name: counterPayload.printer_name || statusPayload.printer_name || resultModalState.printerName || "Local Printer",
-    ip: counterPayload.ip || statusPayload.ip || ip,
-    timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
-    counter_data: counterPayload.counter_data || {},
-    status_data: statusPayload.status_data || {},
-    html: counterPayload.html || "",
-  };
-  return resultModalState.counterPayload;
-}
-
-async function ensureScanIsolationForModal() {
-  if (resultModalState.isolated) return;
-  const ip = String(resultModalState.ip || "").trim();
-  if (!ip) return;
-  await jsonFetch("/api/scan/isolate-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ip }),
-  });
-  resultModalState.isolated = true;
-  loadDevicesPollingStatus().catch(() => {});
-}
-
-async function releaseScanIsolationForModal() {
-  if (!resultModalState.isolated) return;
-  try {
-    await jsonFetch("/api/scan/release-session", { method: "POST" });
-  } finally {
-    resultModalState.isolated = false;
-    loadDevicesPollingStatus().catch(() => {});
-  }
-}
-
-async function forceResetScanIsolationForModal() {
-  const ip = String(resultModalState.ip || "").trim();
-  if (!ip) return;
-  try {
-    await jsonFetch("/api/scan/release-session", { method: "POST" });
-  } catch (_err) {
-    // Best effort: continue to isolate even if release failed.
-  }
-  await jsonFetch("/api/scan/isolate-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ip }),
-  });
-  resultModalState.isolated = true;
-  loadDevicesPollingStatus().catch(() => {});
-}
-
-function showResultModal(title, payload) {
-  const modal = document.getElementById("result-modal");
-  const modalTitle = document.getElementById("result-modal-title");
-  const modalLoading = document.getElementById("result-modal-loading");
-  const tools = document.getElementById("result-modal-tools");
-  const summaryBtn = document.getElementById("result-modal-tab-summary");
-  const htmlBtn = document.getElementById("result-modal-tab-html");
-  const counterBody = document.getElementById("result-modal-counter-body");
-  const htmlFrame = document.getElementById("result-modal-counter-html");
-  const scanOut = document.getElementById("result-modal-scan-output");
-  if (
-    !modal ||
-    !modalTitle ||
-    !counterBody ||
-    !modalLoading ||
-    !tools ||
-    !summaryBtn ||
-    !htmlBtn ||
-    !htmlFrame ||
-    !scanOut
-  ) {
-    return;
-  }
-
-  modalTitle.textContent = title;
-  modalLoading.hidden = true;
-  resultModalState.counterPayload = payload || {};
-  resultModalState.ip = String(payload?.ip || "").trim();
-  resultModalState.printerName = String(payload?.printer_name || "").trim();
-  resultModalState.scanPayload = null;
-  resultModalState.scanLoadedIp = "";
-  resultModalState.protocol = "";
-  const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
-  const scanHtmlFrame = document.getElementById("result-modal-scan-html");
-  const createOut = document.getElementById("result-modal-create-output");
-  const createName = document.getElementById("result-modal-create-name");
-  const createEmail = document.getElementById("result-modal-create-email");
-  const createFolder = document.getElementById("result-modal-create-folder");
-  const createUserCode = document.getElementById("result-modal-create-user-code");
-  if (scanHtmlBtn) {
-    scanHtmlBtn.dataset.enabled = "0";
-    scanHtmlBtn.disabled = true;
-  }
-  if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
-  if (createOut) createOut.textContent = "Open Create Address tab to create a new entry.";
-  if (createName) createName.value = "";
-  if (createEmail) createEmail.value = "";
-  if (createFolder) createFolder.value = "";
-  if (createUserCode) createUserCode.value = "";
-  setCreateAddressLoading(false);
-  scanOut.textContent = "Open Scan tab to load Address List.";
-  renderResultModalScanRows([]);
-  setSelectedScanProtocol("SMBv2/3");
-  setResultModalScanView("list");
-
-  const htmlPreview = buildCounterHtmlPreview(payload);
-  const htmlReady = Boolean(htmlPreview);
-  if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
-    counterBody.textContent = formatCounterResult(payload);
-    htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
-    htmlBtn.disabled = false;
-    htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
-    tools.hidden = false;
-    setResultModalView("summary");
-  } else {
-    counterBody.textContent = jsonString(payload || {});
-    htmlBtn.dataset.enabled = "0";
-    htmlBtn.disabled = true;
-    htmlFrame.srcdoc = "";
-    tools.hidden = false;
-    setResultModalView("summary");
-  }
-  // Default opening tab: Scan (Address List), not Summary.
-  setResultModalView("scan");
-  setResultModalScanView("list");
-  modal.hidden = false;
-  forceResetScanIsolationForModal()
-    .then(() => loadResultModalScanAddressList())
-    .catch((err) => {
-    const out = document.getElementById("result-modal-scan-output");
-    if (out) out.textContent = String(err?.message || err);
-  });
-}
-
-function showResultModalLoading(title, loadingText) {
-  const modal = document.getElementById("result-modal");
-  const modalTitle = document.getElementById("result-modal-title");
-  const modalLoading = document.getElementById("result-modal-loading");
-  const modalLoadingText = document.getElementById("result-modal-loading-text");
-  const tools = document.getElementById("result-modal-tools");
-  const htmlBtn = document.getElementById("result-modal-tab-html");
-  const counterBody = document.getElementById("result-modal-counter-body");
-  const htmlFrame = document.getElementById("result-modal-counter-html");
-  if (!modal || !modalTitle || !counterBody || !modalLoading || !modalLoadingText || !tools || !htmlBtn || !htmlFrame) {
-    return;
-  }
-  modalTitle.textContent = title;
-  modalLoadingText.textContent = loadingText || "Loading...";
-  counterBody.textContent = "";
-  htmlFrame.srcdoc = "";
-  htmlBtn.dataset.enabled = "0";
-  htmlBtn.disabled = true;
-  tools.hidden = false;
-  counterBody.hidden = true;
-  htmlFrame.hidden = true;
-  const scanPanel = document.getElementById("result-modal-panel-scan");
-  const createPanel = document.getElementById("result-modal-panel-create-address");
-  if (scanPanel) scanPanel.hidden = true;
-  if (createPanel) createPanel.hidden = true;
-  modalLoading.hidden = false;
-  modal.hidden = false;
-}
-
-function showResultModalError(title, message) {
-  const modal = document.getElementById("result-modal");
-  if (!modal) return;
-  showResultModal(title, { ok: false, error: String(message || "Unknown error") });
-}
-
-function setCreateAddressLoading(loading) {
-  const submitBtn = document.getElementById("result-modal-create-submit");
-  const fields = [
-    document.getElementById("result-modal-create-name"),
-    document.getElementById("result-modal-create-email"),
-    document.getElementById("result-modal-create-folder"),
-    document.getElementById("result-modal-create-user-code"),
-  ];
-  if (submitBtn) {
-    submitBtn.disabled = Boolean(loading);
-    submitBtn.textContent = loading ? "Creating..." : "Create Address";
-  }
-  fields.forEach((node) => {
-    if (!node) return;
-    node.disabled = Boolean(loading);
-  });
-}
-
-function bindResultModal() {
-  const modal = document.getElementById("result-modal");
-  const closeBtn = document.getElementById("result-modal-close");
-  const summaryBtn = document.getElementById("result-modal-tab-summary");
-  const htmlBtn = document.getElementById("result-modal-tab-html");
-  const scanTabBtn = document.getElementById("result-modal-tab-scan");
-  const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
-  const createTabBtn = document.getElementById("result-modal-tab-create-address");
-  const scanReloadBtn = document.getElementById("result-modal-scan-reload");
-  const scanBody = document.getElementById("result-modal-scan-body");
-  const createSubmitBtn = document.getElementById("result-modal-create-submit");
-  const protocolInputs = document.querySelectorAll('input[name="result-modal-scan-protocol"]');
-  if (
-    !modal ||
-    !closeBtn ||
-    !summaryBtn ||
-    !htmlBtn ||
-    !scanTabBtn ||
-    !scanHtmlTopBtn ||
-    !createTabBtn ||
-    !scanReloadBtn ||
-    !scanBody ||
-    !createSubmitBtn ||
-    closeBtn.dataset.bound
-  ) {
-    return;
-  }
-  const close = () => {
-    releaseScanIsolationForModal().catch(() => {});
-    modal.hidden = true;
-  };
-  closeBtn.dataset.bound = "1";
-  closeBtn.addEventListener("click", close);
-  summaryBtn.addEventListener("click", () => {
-    setResultModalView("summary");
-    const current = resultModalState.counterPayload || {};
-    const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
-    if (!hasData) {
-      releaseScanIsolationForModal()
-        .catch(() => {})
-        .then(() => loadCounterStatusForModal())
-        .then((payload) => {
-          const counterBody = document.getElementById("result-modal-counter-body");
-          const htmlBtn = document.getElementById("result-modal-tab-html");
-          const htmlFrame = document.getElementById("result-modal-counter-html");
-          if (counterBody) counterBody.textContent = formatCounterResult(payload);
-          const htmlPreview = buildCounterHtmlPreview(payload);
-          if (htmlBtn) {
-            htmlBtn.dataset.enabled = htmlPreview ? "1" : "0";
-            htmlBtn.disabled = !htmlPreview;
-          }
-          if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
-        })
-        .catch((err) => {
-          const counterBody = document.getElementById("result-modal-counter-body");
-          if (counterBody) counterBody.textContent = String(err?.message || err);
-        });
-    }
-  });
-  htmlBtn.addEventListener("click", () => {
-    setResultModalView("html");
-    const current = resultModalState.counterPayload || {};
-    const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
-    if (!hasData) {
-      releaseScanIsolationForModal()
-        .catch(() => {})
-        .then(() => loadCounterStatusForModal())
-        .then((payload) => {
-          const counterBody = document.getElementById("result-modal-counter-body");
-          const htmlTopBtn = document.getElementById("result-modal-tab-html");
-          const htmlFrame = document.getElementById("result-modal-counter-html");
-          if (counterBody) counterBody.textContent = formatCounterResult(payload);
-          const htmlPreview = buildCounterHtmlPreview(payload);
-          if (htmlTopBtn) {
-            htmlTopBtn.dataset.enabled = htmlPreview ? "1" : "0";
-            htmlTopBtn.disabled = !htmlPreview;
-          }
-          if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
-          setResultModalView("html");
-        })
-        .catch((err) => {
-          const counterBody = document.getElementById("result-modal-counter-body");
-          if (counterBody) counterBody.textContent = String(err?.message || err);
-          setResultModalView("summary");
-        });
-    }
-  });
-  scanTabBtn.addEventListener("click", async () => {
+    // Default opening tab: Scan (Address List), not Summary.
     setResultModalView("scan");
     setResultModalScanView("list");
-    try {
-      const ip = String(resultModalState.ip || "").trim();
-      if (ip && resultModalState.scanLoadedIp !== ip) {
-        await loadResultModalScanAddressList();
-      } else {
-        await loadResultModalScanProtocol();
-      }
-    } catch (err) {
-      const out = document.getElementById("result-modal-scan-output");
-      if (out) out.textContent = String(err?.message || err);
-    }
-  });
-  scanHtmlTopBtn.addEventListener("click", async () => {
-    setResultModalView("scan_html");
-    setResultModalScanView("html");
-    try {
-      const ip = String(resultModalState.ip || "").trim();
-      if (ip && resultModalState.scanLoadedIp !== ip) {
-        await loadResultModalScanAddressList();
-      } else {
-        await loadResultModalScanProtocol();
-      }
-    } catch (err) {
-      const out = document.getElementById("result-modal-scan-output");
-      if (out) out.textContent = String(err?.message || err);
-    }
-  });
-  createTabBtn.addEventListener("click", () => {
-    setResultModalView("create");
-  });
-  scanReloadBtn.addEventListener("click", async () => {
-    try {
-      await loadResultModalScanAddressList();
-    } catch (err) {
-      const out = document.getElementById("result-modal-scan-output");
-      if (out) out.textContent = String(err?.message || err);
-    }
-  });
-  scanBody.addEventListener("click", async (event) => {
-    const row = event.target.closest("tr[data-registration-no]");
-    if (!row) return;
-    const reg = String(row.dataset.registrationNo || "").trim();
-    const out = document.getElementById("result-modal-scan-output");
-    const ip = String(resultModalState.ip || "").trim();
-    const entryId = String(row.dataset.entryId || "").trim();
-    if (!ip || (!reg && !entryId)) return;
-    const btnDelete = event.target.closest(".scan-row-delete");
-    const btnApply = event.target.closest(".scan-row-apply");
-    if (btnDelete) {
-      const label = reg || entryId;
-      if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
-      const prevLabel = btnDelete.innerHTML;
-      const controls = row.querySelectorAll("button, input");
-      controls.forEach((node) => {
-        node.disabled = true;
+    modal.hidden = false;
+    forceResetScanIsolationForModal()
+      .then(() => loadResultModalScanAddressList())
+      .catch((err) => {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
       });
-      btnDelete.textContent = "Deleting...";
+  }
+
+  function showResultModalLoading(title, loadingText) {
+    const modal = document.getElementById("result-modal");
+    const modalTitle = document.getElementById("result-modal-title");
+    const modalLoading = document.getElementById("result-modal-loading");
+    const modalLoadingText = document.getElementById("result-modal-loading-text");
+    const tools = document.getElementById("result-modal-tools");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const counterBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    if (!modal || !modalTitle || !counterBody || !modalLoading || !modalLoadingText || !tools || !htmlBtn || !htmlFrame) {
+      return;
+    }
+    modalTitle.textContent = title;
+    modalLoadingText.textContent = loadingText || "Loading...";
+    counterBody.textContent = "";
+    htmlFrame.srcdoc = "";
+    htmlBtn.dataset.enabled = "0";
+    htmlBtn.disabled = true;
+    tools.hidden = false;
+    counterBody.hidden = true;
+    htmlFrame.hidden = true;
+    const scanPanel = document.getElementById("result-modal-panel-scan");
+    const createPanel = document.getElementById("result-modal-panel-create-address");
+    if (scanPanel) scanPanel.hidden = true;
+    if (createPanel) createPanel.hidden = true;
+    modalLoading.hidden = false;
+    modal.hidden = false;
+  }
+
+  function showResultModalError(title, message) {
+    const modal = document.getElementById("result-modal");
+    if (!modal) return;
+    showResultModal(title, { ok: false, error: String(message || "Unknown error") });
+  }
+
+  function setCreateAddressLoading(loading) {
+    const submitBtn = document.getElementById("result-modal-create-submit");
+    const fields = [
+      document.getElementById("result-modal-create-name"),
+      document.getElementById("result-modal-create-email"),
+      document.getElementById("result-modal-create-folder"),
+      document.getElementById("result-modal-create-user-code"),
+    ];
+    if (submitBtn) {
+      submitBtn.disabled = Boolean(loading);
+      submitBtn.textContent = loading ? "Creating..." : "Create Address";
+    }
+    fields.forEach((node) => {
+      if (!node) return;
+      node.disabled = Boolean(loading);
+    });
+  }
+
+  function bindResultModal() {
+    const modal = document.getElementById("result-modal");
+    const closeBtn = document.getElementById("result-modal-close");
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const scanTabBtn = document.getElementById("result-modal-tab-scan");
+    const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const createTabBtn = document.getElementById("result-modal-tab-create-address");
+    const scanReloadBtn = document.getElementById("result-modal-scan-reload");
+    const scanBody = document.getElementById("result-modal-scan-body");
+    const createSubmitBtn = document.getElementById("result-modal-create-submit");
+    const protocolInputs = document.querySelectorAll('input[name="result-modal-scan-protocol"]');
+    if (
+      !modal ||
+      !closeBtn ||
+      !summaryBtn ||
+      !htmlBtn ||
+      !scanTabBtn ||
+      !scanHtmlTopBtn ||
+      !createTabBtn ||
+      !scanReloadBtn ||
+      !scanBody ||
+      !createSubmitBtn ||
+      closeBtn.dataset.bound
+    ) {
+      return;
+    }
+    const close = () => {
+      releaseScanIsolationForModal().catch(() => { });
+      modal.hidden = true;
+    };
+    closeBtn.dataset.bound = "1";
+    closeBtn.addEventListener("click", close);
+    summaryBtn.addEventListener("click", () => {
+      setResultModalView("summary");
+      const current = resultModalState.counterPayload || {};
+      const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+      if (!hasData) {
+        releaseScanIsolationForModal()
+          .catch(() => { })
+          .then(() => loadCounterStatusForModal())
+          .then((payload) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            const htmlBtn = document.getElementById("result-modal-tab-html");
+            const htmlFrame = document.getElementById("result-modal-counter-html");
+            if (counterBody) counterBody.textContent = formatCounterResult(payload);
+            const htmlPreview = buildCounterHtmlPreview(payload);
+            if (htmlBtn) {
+              htmlBtn.dataset.enabled = htmlPreview ? "1" : "0";
+              htmlBtn.disabled = !htmlPreview;
+            }
+            if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+          })
+          .catch((err) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            if (counterBody) counterBody.textContent = String(err?.message || err);
+          });
+      }
+    });
+    htmlBtn.addEventListener("click", () => {
+      setResultModalView("html");
+      const current = resultModalState.counterPayload || {};
+      const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+      if (!hasData) {
+        releaseScanIsolationForModal()
+          .catch(() => { })
+          .then(() => loadCounterStatusForModal())
+          .then((payload) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            const htmlTopBtn = document.getElementById("result-modal-tab-html");
+            const htmlFrame = document.getElementById("result-modal-counter-html");
+            if (counterBody) counterBody.textContent = formatCounterResult(payload);
+            const htmlPreview = buildCounterHtmlPreview(payload);
+            if (htmlTopBtn) {
+              htmlTopBtn.dataset.enabled = htmlPreview ? "1" : "0";
+              htmlTopBtn.disabled = !htmlPreview;
+            }
+            if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+            setResultModalView("html");
+          })
+          .catch((err) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            if (counterBody) counterBody.textContent = String(err?.message || err);
+            setResultModalView("summary");
+          });
+      }
+    });
+    scanTabBtn.addEventListener("click", async () => {
+      setResultModalView("scan");
+      setResultModalScanView("list");
       try {
-        const data = await jsonFetch("/api/scan/address-delete", {
+        const ip = String(resultModalState.ip || "").trim();
+        if (ip && resultModalState.scanLoadedIp !== ip) {
+          await loadResultModalScanAddressList();
+        } else {
+          await loadResultModalScanProtocol();
+        }
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+    scanHtmlTopBtn.addEventListener("click", async () => {
+      setResultModalView("scan_html");
+      setResultModalScanView("html");
+      try {
+        const ip = String(resultModalState.ip || "").trim();
+        if (ip && resultModalState.scanLoadedIp !== ip) {
+          await loadResultModalScanAddressList();
+        } else {
+          await loadResultModalScanProtocol();
+        }
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+    createTabBtn.addEventListener("click", () => {
+      setResultModalView("create");
+    });
+    scanReloadBtn.addEventListener("click", async () => {
+      try {
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+    scanBody.addEventListener("click", async (event) => {
+      const row = event.target.closest("tr[data-registration-no]");
+      if (!row) return;
+      const reg = String(row.dataset.registrationNo || "").trim();
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const entryId = String(row.dataset.entryId || "").trim();
+      if (!ip || (!reg && !entryId)) return;
+      const btnDelete = event.target.closest(".scan-row-delete");
+      const btnApply = event.target.closest(".scan-row-apply");
+      if (btnDelete) {
+        const label = reg || entryId;
+        if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
+        const prevLabel = btnDelete.innerHTML;
+        const controls = row.querySelectorAll("button, input");
+        controls.forEach((node) => {
+          node.disabled = true;
+        });
+        btnDelete.textContent = "Deleting...";
+        try {
+          const data = await jsonFetch("/api/scan/address-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId, confirm: true }),
+          });
+          if (out) out.textContent = jsonString(data.payload || data);
+          if (row.isConnected) row.remove();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        } finally {
+          if (row.isConnected) {
+            controls.forEach((node) => {
+              node.disabled = false;
+            });
+            btnDelete.innerHTML = prevLabel;
+          }
+        }
+        return;
+      }
+      if (!btnApply) return;
+      const prevApplyLabel = btnApply.innerHTML;
+      btnApply.textContent = "Applying...";
+      btnApply.disabled = true;
+      const val = (field) =>
+        String(row.querySelector(`input[data-field="${field}"]`)?.value || "").trim();
+      try {
+        const payload = {
+          ip,
+          registration_no: reg,
+          entry_id: entryId,
+          name: val("name"),
+          email: val("email"),
+          folder: val("folder"),
+          user_code: String(row.dataset.userCode || "").trim(),
+          fields: {},
+          recreate_on_fail: true,
+        };
+        const data = await jsonFetch("/api/scan/address-modify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId, confirm: true }),
+          body: JSON.stringify(payload),
         });
         if (out) out.textContent = jsonString(data.payload || data);
-        if (row.isConnected) row.remove();
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+        btnApply.disabled = false;
+      } finally {
+        if (btnApply.isConnected) {
+          btnApply.innerHTML = prevApplyLabel;
+        }
+      }
+    });
+    const saveProtocol = async () => {
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const protocol = getSelectedScanProtocol();
+      if (!ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      if (!protocol) {
+        if (out) out.textContent = "Please select scan protocol";
+        return;
+      }
+      try {
+        const data = await jsonFetch("/api/scan/protocol", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ip, protocol }),
+        });
+        resultModalState.protocol = protocol;
+        if (out) out.textContent = jsonString(data);
+        await loadResultModalScanProtocol();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    };
+    protocolInputs.forEach((node) => {
+      if (node.dataset.bound) return;
+      node.dataset.bound = "1";
+      node.addEventListener("change", () => {
+        saveProtocol().catch(() => { });
+      });
+    });
+    scanBody.addEventListener("input", (event) => {
+      const row = event.target.closest("tr[data-registration-no]");
+      if (!row) return;
+      const applyBtn = row.querySelector(".scan-row-apply");
+      if (!applyBtn) return;
+      applyBtn.disabled = false;
+    });
+    createSubmitBtn.addEventListener("click", async () => {
+      const out = document.getElementById("result-modal-create-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const name = String(document.getElementById("result-modal-create-name")?.value || "").trim();
+      const email = String(document.getElementById("result-modal-create-email")?.value || "").trim();
+      const folder = String(document.getElementById("result-modal-create-folder")?.value || "").trim();
+      const userCode = String(document.getElementById("result-modal-create-user-code")?.value || "").trim() || "-";
+      if (!ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      if (!name) {
+        if (out) out.textContent = "Missing name";
+        return;
+      }
+      setCreateAddressLoading(true);
+      if (out) out.textContent = `Creating address "${name}" on ${ip}...`;
+      try {
+        const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip,
+            name,
+            email,
+            folder,
+            user_code: userCode,
+            fields: { entryTypeIn: "1" },
+          }),
+        });
+        if (out) out.textContent = jsonString(data.payload || data);
+        await loadResultModalScanAddressList();
       } catch (err) {
         if (out) out.textContent = String(err?.message || err);
       } finally {
-        if (row.isConnected) {
-          controls.forEach((node) => {
-            node.disabled = false;
-          });
-          btnDelete.innerHTML = prevLabel;
-        }
+        setCreateAddressLoading(false);
       }
-      return;
-    }
-    if (!btnApply) return;
-    const prevApplyLabel = btnApply.innerHTML;
-    btnApply.textContent = "Applying...";
-    btnApply.disabled = true;
-    const val = (field) =>
-      String(row.querySelector(`input[data-field="${field}"]`)?.value || "").trim();
-    try {
-      const payload = {
-        ip,
-        registration_no: reg,
-        entry_id: entryId,
-        name: val("name"),
-        email: val("email"),
-        folder: val("folder"),
-        user_code: String(row.dataset.userCode || "").trim(),
-        fields: {},
-        recreate_on_fail: true,
-      };
-      const data = await jsonFetch("/api/scan/address-modify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (out) out.textContent = jsonString(data.payload || data);
-      await loadResultModalScanAddressList();
-    } catch (err) {
-      if (out) out.textContent = String(err?.message || err);
-      btnApply.disabled = false;
-    } finally {
-      if (btnApply.isConnected) {
-        btnApply.innerHTML = prevApplyLabel;
-      }
-    }
-  });
-  const saveProtocol = async () => {
-    const out = document.getElementById("result-modal-scan-output");
-    const ip = String(resultModalState.ip || "").trim();
-    const protocol = getSelectedScanProtocol();
-    if (!ip) {
-      if (out) out.textContent = "Missing printer IP";
-      return;
-    }
-    if (!protocol) {
-      if (out) out.textContent = "Please select scan protocol";
-      return;
-    }
-    try {
-      const data = await jsonFetch("/api/scan/protocol", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ip, protocol }),
-      });
-      resultModalState.protocol = protocol;
-      if (out) out.textContent = jsonString(data);
-      await loadResultModalScanProtocol();
-    } catch (err) {
-      if (out) out.textContent = String(err?.message || err);
-    }
-  };
-  protocolInputs.forEach((node) => {
-    if (node.dataset.bound) return;
-    node.dataset.bound = "1";
-    node.addEventListener("change", () => {
-      saveProtocol().catch(() => {});
     });
-  });
-  scanBody.addEventListener("input", (event) => {
-    const row = event.target.closest("tr[data-registration-no]");
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close();
+    });
+  }
+
+  function setRowEnabled(row, enabled) {
     if (!row) return;
-    const applyBtn = row.querySelector(".scan-row-apply");
-    if (!applyBtn) return;
-    applyBtn.disabled = false;
-  });
-  createSubmitBtn.addEventListener("click", async () => {
-    const out = document.getElementById("result-modal-create-output");
-    const ip = String(resultModalState.ip || "").trim();
-    const name = String(document.getElementById("result-modal-create-name")?.value || "").trim();
-    const email = String(document.getElementById("result-modal-create-email")?.value || "").trim();
-    const folder = String(document.getElementById("result-modal-create-folder")?.value || "").trim();
-    const userCode = String(document.getElementById("result-modal-create-user-code")?.value || "").trim() || "-";
-    if (!ip) {
-      if (out) out.textContent = "Missing printer IP";
+    row.classList.toggle("device-row-disabled", !enabled);
+    row.querySelectorAll("button, input, select, textarea").forEach((el) => {
+      if (el.dataset.rowChecker === "enable") return;
+      el.disabled = !enabled;
+    });
+  }
+
+  function getDeviceFilterMode() {
+    const validOnlyInput = document.getElementById("valid-printer-only");
+    // Checked = Show All, Unchecked = Valid printer only
+    return validOnlyInput?.checked ? "all" : "valid_only";
+  }
+
+  function renderDevicesPollingStatus(status, errorText = "") {
+    const badge = document.getElementById("devices-polling-status");
+    const toggle = document.getElementById("devices-polling-toggle");
+    if (!badge) return;
+    badge.classList.remove("ok", "warn", "off", "loading");
+    if (errorText) {
+      badge.classList.add("warn");
+      badge.textContent = "Polling: error";
+      badge.title = errorText;
+      if (toggle) {
+        toggle.disabled = false;
+        toggle.title = errorText;
+      }
       return;
     }
-    if (!name) {
-      if (out) out.textContent = "Missing name";
-      return;
+    const enabled = Boolean(status?.enabled);
+    const running = Boolean(status?.running);
+    if (enabled && running) {
+      badge.classList.add("ok");
+      badge.textContent = "Polling: ON";
+    } else {
+      badge.classList.add("off");
+      badge.textContent = "Polling: OFF";
     }
-    setCreateAddressLoading(true);
-    if (out) out.textContent = `Creating address "${name}" on ${ip}...`;
-    try {
-      const data = await jsonFetch("/api/scan/address-create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ip,
-          name,
-          email,
-          folder,
-          user_code: userCode,
-          fields: { entryTypeIn: "1" },
-        }),
-      });
-      if (out) out.textContent = jsonString(data.payload || data);
-      await loadResultModalScanAddressList();
-    } catch (err) {
-      if (out) out.textContent = String(err?.message || err);
-    } finally {
-      setCreateAddressLoading(false);
-    }
-  });
-  modal.addEventListener("click", (event) => {
-    if (event.target === modal) close();
-  });
-}
-
-function setRowEnabled(row, enabled) {
-  if (!row) return;
-  row.classList.toggle("device-row-disabled", !enabled);
-  row.querySelectorAll("button, input, select, textarea").forEach((el) => {
-    if (el.dataset.rowChecker === "enable") return;
-    el.disabled = !enabled;
-  });
-}
-
-function getDeviceFilterMode() {
-  const validOnlyInput = document.getElementById("valid-printer-only");
-  return validOnlyInput?.checked ? "valid_only" : "all";
-}
-
-function renderDevicesPollingStatus(status, errorText = "") {
-  const badge = document.getElementById("devices-polling-status");
-  const toggle = document.getElementById("devices-polling-toggle");
-  if (!badge) return;
-  badge.classList.remove("ok", "warn", "off", "loading");
-  if (errorText) {
-    badge.classList.add("warn");
-    badge.textContent = "Polling: error";
-    badge.title = errorText;
+    const interval = Number(status?.interval_seconds || 0);
+    const lastCycle = String(status?.last_cycle_at || "").trim();
+    badge.title = `enabled=${enabled} running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
     if (toggle) {
+      toggle.checked = enabled;
       toggle.disabled = false;
-      toggle.title = errorText;
+      toggle.title = enabled ? "Polling enabled" : "Polling disabled";
     }
-    return;
   }
-  const enabled = Boolean(status?.enabled);
-  const running = Boolean(status?.running);
-  if (enabled && running) {
-    badge.classList.add("ok");
-    badge.textContent = "Polling: ON";
-  } else {
-    badge.classList.add("off");
-    badge.textContent = "Polling: OFF";
-  }
-  const interval = Number(status?.interval_seconds || 0);
-  const lastCycle = String(status?.last_cycle_at || "").trim();
-  badge.title = `enabled=${enabled} running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
-  if (toggle) {
-    toggle.checked = enabled;
-    toggle.disabled = false;
-    toggle.title = enabled ? "Polling enabled" : "Polling disabled";
-  }
-}
 
-async function loadDevicesPollingStatus() {
-  const badge = document.getElementById("devices-polling-status");
-  if (!badge) return;
-  if (!badge.textContent || badge.textContent.includes("checking")) {
-    badge.classList.remove("ok", "warn", "off");
-    badge.classList.add("loading");
-    badge.textContent = "Polling: checking...";
+  async function loadDevicesPollingStatus() {
+    const badge = document.getElementById("devices-polling-status");
+    if (!badge) return;
+    if (!badge.textContent || badge.textContent.includes("checking")) {
+      badge.classList.remove("ok", "warn", "off");
+      badge.classList.add("loading");
+      badge.textContent = "Polling: checking...";
+    }
+    try {
+      const data = await jsonFetch("/api/polling/status");
+      renderDevicesPollingStatus(data || {});
+    } catch (err) {
+      renderDevicesPollingStatus(null, String(err?.message || err));
+    }
   }
-  try {
-    const data = await jsonFetch("/api/polling/status");
-    renderDevicesPollingStatus(data || {});
-  } catch (err) {
-    renderDevicesPollingStatus(null, String(err?.message || err));
+
+  function startDevicesPollingStatusLoop() {
+    if (!document.getElementById("devices-polling-status")) return;
+    if (devicesPollingStatusTimer) {
+      clearInterval(devicesPollingStatusTimer);
+      devicesPollingStatusTimer = null;
+    }
+    loadDevicesPollingStatus().catch(() => { });
+    devicesPollingStatusTimer = setInterval(() => {
+      loadDevicesPollingStatus().catch(() => { });
+    }, 5000);
   }
-}
 
-function startDevicesPollingStatusLoop() {
-  if (!document.getElementById("devices-polling-status")) return;
-  if (devicesPollingStatusTimer) {
-    clearInterval(devicesPollingStatusTimer);
-    devicesPollingStatusTimer = null;
+  function isValidPrinterName(name) {
+    const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
+    const lowered = String(name || "").trim().toLowerCase();
+    if (!lowered) return true;
+    return !blockedPrefixes.some((prefix) => lowered.startsWith(prefix));
   }
-  loadDevicesPollingStatus().catch(() => {});
-  devicesPollingStatusTimer = setInterval(() => {
-    loadDevicesPollingStatus().catch(() => {});
-  }, 5000);
-}
 
-function isValidPrinterName(name) {
-  const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
-  const lowered = String(name || "").trim().toLowerCase();
-  if (!lowered) return true;
-  return !blockedPrefixes.some((prefix) => lowered.startsWith(prefix));
-}
+  function applyValidPrinterFilter() {
+    const body = document.getElementById("device-table-body");
+    if (!body) return;
+    const showAll = getDeviceFilterMode() === "all";
+    body.querySelectorAll("tr[data-printer-name]").forEach((row) => {
+      if (showAll) {
+        row.style.display = "";
+        return;
+      }
+      const name = row.dataset.printerName || "";
+      row.style.display = !isValidPrinterName(name) ? "none" : "";
+    });
+  }
 
-function applyValidPrinterFilter() {
-  const body = document.getElementById("device-table-body");
-  if (!body) return;
-  const validOnly = getDeviceFilterMode() === "valid_only";
-  body.querySelectorAll("tr[data-printer-name]").forEach((row) => {
-    const name = row.dataset.printerName || "";
-    row.style.display = validOnly && !isValidPrinterName(name) ? "none" : "";
-  });
-}
-
-async function loadDevices(forceRefresh = false) {
-  const body = document.getElementById("device-table-body");
-  if (!body) return;
-  body.innerHTML = `
+  async function loadDevices(forceRefresh = false) {
+    const body = document.getElementById("device-table-body");
+    if (!body) return;
+    body.innerHTML = `
     <tr>
       <td colspan="8">
         <div class="table-loading">
@@ -1140,45 +1145,45 @@ async function loadDevices(forceRefresh = false) {
         </div>
       </td>
     </tr>`;
-  const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
-  const data = await jsonFetch(url);
-  const rawDevices = Array.isArray(data.devices) ? data.devices : [];
-  const rankSource = (source) => {
-    const s = String(source || "").toLowerCase();
-    if (s === "api") return 3;
-    if (s === "test") return 2;
-    return 1;
-  };
-  const keyOf = (d) => {
-    const ip = String(d?.ip || "").trim();
-    if (ip) return `ip:${ip}`;
-    const name = String(d?.name || "").trim().toLowerCase();
-    const port = String(d?.port_name || "").trim().toLowerCase();
-    return `name:${name}|port:${port}`;
-  };
-  const dedupMap = new Map();
-  for (const row of rawDevices) {
-    const key = keyOf(row);
-    const prev = dedupMap.get(key);
-    if (!prev) {
-      dedupMap.set(key, row);
-      continue;
+    const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
+    const data = await jsonFetch(url);
+    const rawDevices = Array.isArray(data.devices) ? data.devices : [];
+    const rankSource = (source) => {
+      const s = String(source || "").toLowerCase();
+      if (s === "api") return 3;
+      if (s === "test") return 2;
+      return 1;
+    };
+    const keyOf = (d) => {
+      const ip = String(d?.ip || "").trim();
+      if (ip) return `ip:${ip}`;
+      const name = String(d?.name || "").trim().toLowerCase();
+      const port = String(d?.port_name || "").trim().toLowerCase();
+      return `name:${name}|port:${port}`;
+    };
+    const dedupMap = new Map();
+    for (const row of rawDevices) {
+      const key = keyOf(row);
+      const prev = dedupMap.get(key);
+      if (!prev) {
+        dedupMap.set(key, row);
+        continue;
+      }
+      if (rankSource(row?.source) > rankSource(prev?.source)) {
+        dedupMap.set(key, row);
+      }
     }
-    if (rankSource(row?.source) > rankSource(prev?.source)) {
-      dedupMap.set(key, row);
+    const devices = Array.from(dedupMap.values());
+    if (!devices.length) {
+      body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
+      return;
     }
-  }
-  const devices = Array.from(dedupMap.values());
-  if (!devices.length) {
-    body.innerHTML = `<tr><td colspan="8">No devices found.</td></tr>`;
-    return;
-  }
-  body.innerHTML = devices
-    .map((d) => {
-      const hasIp = Boolean(d.ip);
-      const canQuery = hasIp;
-      const mac = d.mac_id || "-";
-      return `
+    body.innerHTML = devices
+      .map((d) => {
+        const hasIp = Boolean(d.ip);
+        const canQuery = hasIp;
+        const mac = d.mac_id || "-";
+        return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}">
         <td>
           <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
@@ -1199,243 +1204,244 @@ async function loadDevices(forceRefresh = false) {
           </div>
         </td>
       </tr>`;
-    })
-    .join("");
+      })
+      .join("");
 
-  const macCells = Array.from(body.querySelectorAll("td.device-mac[data-ip]"));
-  for (const cell of macCells) {
-    const ip = String(cell.dataset.ip || "").trim();
-    if (!ip) continue;
-    try {
-      const data = await jsonFetch(`/api/device/interface?ip=${encodeURIComponent(ip)}`);
-      const mac = Array.isArray(data.macs) && data.macs.length ? data.macs[0] : "-";
-      cell.textContent = mac;
-    } catch (_err) {
-      // Keep existing value (mac_id or "-") on failure.
-    }
-  }
-
-  body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
-      const selectedIp = String(btn.dataset.ip || "").trim();
-      const baseTitle = `${printerName} (${selectedIp})`;
-      resultModalState.ip = selectedIp;
-      resultModalState.printerName = printerName;
-      resultModalState.scanLoadedIp = "";
-      resultModalState.isolated = false;
-      showResultModalLoading(baseTitle, "Opening scan...");
-      const modal = document.getElementById("result-modal");
-      if (!modal || modal.hidden) return;
-      const dataView = {
-        printer_name: printerName || "Local Printer",
-        ip: selectedIp || "",
-        timestamp: "",
-        counter_data: {},
-        status_data: {},
-        html: "",
-      };
-      const finalTitle = `${baseTitle}`;
-      showResultModal(finalTitle, dataView);
-    });
-  });
-
-  body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
-    node.addEventListener("change", async () => {
-      const ip = String(node.dataset.ip || "").trim();
-      if (!ip) {
-        node.checked = !node.checked;
-        return;
-      }
-      const previousChecked = !Boolean(node.checked);
-      const desiredEnabled = Boolean(node.checked);
-      node.disabled = true;
-      setDeviceControlText(node, "Applying...", true);
+    const macCells = Array.from(body.querySelectorAll("td.device-mac[data-ip]"));
+    for (const cell of macCells) {
+      const ip = String(cell.dataset.ip || "").trim();
+      if (!ip) continue;
       try {
-        const action = desiredEnabled ? "enable_machine" : "disable_machine";
-        const result = await runAction(ip, action, { silent: true });
-        if (!result?.ok) {
-          throw new Error(String(result?.error || "Action failed"));
+        const data = await jsonFetch(`/api/device/interface?ip=${encodeURIComponent(ip)}`);
+        if (Array.isArray(data.macs) && data.macs.length) {
+          cell.textContent = data.macs[0];
         }
-        setDeviceControlText(node, "Verifying...", true);
-        await refreshSingleDeviceMachineState(node);
-      } catch (err) {
-        node.checked = previousChecked;
-        node.disabled = false;
-        setDeviceControlText(node, node.checked ? "Enable" : "Disable", false);
-        const message = String(err?.message || err || "Toggle failed");
-        const out = document.getElementById("collect-output");
-        if (out) out.textContent = message;
-        else alert(message);
+      } catch (_err) {
+        // Keep existing value (mac_id or "-") on failure.
       }
+    }
+
+    body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
+        const selectedIp = String(btn.dataset.ip || "").trim();
+        const baseTitle = `${printerName} (${selectedIp})`;
+        resultModalState.ip = selectedIp;
+        resultModalState.printerName = printerName;
+        resultModalState.scanLoadedIp = "";
+        resultModalState.isolated = false;
+        showResultModalLoading(baseTitle, "Opening scan...");
+        const modal = document.getElementById("result-modal");
+        if (!modal || modal.hidden) return;
+        const dataView = {
+          printer_name: printerName || "Local Printer",
+          ip: selectedIp || "",
+          timestamp: "",
+          counter_data: {},
+          status_data: {},
+          html: "",
+        };
+        const finalTitle = `${baseTitle}`;
+        showResultModal(finalTitle, dataView);
+      });
     });
-  });
 
-  await refreshDeviceMachineStates(body);
-
-  applyValidPrinterFilter();
-}
-
-async function initDevicesPage() {
-  bindResultModal();
-  startDevicesPollingStatusLoop();
-  const pollingToggle = document.getElementById("devices-polling-toggle");
-  if (pollingToggle && !pollingToggle.dataset.bound) {
-    pollingToggle.dataset.bound = "1";
-    pollingToggle.addEventListener("change", async () => {
-      const desiredEnabled = Boolean(pollingToggle.checked);
-      const badge = document.getElementById("devices-polling-status");
-      pollingToggle.disabled = true;
-      if (badge) {
-        badge.classList.remove("ok", "warn", "off");
-        badge.classList.add("loading");
-        badge.textContent = "Polling: applying...";
-      }
-      try {
-        const data = await jsonFetch("/api/polling/toggle", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: desiredEnabled }),
-        });
-        renderDevicesPollingStatus(data?.status || {}, "");
-      } catch (err) {
-        pollingToggle.checked = !desiredEnabled;
-        const message = String(err?.message || err || "Toggle polling failed");
-        const out = document.getElementById("collect-output");
-        if (out) out.textContent = message;
-        else alert(message);
-      } finally {
-        pollingToggle.disabled = false;
-      }
+    body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
+      node.addEventListener("change", async () => {
+        const ip = String(node.dataset.ip || "").trim();
+        if (!ip) {
+          node.checked = !node.checked;
+          return;
+        }
+        const previousChecked = !Boolean(node.checked);
+        const desiredEnabled = Boolean(node.checked);
+        node.disabled = true;
+        setDeviceControlText(node, "Applying...", true);
+        try {
+          const action = desiredEnabled ? "enable_machine" : "disable_machine";
+          const result = await runAction(ip, action, { silent: true });
+          if (!result?.ok) {
+            throw new Error(String(result?.error || "Action failed"));
+          }
+          setDeviceControlText(node, "Verifying...", true);
+          await refreshSingleDeviceMachineState(node);
+        } catch (err) {
+          node.checked = previousChecked;
+          node.disabled = false;
+          setDeviceControlText(node, node.checked ? "Enable" : "Disable", false);
+          const message = String(err?.message || err || "Toggle failed");
+          const out = document.getElementById("collect-output");
+          if (out) out.textContent = message;
+          else alert(message);
+        }
+      });
     });
+
+    await refreshDeviceMachineStates(body);
+
+    applyValidPrinterFilter();
   }
-  const validOnlyInput = document.getElementById("valid-printer-only");
-  if (validOnlyInput && !validOnlyInput.dataset.bound) {
-    validOnlyInput.dataset.bound = "1";
+
+  async function initDevicesPage() {
+    bindResultModal();
+    startDevicesPollingStatusLoop();
+    const pollingToggle = document.getElementById("devices-polling-toggle");
+    if (pollingToggle && !pollingToggle.dataset.bound) {
+      pollingToggle.dataset.bound = "1";
+      pollingToggle.addEventListener("change", async () => {
+        const desiredEnabled = Boolean(pollingToggle.checked);
+        const badge = document.getElementById("devices-polling-status");
+        pollingToggle.disabled = true;
+        if (badge) {
+          badge.classList.remove("ok", "warn", "off");
+          badge.classList.add("loading");
+          badge.textContent = "Polling: applying...";
+        }
+        try {
+          const data = await jsonFetch("/api/polling/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: desiredEnabled }),
+          });
+          renderDevicesPollingStatus(data?.status || {}, "");
+        } catch (err) {
+          pollingToggle.checked = !desiredEnabled;
+          const message = String(err?.message || err || "Toggle polling failed");
+          const out = document.getElementById("collect-output");
+          if (out) out.textContent = message;
+          else alert(message);
+        } finally {
+          pollingToggle.disabled = false;
+        }
+      });
+    }
+    const validOnlyInput = document.getElementById("valid-printer-only");
+    if (validOnlyInput && !validOnlyInput.dataset.bound) {
+      validOnlyInput.dataset.bound = "1";
+      try {
+        const cfg = await jsonFetch("/api/dashboard/config");
+        const mode = String(cfg?.device_filters?.filter_mode || "all");
+        validOnlyInput.checked = mode === "all";
+      } catch (_e) {
+        validOnlyInput.checked = true;
+      }
+      validOnlyInput.addEventListener("change", () => {
+        applyValidPrinterFilter();
+      });
+    }
+    await loadDevices();
+  }
+
+  function getScanTarget() {
+    const selectedIp = (document.getElementById("scan-device-select")?.value || "").trim();
+    const ipFromField = (document.getElementById("scan-ip")?.value || "").trim();
+    const ip = selectedIp || ipFromField;
+    const user = (document.getElementById("scan-user")?.value || "").trim();
+    const password = (document.getElementById("scan-password")?.value || "").trim();
+    return { ip, user, password };
+  }
+
+  function syncScanDeviceIpField() {
+    const select = document.getElementById("scan-device-select");
+    const ipInput = document.getElementById("scan-ip");
+    if (!select || !ipInput) return;
+    ipInput.value = String(select.value || "").trim();
+  }
+
+  async function refreshScanDevices(forceBackendRefresh = true) {
+    const select = document.getElementById("scan-device-select");
+    if (!select) return [];
+    const selectedBefore = String(select.value || "").trim();
+    const req = forceBackendRefresh
+      ? jsonFetch("/api/devices/refresh", { method: "POST" })
+      : jsonFetch("/api/devices");
+    const data = await req;
+    const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
+    const rankSource = (source) => {
+      const s = String(source || "").toLowerCase();
+      if (s === "api") return 3;
+      if (s === "test") return 2;
+      return 1;
+    };
+    const byIp = new Map();
+    for (const row of rawDevices) {
+      const ip = String(row?.ip || "").trim();
+      const type = String(row?.type || "").toLowerCase();
+      if (!ip || type !== "ricoh") continue;
+      const prev = byIp.get(ip);
+      if (!prev || rankSource(row?.source) > rankSource(prev?.source)) {
+        byIp.set(ip, row);
+      }
+    }
+    const devices = Array.from(byIp.values()).sort((a, b) => {
+      const nameA = String(a?.name || "").toLowerCase();
+      const nameB = String(b?.name || "").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+    const options = [`<option value="">Select device...</option>`];
+    for (const d of devices) {
+      const ip = String(d?.ip || "").trim();
+      const name = String(d?.name || ip).trim();
+      options.push(`<option value="${ip.replaceAll('"', "&quot;")}">${name} (${ip})</option>`);
+    }
+    select.innerHTML = options.join("");
+    const stillExists = devices.some((d) => String(d?.ip || "").trim() === selectedBefore);
+    if (selectedBefore && stillExists) {
+      select.value = selectedBefore;
+    } else if (devices.length) {
+      select.value = String(devices[0].ip || "").trim();
+    } else {
+      select.value = "";
+    }
+    syncScanDeviceIpField();
+    return devices;
+  }
+
+  async function ensureScanTargetDefaults() {
+    const select = document.getElementById("scan-device-select");
+    const userInput = document.getElementById("scan-user");
+    if (!select) return;
+    try {
+      const devices = await refreshScanDevices(true);
+      if (devices.length) return;
+    } catch (_err) {
+      // Fallback below.
+    }
     try {
       const cfg = await jsonFetch("/api/dashboard/config");
-      const mode = String(cfg?.device_filters?.filter_mode || "all");
-      validOnlyInput.checked = mode === "valid_only";
-    } catch (_e) {
-      validOnlyInput.checked = false;
-    }
-    validOnlyInput.addEventListener("change", () => {
-      applyValidPrinterFilter();
-    });
-  }
-  await loadDevices();
-}
-
-function getScanTarget() {
-  const selectedIp = (document.getElementById("scan-device-select")?.value || "").trim();
-  const ipFromField = (document.getElementById("scan-ip")?.value || "").trim();
-  const ip = selectedIp || ipFromField;
-  const user = (document.getElementById("scan-user")?.value || "").trim();
-  const password = (document.getElementById("scan-password")?.value || "").trim();
-  return { ip, user, password };
-}
-
-function syncScanDeviceIpField() {
-  const select = document.getElementById("scan-device-select");
-  const ipInput = document.getElementById("scan-ip");
-  if (!select || !ipInput) return;
-  ipInput.value = String(select.value || "").trim();
-}
-
-async function refreshScanDevices(forceBackendRefresh = true) {
-  const select = document.getElementById("scan-device-select");
-  if (!select) return [];
-  const selectedBefore = String(select.value || "").trim();
-  const req = forceBackendRefresh
-    ? jsonFetch("/api/devices/refresh", { method: "POST" })
-    : jsonFetch("/api/devices");
-  const data = await req;
-  const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
-  const rankSource = (source) => {
-    const s = String(source || "").toLowerCase();
-    if (s === "api") return 3;
-    if (s === "test") return 2;
-    return 1;
-  };
-  const byIp = new Map();
-  for (const row of rawDevices) {
-    const ip = String(row?.ip || "").trim();
-    const type = String(row?.type || "").toLowerCase();
-    if (!ip || type !== "ricoh") continue;
-    const prev = byIp.get(ip);
-    if (!prev || rankSource(row?.source) > rankSource(prev?.source)) {
-      byIp.set(ip, row);
+      const testIp = String(cfg?.env?.TEST_IP || "").trim();
+      const testUser = String(cfg?.env?.TEST_USER || "").trim();
+      if (testIp) {
+        select.innerHTML = `<option value="${testIp.replaceAll('"', "&quot;")}">Test Printer (${testIp})</option>`;
+        select.value = testIp;
+        syncScanDeviceIpField();
+      }
+      if (userInput && !String(userInput.value || "").trim() && testUser) {
+        userInput.value = testUser;
+      }
+    } catch (_err) {
+      // Keep manual input flow if config is unavailable.
     }
   }
-  const devices = Array.from(byIp.values()).sort((a, b) => {
-    const nameA = String(a?.name || "").toLowerCase();
-    const nameB = String(b?.name || "").toLowerCase();
-    return nameA.localeCompare(nameB);
-  });
-  const options = [`<option value="">Select device...</option>`];
-  for (const d of devices) {
-    const ip = String(d?.ip || "").trim();
-    const name = String(d?.name || ip).trim();
-    options.push(`<option value="${ip.replaceAll('"', "&quot;")}">${name} (${ip})</option>`);
-  }
-  select.innerHTML = options.join("");
-  const stillExists = devices.some((d) => String(d?.ip || "").trim() === selectedBefore);
-  if (selectedBefore && stillExists) {
-    select.value = selectedBefore;
-  } else if (devices.length) {
-    select.value = String(devices[0].ip || "").trim();
-  } else {
-    select.value = "";
-  }
-  syncScanDeviceIpField();
-  return devices;
-}
 
-async function ensureScanTargetDefaults() {
-  const select = document.getElementById("scan-device-select");
-  const userInput = document.getElementById("scan-user");
-  if (!select) return;
-  try {
-    const devices = await refreshScanDevices(true);
-    if (devices.length) return;
-  } catch (_err) {
-    // Fallback below.
-  }
-  try {
-    const cfg = await jsonFetch("/api/dashboard/config");
-    const testIp = String(cfg?.env?.TEST_IP || "").trim();
-    const testUser = String(cfg?.env?.TEST_USER || "").trim();
-    if (testIp) {
-      select.innerHTML = `<option value="${testIp.replaceAll('"', "&quot;")}">Test Printer (${testIp})</option>`;
-      select.value = testIp;
-      syncScanDeviceIpField();
+  function renderScanAddressRows(entries) {
+    const body = document.getElementById("scan-address-table-body");
+    if (!body) return;
+    const rows = Array.isArray(entries)
+      ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+      : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
+      return;
     }
-    if (userInput && !String(userInput.value || "").trim() && testUser) {
-      userInput.value = testUser;
-    }
-  } catch (_err) {
-    // Keep manual input flow if config is unavailable.
-  }
-}
-
-function renderScanAddressRows(entries) {
-  const body = document.getElementById("scan-address-table-body");
-  if (!body) return;
-  const rows = Array.isArray(entries)
-    ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
-    : [];
-  if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
-    return;
-  }
-  body.innerHTML = rows
-    .map((row) => {
-      const reg = row.registration_no || "";
-      const name = row.name || "-";
-      const email = row.email_address || "-";
-      const folder = row.folder || "-";
-      const entryId = row.entry_id || "";
-      return `
+    body.innerHTML = rows
+      .map((row) => {
+        const reg = row.registration_no || "";
+        const name = row.name || "-";
+        const email = row.email_address || "-";
+        const folder = row.folder || "-";
+        const entryId = row.entry_id || "";
+        return `
         <tr data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
           <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
           <td>${name}</td>
@@ -1444,256 +1450,256 @@ function renderScanAddressRows(entries) {
           <td class="col-reg-no">${reg}</td>
         </tr>
       `;
-    })
-    .join("");
-}
-
-async function loadScanAddressList() {
-  const out = document.getElementById("scan-output");
-  await refreshScanDevices(true);
-  const target = getScanTarget();
-  if (!target.ip) throw new Error("Missing printer IP");
-  const query = new URLSearchParams(target).toString();
-  const data = await jsonFetch(`/api/scan/address-list?${query}`);
-  const payload = data.payload || {};
-  const entries = payload.address_list || [];
-  renderScanAddressRows(entries);
-  if (out) out.textContent = JSON.stringify(payload, null, 2);
-}
-
-async function initScanPage() {
-  const targetForm = document.getElementById("scan-target-form");
-  const createForm = document.getElementById("scan-create-form");
-  const modifyForm = document.getElementById("scan-modify-form");
-  const deviceSelect = document.getElementById("scan-device-select");
-  const out = document.getElementById("scan-output");
-  if (!targetForm || !createForm || !modifyForm) return;
-
-  if (deviceSelect && !deviceSelect.dataset.bound) {
-    deviceSelect.dataset.bound = "1";
-    deviceSelect.addEventListener("change", () => {
-      syncScanDeviceIpField();
-    });
+      })
+      .join("");
   }
 
-  if (!targetForm.dataset.bound) {
-    targetForm.dataset.bound = "1";
-    targetForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
+  async function loadScanAddressList() {
+    const out = document.getElementById("scan-output");
+    await refreshScanDevices(true);
+    const target = getScanTarget();
+    if (!target.ip) throw new Error("Missing printer IP");
+    const query = new URLSearchParams(target).toString();
+    const data = await jsonFetch(`/api/scan/address-list?${query}`);
+    const payload = data.payload || {};
+    const entries = payload.address_list || [];
+    renderScanAddressRows(entries);
+    if (out) out.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  async function initScanPage() {
+    const targetForm = document.getElementById("scan-target-form");
+    const createForm = document.getElementById("scan-create-form");
+    const modifyForm = document.getElementById("scan-modify-form");
+    const deviceSelect = document.getElementById("scan-device-select");
+    const out = document.getElementById("scan-output");
+    if (!targetForm || !createForm || !modifyForm) return;
+
+    if (deviceSelect && !deviceSelect.dataset.bound) {
+      deviceSelect.dataset.bound = "1";
+      deviceSelect.addEventListener("change", () => {
+        syncScanDeviceIpField();
+      });
+    }
+
+    if (!targetForm.dataset.bound) {
+      targetForm.dataset.bound = "1";
+      targetForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    if (!createForm.dataset.bound) {
+      createForm.dataset.bound = "1";
+      createForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        const body = {
+          ...target,
+          name: (document.getElementById("scan-create-name")?.value || "").trim(),
+          email: (document.getElementById("scan-create-email")?.value || "").trim(),
+          folder: (document.getElementById("scan-create-folder")?.value || "").trim(),
+          user_code: (document.getElementById("scan-create-user-code")?.value || "").trim() || "-",
+          fields: { entryTypeIn: "1" },
+        };
+        try {
+          const data = await jsonFetch("/api/scan/address-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    if (!modifyForm.dataset.bound) {
+      modifyForm.dataset.bound = "1";
+      modifyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        const body = {
+          ...target,
+          registration_no: (document.getElementById("scan-modify-registration-no")?.value || "").trim(),
+          name: (document.getElementById("scan-modify-name")?.value || "").trim(),
+          email: (document.getElementById("scan-modify-email")?.value || "").trim(),
+          folder: (document.getElementById("scan-modify-folder")?.value || "").trim(),
+          user_code: (document.getElementById("scan-modify-user-code")?.value || "").trim(),
+          fields: {},
+        };
+        if (!body.registration_no) {
+          if (out) out.textContent = "Missing registration_no";
+          return;
+        }
+        try {
+          const data = await jsonFetch("/api/scan/address-modify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    const tableBody = document.getElementById("scan-address-table-body");
+    if (tableBody && !tableBody.dataset.bound) {
+      tableBody.dataset.bound = "1";
+      tableBody.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".scan-delete-btn");
+        if (!btn) return;
+        const registrationNo = String(btn.dataset.registrationNo || "").trim();
+        const entryId = String(btn.closest("tr")?.dataset.entryId || "").trim();
+        if (!registrationNo && !entryId) return;
+        const label = registrationNo || entryId;
+        if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        try {
+          const data = await jsonFetch("/api/scan/address-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId, confirm: true }),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    // Auto-load once on page open so user does not need to click "Load Address List".
+    if (!targetForm.dataset.autoLoaded) {
+      targetForm.dataset.autoLoaded = "1";
       try {
+        await ensureScanTargetDefaults();
         await loadScanAddressList();
       } catch (err) {
         if (out) out.textContent = String(err?.message || err);
       }
-    });
-  }
-
-  if (!createForm.dataset.bound) {
-    createForm.dataset.bound = "1";
-    createForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const target = getScanTarget();
-      if (!target.ip) {
-        if (out) out.textContent = "Missing printer IP";
-        return;
-      }
-      const body = {
-        ...target,
-        name: (document.getElementById("scan-create-name")?.value || "").trim(),
-        email: (document.getElementById("scan-create-email")?.value || "").trim(),
-        folder: (document.getElementById("scan-create-folder")?.value || "").trim(),
-        user_code: (document.getElementById("scan-create-user-code")?.value || "").trim() || "-",
-        fields: { entryTypeIn: "1" },
-      };
-      try {
-        const data = await jsonFetch("/api/scan/address-create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
-        await loadScanAddressList();
-      } catch (err) {
-        if (out) out.textContent = String(err?.message || err);
-      }
-    });
-  }
-
-  if (!modifyForm.dataset.bound) {
-    modifyForm.dataset.bound = "1";
-    modifyForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const target = getScanTarget();
-      if (!target.ip) {
-        if (out) out.textContent = "Missing printer IP";
-        return;
-      }
-      const body = {
-        ...target,
-        registration_no: (document.getElementById("scan-modify-registration-no")?.value || "").trim(),
-        name: (document.getElementById("scan-modify-name")?.value || "").trim(),
-        email: (document.getElementById("scan-modify-email")?.value || "").trim(),
-        folder: (document.getElementById("scan-modify-folder")?.value || "").trim(),
-        user_code: (document.getElementById("scan-modify-user-code")?.value || "").trim(),
-        fields: {},
-      };
-      if (!body.registration_no) {
-        if (out) out.textContent = "Missing registration_no";
-        return;
-      }
-      try {
-        const data = await jsonFetch("/api/scan/address-modify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
-        await loadScanAddressList();
-      } catch (err) {
-        if (out) out.textContent = String(err?.message || err);
-      }
-    });
-  }
-
-  const tableBody = document.getElementById("scan-address-table-body");
-  if (tableBody && !tableBody.dataset.bound) {
-    tableBody.dataset.bound = "1";
-    tableBody.addEventListener("click", async (event) => {
-      const btn = event.target.closest(".scan-delete-btn");
-      if (!btn) return;
-      const registrationNo = String(btn.dataset.registrationNo || "").trim();
-      const entryId = String(btn.closest("tr")?.dataset.entryId || "").trim();
-      if (!registrationNo && !entryId) return;
-      const label = registrationNo || entryId;
-      if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
-      const target = getScanTarget();
-      if (!target.ip) {
-        if (out) out.textContent = "Missing printer IP";
-        return;
-      }
-      try {
-        const data = await jsonFetch("/api/scan/address-delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId, confirm: true }),
-        });
-        if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
-        await loadScanAddressList();
-      } catch (err) {
-        if (out) out.textContent = String(err?.message || err);
-      }
-    });
-  }
-
-  // Auto-load once on page open so user does not need to click "Load Address List".
-  if (!targetForm.dataset.autoLoaded) {
-    targetForm.dataset.autoLoaded = "1";
-    try {
-      await ensureScanTargetDefaults();
-      await loadScanAddressList();
-    } catch (err) {
-      if (out) out.textContent = String(err?.message || err);
     }
   }
-}
 
-const dashboardState = {
-  env: {},
-  env_overrides: {},
-  device_filters: {},
-  network: {},
-  computers: [],
-  printers: [],
-  links: [],
-};
+  const dashboardState = {
+    env: {},
+    env_overrides: {},
+    device_filters: {},
+    network: {},
+    computers: [],
+    printers: [],
+    links: [],
+  };
 
-function setDashboardMessage(text) {
-  const out = document.getElementById("dashboard-config-output");
-  if (out) out.textContent = text;
-}
-
-function renderEnvGrid(envPayload) {
-  const root = document.getElementById("env-config-grid");
-  if (!root) return;
-  const keys = Object.keys(envPayload || {});
-  if (!keys.length) {
-    root.innerHTML = `<div class="hint">No env values available.</div>`;
-    return;
+  function setDashboardMessage(text) {
+    const out = document.getElementById("dashboard-config-output");
+    if (out) out.textContent = text;
   }
-  root.innerHTML = keys
-    .map(
-      (key) => `
+
+  function renderEnvGrid(envPayload) {
+    const root = document.getElementById("env-config-grid");
+    if (!root) return;
+    const keys = Object.keys(envPayload || {});
+    if (!keys.length) {
+      root.innerHTML = `<div class="hint">No env values available.</div>`;
+      return;
+    }
+    root.innerHTML = keys
+      .map(
+        (key) => `
       <div class="env-item">
         <div class="env-key">${key}</div>
         <div class="env-value">${envPayload[key] ?? ""}</div>
       </div>`
-    )
-    .join("");
-}
-
-function renderEnvOverrideForm(envOverrides) {
-  const form = document.getElementById("env-override-form");
-  if (!form) return;
-  Object.keys(envOverrides || {}).forEach((key) => {
-    if (!form.elements[key]) return;
-    form.elements[key].value = envOverrides[key] ?? "";
-  });
-}
-
-function renderDeviceFilterForm(deviceFilters) {
-  const form = document.getElementById("device-filter-form");
-  if (!form) return;
-  const values = deviceFilters?.ignore_printer_prefixes || [];
-  const mode = String(deviceFilters?.filter_mode || "all");
-  if (form.elements.ignore_printer_prefixes) {
-    form.elements.ignore_printer_prefixes.value = Array.isArray(values) ? values.join(",") : "";
+      )
+      .join("");
   }
-  if (form.elements.filter_mode) {
-    form.elements.filter_mode.value = mode === "valid_only" ? "valid_only" : "all";
-  }
-}
 
-function renderNetworkForm(networkPayload) {
-  const form = document.getElementById("network-config-form");
-  if (!form) return;
-  ["subnet_mask", "gateway", "dns_primary", "dns_secondary", "snmp_community", "snmp_port", "timeout_seconds"].forEach(
-    (key) => {
+  function renderEnvOverrideForm(envOverrides) {
+    const form = document.getElementById("env-override-form");
+    if (!form) return;
+    Object.keys(envOverrides || {}).forEach((key) => {
       if (!form.elements[key]) return;
-      form.elements[key].value = networkPayload[key] ?? "";
-    }
-  );
-}
-
-function renderComputersTable(computers) {
-  const body = document.getElementById("computers-body");
-  if (!body) return;
-  if (!computers.length) {
-    body.innerHTML = `<tr><td colspan="4">No computers configured.</td></tr>`;
-    return;
+      form.elements[key].value = envOverrides[key] ?? "";
+    });
   }
-  body.innerHTML = computers
-    .map(
-      (row) => `
+
+  function renderDeviceFilterForm(deviceFilters) {
+    const form = document.getElementById("device-filter-form");
+    if (!form) return;
+    const values = deviceFilters?.ignore_printer_prefixes || [];
+    const mode = String(deviceFilters?.filter_mode || "all");
+    if (form.elements.ignore_printer_prefixes) {
+      form.elements.ignore_printer_prefixes.value = Array.isArray(values) ? values.join(",") : "";
+    }
+    if (form.elements.filter_mode) {
+      form.elements.filter_mode.value = mode === "valid_only" ? "valid_only" : "all";
+    }
+  }
+
+  function renderNetworkForm(networkPayload) {
+    const form = document.getElementById("network-config-form");
+    if (!form) return;
+    ["subnet_mask", "gateway", "dns_primary", "dns_secondary", "snmp_community", "snmp_port", "timeout_seconds"].forEach(
+      (key) => {
+        if (!form.elements[key]) return;
+        form.elements[key].value = networkPayload[key] ?? "";
+      }
+    );
+  }
+
+  function renderComputersTable(computers) {
+    const body = document.getElementById("computers-body");
+    if (!body) return;
+    if (!computers.length) {
+      body.innerHTML = `<tr><td colspan="4">No computers configured.</td></tr>`;
+      return;
+    }
+    body.innerHTML = computers
+      .map(
+        (row) => `
       <tr>
         <td>${row.name}</td>
         <td>${row.ip || "-"}</td>
         <td>${row.department || "-"}</td>
         <td><button class="btn action alt js-delete-computer" data-id="${row.id}">Delete</button></td>
       </tr>`
-    )
-    .join("");
-}
-
-function renderPrintersTable(printers) {
-  const body = document.getElementById("printers-body");
-  if (!body) return;
-  if (!printers.length) {
-    body.innerHTML = `<tr><td colspan="5">No printers configured.</td></tr>`;
-    return;
+      )
+      .join("");
   }
-  body.innerHTML = printers
-    .map(
-      (row) => `
+
+  function renderPrintersTable(printers) {
+    const body = document.getElementById("printers-body");
+    if (!body) return;
+    if (!printers.length) {
+      body.innerHTML = `<tr><td colspan="5">No printers configured.</td></tr>`;
+      return;
+    }
+    body.innerHTML = printers
+      .map(
+        (row) => `
       <tr>
         <td>${row.name}</td>
         <td>${row.ip || "-"}</td>
@@ -1701,36 +1707,36 @@ function renderPrintersTable(printers) {
         <td>${row.location || "-"}</td>
         <td><button class="btn action alt js-delete-printer" data-id="${row.id}">Delete</button></td>
       </tr>`
-    )
-    .join("");
-}
-
-function buildLinkKey(computerId, printerId) {
-  return `${computerId}:${printerId}`;
-}
-
-function renderLinkMatrix(computers, printers, links) {
-  const table = document.getElementById("link-matrix");
-  if (!table) return;
-  const thead = table.querySelector("thead");
-  const tbody = table.querySelector("tbody");
-  if (!thead || !tbody) return;
-  if (!computers.length || !printers.length) {
-    thead.innerHTML = "";
-    tbody.innerHTML = `<tr><td>Need at least 1 computer and 1 printer to map.</td></tr>`;
-    return;
+      )
+      .join("");
   }
 
-  const selected = new Set((links || []).map((row) => buildLinkKey(row.computer_id, row.printer_id)));
-  thead.innerHTML = `
+  function buildLinkKey(computerId, printerId) {
+    return `${computerId}:${printerId}`;
+  }
+
+  function renderLinkMatrix(computers, printers, links) {
+    const table = document.getElementById("link-matrix");
+    if (!table) return;
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+    if (!thead || !tbody) return;
+    if (!computers.length || !printers.length) {
+      thead.innerHTML = "";
+      tbody.innerHTML = `<tr><td>Need at least 1 computer and 1 printer to map.</td></tr>`;
+      return;
+    }
+
+    const selected = new Set((links || []).map((row) => buildLinkKey(row.computer_id, row.printer_id)));
+    thead.innerHTML = `
     <tr>
       <th>Computer \\ Printer</th>
       ${printers.map((printer) => `<th>${printer.name}</th>`).join("")}
     </tr>`;
 
-  tbody.innerHTML = computers
-    .map((computer) => {
-      return `
+    tbody.innerHTML = computers
+      .map((computer) => {
+        return `
         <tr>
           <td><strong>${computer.name}</strong><br /><span class="hint">${computer.ip || "-"}</span></td>
           ${printers
@@ -1747,282 +1753,281 @@ function renderLinkMatrix(computers, printers, links) {
             })
             .join("")}
         </tr>`;
-    })
-    .join("");
-}
+      })
+      .join("");
+  }
 
-function collectLinkPayload() {
-  const nodes = document.querySelectorAll('input[data-link-check="1"]:checked');
-  return Array.from(nodes).map((node) => ({
-    computer_id: Number(node.dataset.computerId || 0),
-    printer_id: Number(node.dataset.printerId || 0),
-  }));
-}
+  function collectLinkPayload() {
+    const nodes = document.querySelectorAll('input[data-link-check="1"]:checked');
+    return Array.from(nodes).map((node) => ({
+      computer_id: Number(node.dataset.computerId || 0),
+      printer_id: Number(node.dataset.printerId || 0),
+    }));
+  }
 
-function bindDashboardActions() {
-  const networkForm = document.getElementById("network-config-form");
-  const envForm = document.getElementById("env-override-form");
-  const deviceFilterForm = document.getElementById("device-filter-form");
-  const computerForm = document.getElementById("computer-form");
-  const printerForm = document.getElementById("printer-form");
-  const saveLinksBtn = document.getElementById("save-links-btn");
-  const computersBody = document.getElementById("computers-body");
-  const printersBody = document.getElementById("printers-body");
+  function bindDashboardActions() {
+    const networkForm = document.getElementById("network-config-form");
+    const envForm = document.getElementById("env-override-form");
+    const deviceFilterForm = document.getElementById("device-filter-form");
+    const computerForm = document.getElementById("computer-form");
+    const printerForm = document.getElementById("printer-form");
+    const saveLinksBtn = document.getElementById("save-links-btn");
+    const computersBody = document.getElementById("computers-body");
+    const printersBody = document.getElementById("printers-body");
 
-  if (networkForm && !networkForm.dataset.bound) {
-    networkForm.dataset.bound = "1";
-    networkForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const payload = {
-        subnet_mask: networkForm.elements.subnet_mask.value,
-        gateway: networkForm.elements.gateway.value,
-        dns_primary: networkForm.elements.dns_primary.value,
-        dns_secondary: networkForm.elements.dns_secondary.value,
-        snmp_community: networkForm.elements.snmp_community.value,
-        snmp_port: Number(networkForm.elements.snmp_port.value || 161),
-        timeout_seconds: Number(networkForm.elements.timeout_seconds.value || 10),
-      };
-      try {
-        await jsonFetch("/api/dashboard/network", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        setDashboardMessage("Saved network config.");
-      } catch (err) {
-        setDashboardMessage(`Save network config failed: ${err.message}`);
-      }
+    if (networkForm && !networkForm.dataset.bound) {
+      networkForm.dataset.bound = "1";
+      networkForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          subnet_mask: networkForm.elements.subnet_mask.value,
+          gateway: networkForm.elements.gateway.value,
+          dns_primary: networkForm.elements.dns_primary.value,
+          dns_secondary: networkForm.elements.dns_secondary.value,
+          snmp_community: networkForm.elements.snmp_community.value,
+          snmp_port: Number(networkForm.elements.snmp_port.value || 161),
+          timeout_seconds: Number(networkForm.elements.timeout_seconds.value || 10),
+        };
+        try {
+          await jsonFetch("/api/dashboard/network", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          setDashboardMessage("Saved network config.");
+        } catch (err) {
+          setDashboardMessage(`Save network config failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (envForm && !envForm.dataset.bound) {
+      envForm.dataset.bound = "1";
+      envForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          API_URL: envForm.elements.API_URL.value,
+          USER_TOKEN: envForm.elements.USER_TOKEN.value,
+          DATABASE_URL: envForm.elements.DATABASE_URL.value,
+          WS_URL: envForm.elements.WS_URL.value,
+          WS_AUTO_CONNECT: envForm.elements.WS_AUTO_CONNECT.value,
+          WEBHOOK_MODE: envForm.elements.WEBHOOK_MODE.value,
+          WEBHOOK_LISTEN_PATH: envForm.elements.WEBHOOK_LISTEN_PATH.value,
+          TEST_IP: envForm.elements.TEST_IP.value,
+          TEST_USER: envForm.elements.TEST_USER.value,
+          TEST_PASSWORD: envForm.elements.TEST_PASSWORD.value,
+          POLLING_ENABLED: envForm.elements.POLLING_ENABLED.value,
+          POLLING_URL: envForm.elements.POLLING_URL.value,
+          POLLING_LEAD: envForm.elements.POLLING_LEAD.value,
+          POLLING_TOKEN: envForm.elements.POLLING_TOKEN.value,
+          POLLING_INTERVAL_SECONDS: envForm.elements.POLLING_INTERVAL_SECONDS.value,
+          POLLING_LAN_UID: envForm.elements.POLLING_LAN_UID.value,
+          POLLING_AGENT_UID: envForm.elements.POLLING_AGENT_UID.value,
+        };
+        try {
+          await jsonFetch("/api/dashboard/env", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          await loadDashboardConfig();
+          setDashboardMessage("Saved ENV overrides to DB.");
+        } catch (err) {
+          setDashboardMessage(`Save ENV overrides failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (deviceFilterForm && !deviceFilterForm.dataset.bound) {
+      deviceFilterForm.dataset.bound = "1";
+      deviceFilterForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          ignore_printer_prefixes: deviceFilterForm.elements.ignore_printer_prefixes.value,
+          filter_mode: deviceFilterForm.elements.filter_mode?.value || "all",
+        };
+        try {
+          await jsonFetch("/api/dashboard/device-filters", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          await loadDashboardConfig();
+          setDashboardMessage("Saved device filters.");
+        } catch (err) {
+          setDashboardMessage(`Save device filters failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (computerForm && !computerForm.dataset.bound) {
+      computerForm.dataset.bound = "1";
+      computerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: computerForm.elements.name.value,
+          ip: computerForm.elements.ip.value,
+          department: computerForm.elements.department.value,
+        };
+        try {
+          await jsonFetch("/api/dashboard/computers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          computerForm.reset();
+          await loadDashboardConfig();
+          setDashboardMessage("Added computer.");
+        } catch (err) {
+          setDashboardMessage(`Add computer failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (printerForm && !printerForm.dataset.bound) {
+      printerForm.dataset.bound = "1";
+      printerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: printerForm.elements.name.value,
+          ip: printerForm.elements.ip.value,
+          model: printerForm.elements.model.value,
+          location: printerForm.elements.location.value,
+        };
+        try {
+          await jsonFetch("/api/dashboard/printers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          printerForm.reset();
+          await loadDashboardConfig();
+          setDashboardMessage("Added printer.");
+        } catch (err) {
+          setDashboardMessage(`Add printer failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (saveLinksBtn && !saveLinksBtn.dataset.bound) {
+      saveLinksBtn.dataset.bound = "1";
+      saveLinksBtn.addEventListener("click", async () => {
+        const payload = { links: collectLinkPayload() };
+        try {
+          const resp = await jsonFetch("/api/dashboard/links", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          setDashboardMessage(`Saved mapping: ${resp.total_links} links.`);
+        } catch (err) {
+          setDashboardMessage(`Save mapping failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (computersBody && !computersBody.dataset.bound) {
+      computersBody.dataset.bound = "1";
+      computersBody.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".js-delete-computer");
+        if (!btn) return;
+        try {
+          await jsonFetch(`/api/dashboard/computers/${btn.dataset.id}`, { method: "DELETE" });
+          await loadDashboardConfig();
+          setDashboardMessage("Deleted computer.");
+        } catch (err) {
+          setDashboardMessage(`Delete computer failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (printersBody && !printersBody.dataset.bound) {
+      printersBody.dataset.bound = "1";
+      printersBody.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".js-delete-printer");
+        if (!btn) return;
+        try {
+          await jsonFetch(`/api/dashboard/printers/${btn.dataset.id}`, { method: "DELETE" });
+          await loadDashboardConfig();
+          setDashboardMessage("Deleted printer.");
+        } catch (err) {
+          setDashboardMessage(`Delete printer failed: ${err.message}`);
+        }
+      });
+    }
+  }
+
+  async function loadDashboardConfig() {
+    try {
+      const data = await jsonFetch("/api/dashboard/config");
+      dashboardState.env = data.env || {};
+      dashboardState.env_overrides = data.env_overrides || {};
+      dashboardState.device_filters = data.device_filters || {};
+      dashboardState.network = data.network || {};
+      dashboardState.computers = data.computers || [];
+      dashboardState.printers = data.printers || [];
+      dashboardState.links = data.links || [];
+
+      renderEnvGrid(dashboardState.env);
+      renderEnvOverrideForm(dashboardState.env_overrides);
+      renderDeviceFilterForm(dashboardState.device_filters);
+      renderNetworkForm(dashboardState.network);
+      renderComputersTable(dashboardState.computers);
+      renderPrintersTable(dashboardState.printers);
+      renderLinkMatrix(dashboardState.computers, dashboardState.printers, dashboardState.links);
+    } catch (err) {
+      setDashboardMessage(`Load dashboard config failed: ${err.message}`);
+    }
+  }
+
+  function bindMobileMenu() {
+    const shell = document.getElementById("layout-shell");
+    const openBtn = document.getElementById("nav-toggle");
+    const closeBtn = document.getElementById("nav-close");
+    const overlay = document.getElementById("sidebar-overlay");
+    if (!shell || !openBtn || !closeBtn || !overlay) return;
+    if (openBtn.dataset.bound) return;
+    const closeMenu = () => shell.classList.remove("nav-open");
+    const openMenu = () => shell.classList.add("nav-open");
+    openBtn.dataset.bound = "1";
+    openBtn.addEventListener("click", openMenu);
+    closeBtn.addEventListener("click", closeMenu);
+    overlay.addEventListener("click", closeMenu);
+    shell.querySelectorAll(".side-link").forEach((link) => {
+      link.addEventListener("click", closeMenu);
     });
   }
 
-  if (envForm && !envForm.dataset.bound) {
-    envForm.dataset.bound = "1";
-    envForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const payload = {
-        API_URL: envForm.elements.API_URL.value,
-        USER_TOKEN: envForm.elements.USER_TOKEN.value,
-        DATABASE_URL: envForm.elements.DATABASE_URL.value,
-        WS_URL: envForm.elements.WS_URL.value,
-        WS_AUTO_CONNECT: envForm.elements.WS_AUTO_CONNECT.value,
-        WEBHOOK_MODE: envForm.elements.WEBHOOK_MODE.value,
-        WEBHOOK_LISTEN_PATH: envForm.elements.WEBHOOK_LISTEN_PATH.value,
-        TEST_IP: envForm.elements.TEST_IP.value,
-        TEST_USER: envForm.elements.TEST_USER.value,
-        TEST_PASSWORD: envForm.elements.TEST_PASSWORD.value,
-        POLLING_ENABLED: envForm.elements.POLLING_ENABLED.value,
-        POLLING_URL: envForm.elements.POLLING_URL.value,
-        POLLING_LEAD: envForm.elements.POLLING_LEAD.value,
-        POLLING_TOKEN: envForm.elements.POLLING_TOKEN.value,
-        POLLING_INTERVAL_SECONDS: envForm.elements.POLLING_INTERVAL_SECONDS.value,
-        POLLING_LAN_UID: envForm.elements.POLLING_LAN_UID.value,
-        POLLING_AGENT_UID: envForm.elements.POLLING_AGENT_UID.value,
-      };
-      try {
-        await jsonFetch("/api/dashboard/env", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        await loadDashboardConfig();
-        setDashboardMessage("Saved ENV overrides to DB.");
-      } catch (err) {
-        setDashboardMessage(`Save ENV overrides failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (deviceFilterForm && !deviceFilterForm.dataset.bound) {
-    deviceFilterForm.dataset.bound = "1";
-    deviceFilterForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const payload = {
-        ignore_printer_prefixes: deviceFilterForm.elements.ignore_printer_prefixes.value,
-        filter_mode: deviceFilterForm.elements.filter_mode?.value || "all",
-      };
-      try {
-        await jsonFetch("/api/dashboard/device-filters", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        await loadDashboardConfig();
-        setDashboardMessage("Saved device filters.");
-      } catch (err) {
-        setDashboardMessage(`Save device filters failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (computerForm && !computerForm.dataset.bound) {
-    computerForm.dataset.bound = "1";
-    computerForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const payload = {
-        name: computerForm.elements.name.value,
-        ip: computerForm.elements.ip.value,
-        department: computerForm.elements.department.value,
-      };
-      try {
-        await jsonFetch("/api/dashboard/computers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        computerForm.reset();
-        await loadDashboardConfig();
-        setDashboardMessage("Added computer.");
-      } catch (err) {
-        setDashboardMessage(`Add computer failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (printerForm && !printerForm.dataset.bound) {
-    printerForm.dataset.bound = "1";
-    printerForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const payload = {
-        name: printerForm.elements.name.value,
-        ip: printerForm.elements.ip.value,
-        model: printerForm.elements.model.value,
-        location: printerForm.elements.location.value,
-      };
-      try {
-        await jsonFetch("/api/dashboard/printers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        printerForm.reset();
-        await loadDashboardConfig();
-        setDashboardMessage("Added printer.");
-      } catch (err) {
-        setDashboardMessage(`Add printer failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (saveLinksBtn && !saveLinksBtn.dataset.bound) {
-    saveLinksBtn.dataset.bound = "1";
-    saveLinksBtn.addEventListener("click", async () => {
-      const payload = { links: collectLinkPayload() };
-      try {
-        const resp = await jsonFetch("/api/dashboard/links", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        setDashboardMessage(`Saved mapping: ${resp.total_links} links.`);
-      } catch (err) {
-        setDashboardMessage(`Save mapping failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (computersBody && !computersBody.dataset.bound) {
-    computersBody.dataset.bound = "1";
-    computersBody.addEventListener("click", async (event) => {
-      const btn = event.target.closest(".js-delete-computer");
-      if (!btn) return;
-      try {
-        await jsonFetch(`/api/dashboard/computers/${btn.dataset.id}`, { method: "DELETE" });
-        await loadDashboardConfig();
-        setDashboardMessage("Deleted computer.");
-      } catch (err) {
-        setDashboardMessage(`Delete computer failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (printersBody && !printersBody.dataset.bound) {
-    printersBody.dataset.bound = "1";
-    printersBody.addEventListener("click", async (event) => {
-      const btn = event.target.closest(".js-delete-printer");
-      if (!btn) return;
-      try {
-        await jsonFetch(`/api/dashboard/printers/${btn.dataset.id}`, { method: "DELETE" });
-        await loadDashboardConfig();
-        setDashboardMessage("Deleted printer.");
-      } catch (err) {
-        setDashboardMessage(`Delete printer failed: ${err.message}`);
-      }
-    });
-  }
-}
-
-async function loadDashboardConfig() {
-  try {
-    const data = await jsonFetch("/api/dashboard/config");
-    dashboardState.env = data.env || {};
-    dashboardState.env_overrides = data.env_overrides || {};
-    dashboardState.device_filters = data.device_filters || {};
-    dashboardState.network = data.network || {};
-    dashboardState.computers = data.computers || [];
-    dashboardState.printers = data.printers || [];
-    dashboardState.links = data.links || [];
-
-    renderEnvGrid(dashboardState.env);
-    renderEnvOverrideForm(dashboardState.env_overrides);
-    renderDeviceFilterForm(dashboardState.device_filters);
-    renderNetworkForm(dashboardState.network);
-    renderComputersTable(dashboardState.computers);
-    renderPrintersTable(dashboardState.printers);
-    renderLinkMatrix(dashboardState.computers, dashboardState.printers, dashboardState.links);
-  } catch (err) {
-    setDashboardMessage(`Load dashboard config failed: ${err.message}`);
-  }
-}
-
-function bindMobileMenu() {
-  const shell = document.getElementById("layout-shell");
-  const openBtn = document.getElementById("nav-toggle");
-  const closeBtn = document.getElementById("nav-close");
-  const overlay = document.getElementById("sidebar-overlay");
-  if (!shell || !openBtn || !closeBtn || !overlay) return;
-  if (openBtn.dataset.bound) return;
-  const closeMenu = () => shell.classList.remove("nav-open");
-  const openMenu = () => shell.classList.add("nav-open");
-  openBtn.dataset.bound = "1";
-  openBtn.addEventListener("click", openMenu);
-  closeBtn.addEventListener("click", closeMenu);
-  overlay.addEventListener("click", closeMenu);
-  shell.querySelectorAll(".side-link").forEach((link) => {
-    link.addEventListener("click", closeMenu);
+  document.addEventListener("DOMContentLoaded", () => {
+    bindMobileMenu();
+    const page = document.body.dataset.page;
+    if (page === "dashboard") {
+      bindDashboardActions();
+      loadDashboardConfig();
+    }
+    if (page === "analytics") loadOverview().catch(() => { });
+    if (page === "devices") {
+      loadOverview().catch(() => { });
+      initDevicesPage().catch(() => { });
+    }
+    if (page === "scan") {
+      initScanPage().catch(() => { });
+    }
+    const refresh = document.getElementById("refresh-btn");
+    if (refresh) {
+      refresh.addEventListener("click", async () => {
+        if (page === "dashboard") {
+          loadDashboardConfig();
+        } else if (page === "devices") {
+          loadOverview().catch(() => { });
+          loadDevices(true).catch(() => { });
+        } else if (page === "scan") {
+          loadScanAddressList().catch(() => { });
+        } else {
+          loadOverview().catch(() => { });
+        }
+      });
+    }
   });
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  bindMobileMenu();
-  const page = document.body.dataset.page;
-  if (page === "dashboard") {
-    bindDashboardActions();
-    loadDashboardConfig();
-  }
-  if (page === "analytics") loadOverview().catch(() => {});
-  if (page === "devices") {
-    loadOverview().catch(() => {});
-    initDevicesPage().catch(() => {});
-  }
-  if (page === "scan") {
-    initScanPage().catch(() => {});
-  }
-  const refresh = document.getElementById("refresh-btn");
-  if (refresh) {
-    refresh.addEventListener("click", async () => {
-      if (page === "dashboard") {
-        loadDashboardConfig();
-      } else if (page === "devices") {
-        loadOverview().catch(() => {});
-        loadDevices(true).catch(() => {});
-      } else if (page === "scan") {
-        loadScanAddressList().catch(() => {});
-      } else {
-        loadOverview().catch(() => {});
-      }
-    });
-  }
-});
 
 </script>
-

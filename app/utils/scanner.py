@@ -12,7 +12,7 @@ import requests
 LOGGER = logging.getLogger(__name__)
 
 class SubnetScanner:
-    PRINTER_PORTS = [80, 443, 9100, 515, 631]
+    PRINTER_PORTS = [80, 443, 9100, 515, 631, 162,161,10161,10162]
 
     def __init__(self, max_workers: int = 50) -> None:
         self.max_workers = max_workers

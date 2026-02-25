@@ -7,7 +7,7 @@
       <h3>Devices</h3>
       <label class="inline-check">
         <input id="valid-printer-only" type="checkbox" />
-        Valid printer only
+        Show All
       </label>
       <div class="inline-check">
         <span>Polling</span>
@@ -78,11 +78,14 @@
             </tr>
           </thead>
           <tbody id="result-modal-scan-body">
-            <tr><td colspan="6">No data</td></tr>
+            <tr>
+              <td colspan="6">No data</td>
+            </tr>
           </tbody>
         </table>
       </div>
-      <iframe id="result-modal-scan-html" class="modal-html-frame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups" hidden></iframe>
+      <iframe id="result-modal-scan-html" class="modal-html-frame"
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups" hidden></iframe>
       <div class="panel" style="margin-top:10px;">
         <div class="panel-head">
           <h3>Scan Protocol</h3>

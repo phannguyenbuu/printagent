@@ -105,13 +105,19 @@ class RicohService:
         return response.text
 
     def read_counter(self, printer: Printer) -> str:
-        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/status/getUnificationCounter.cgi")
+        session = self.create_http_client(printer)
+        target = "/web/guest/en/websys/status/getUnificationCounter.cgi"
+        return self.authenticate_and_get(session, printer, target)
 
     def read_device_info(self, printer: Printer) -> str:
-        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/status/configuration.cgi")
+        session = self.create_http_client(printer)
+        target = "/web/guest/en/websys/status/configuration.cgi"
+        return self.authenticate_and_get(session, printer, target)
 
     def read_status(self, printer: Printer) -> str:
-        return self._http_get(f"http://{printer.ip}/web/guest/en/websys/webArch/getStatus.cgi")
+        session = self.create_http_client(printer)
+        target = "/web/guest/en/websys/webArch/getStatus.cgi"
+        return self.authenticate_and_get(session, printer, target)
 
     def read_network_interface(self, printer: Printer) -> str:
         session = self.create_http_client_auth_form_only(printer)
