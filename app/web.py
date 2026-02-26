@@ -1639,6 +1639,9 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             unique_attempts.append((label, pair[0], pair[1]))
 
         last_error = ""
+        last_auth_user = ""
+        last_auth_password = ""
+        last_auth_attempt = ""
         for label, user_value, password_value in unique_attempts:
             target = _resolve_target_printer(ip=ip, user=user_value, password=password_value)
             target.user = user_value
@@ -1662,6 +1665,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     "source": "/web/entry/en/websys/config/getUserAuthenticationManager.cgi",
                     "status": "error",
                     "state": "error",
+                    "auth_ok": False,
                     "error": str(exc),
                 }
                 LOGGER.warning(
@@ -1690,6 +1694,10 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 error_text = str(state.get("error") or "Unable to read machine state").strip()
                 state["error"] = error_text
                 last_error = error_text
+                if bool(state.get("auth_ok", False)):
+                    last_auth_user = str(target.user or "").strip()
+                    last_auth_password = str(target.password or "").strip()
+                    last_auth_attempt = label
                 LOGGER.warning(
                     "Machine state attempt failed: trace_id=%s ip=%s attempt=%s error=%s",
                     trace_id,
@@ -1730,9 +1738,9 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 "error": error_text,
                 "ip": ip,
                 "trace_id": trace_id,
-                "auth_attempt": "",
-                "auth_user": "",
-                "auth_password": "",
+                "auth_attempt": last_auth_attempt,
+                "auth_user": last_auth_user,
+                "auth_password": last_auth_password,
                 "state": {
                     "enabled": False,
                     "method": "",
@@ -1740,6 +1748,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     "source": "/web/entry/en/websys/config/getUserAuthenticationManager.cgi",
                     "status": "error",
                     "state": "error",
+                    "auth_ok": bool(last_auth_user or last_auth_password),
                     "error": error_text,
                 },
             }

@@ -13,13 +13,73 @@ LOGGER = logging.getLogger(__name__)
 
 class RicohControlMixin(RicohServiceBase):
     def _extract_user_authentication_method(self, html: str) -> str:
-        """RADIO_OFF, UA_BASIC, UA_USER_CODE, etc."""
+        """
+        Extract current auth mode from different Ricoh page variants.
+        Expected values: RADIO_OFF, UA_USER_CODE, UA_BASIC, etc.
+        """
         import re
-        match = re.search(r'name="userAuthenticationMethod"[^>]*?checked[^>]*?value="([^"]+)"', html, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        match = re.search(r'value="([^"]+)"[^>]*?checked', html, re.IGNORECASE)
-        return match.group(1) if match else ""
+        text = str(html or "")
+        if not text:
+            return ""
+
+        input_tags = re.findall(
+            r'<input\b[^>]*\bname=["\']userAuthenticationMethod["\'][^>]*>',
+            text,
+            re.IGNORECASE,
+        )
+        fallback_values: list[str] = []
+        hidden_values: list[str] = []
+        for tag in input_tags:
+            value_match = re.search(r'\bvalue=["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            if not value_match:
+                continue
+            value = value_match.group(1).strip()
+            if not value:
+                continue
+            fallback_values.append(value)
+            if re.search(r'\btype=["\']hidden["\']', tag, re.IGNORECASE):
+                hidden_values.append(value)
+            if re.search(r'\bchecked(?:=["\']?checked["\']?)?\b', tag, re.IGNORECASE):
+                return value
+
+        select_match = re.search(
+            r'<select\b[^>]*\bname=["\']userAuthenticationMethod["\'][^>]*>(.*?)</select>',
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if select_match:
+            options_html = select_match.group(1)
+            selected_option = re.search(
+                r'<option\b[^>]*\bvalue=["\']([^"\']+)["\'][^>]*\bselected\b[^>]*>',
+                options_html,
+                re.IGNORECASE,
+            ) or re.search(
+                r'<option\b[^>]*\bselected\b[^>]*\bvalue=["\']([^"\']+)["\']',
+                options_html,
+                re.IGNORECASE,
+            )
+            if selected_option:
+                return selected_option.group(1).strip()
+
+        # Some firmwares expose current mode in a hidden input instead of checked radio.
+        if hidden_values:
+            return hidden_values[0]
+
+        if len(fallback_values) == 1:
+            return fallback_values[0]
+
+        # Script-level fallback: userAuthenticationMethod = "RADIO_OFF"
+        script_match = re.search(
+            r'userAuthenticationMethod[^;\n]{0,200}(?:=|:)\s*["\']([A-Z0-9_]+)["\']',
+            text,
+            re.IGNORECASE,
+        )
+        if script_match:
+            candidate = script_match.group(1).strip()
+            if candidate:
+                return candidate
+
+        return ""
 
     def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
         config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
@@ -37,11 +97,19 @@ class RicohControlMixin(RicohServiceBase):
                     "source": config_url,
                     "status": "error",
                     "state": "error",
+                    "auth_ok": False,
                     "error": error_text,
                 }
 
             method = self._extract_user_authentication_method(html)
             if not method:
+                lower_html = (html or "").lower()
+                if "login.cgi" in lower_html or "authform.cgi" in lower_html:
+                    parse_error = "Unable to access authenticated control page"
+                elif "privilege" in lower_html or "permission" in lower_html:
+                    parse_error = "Authenticated but no privilege to read authentication settings"
+                else:
+                    parse_error = "Unable to parse user authentication method"
                 return {
                     "enabled": False,
                     "method": "",
@@ -49,7 +117,8 @@ class RicohControlMixin(RicohServiceBase):
                     "source": config_url,
                     "status": "error",
                     "state": "error",
-                    "error": "Unable to parse user authentication method",
+                    "auth_ok": True,
+                    "error": parse_error,
                 }
             enabled = method in {"RADIO_OFF", "OFF", "0", "UA_NONE", "UA_OFF", "OFF_MODE"}
             machine_state = "enable" if enabled else "disable"
@@ -60,6 +129,7 @@ class RicohControlMixin(RicohServiceBase):
                 "source": config_url,
                 "status": machine_state,
                 "state": machine_state,
+                "auth_ok": True,
             }
         finally:
             self._logout_after_collect(printer, source="machine_state")
