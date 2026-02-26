@@ -111,22 +111,73 @@
   };
   let devicesPollingStatusTimer = null;
 
-  function setDeviceControlText(node, text, loading = false) {
+  function formatDeviceCredential(user, password) {
+    const userText = String(user || "").trim();
+    const passText = String(password || "").trim();
+    if (userText && passText) return `${userText} / ${passText}`;
+    if (userText) return userText;
+    if (passText) return `- / ${passText}`;
+    return "-";
+  }
+
+  function updateDeviceCredentialCell(node, user, password) {
+    if (!node) return;
+    const userText = String(user || "").trim();
+    const passText = String(password || "").trim();
+    if (!userText && !passText) return;
+    const cell = node.closest("tr")?.querySelector('td[data-device-user-cell="1"]');
+    if (!cell) return;
+    cell.textContent = formatDeviceCredential(userText, passText);
+  }
+
+  function compactMachineStateError(value) {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    if (normalized.length <= 64) return normalized;
+    return `${normalized.slice(0, 61)}...`;
+  }
+
+  function normalizeMachineStateStatus(state) {
+    const raw = String(state?.status || state?.state || "").trim().toLowerCase();
+    if (raw === "enable" || raw === "enabled") return "enable";
+    if (raw === "disable" || raw === "disabled") return "disable";
+    if (raw === "error") return "error";
+    if (typeof state?.enabled === "boolean") return state.enabled ? "enable" : "disable";
+    return "error";
+  }
+
+  function setDeviceControlText(node, text, loading = false, tone = "") {
     const textNode = node?.closest(".device-control-wrap")?.querySelector(".device-control-text");
     if (!textNode) return;
     textNode.textContent = String(text || "");
     textNode.classList.toggle("loading", Boolean(loading));
+    textNode.classList.toggle("error", tone === "error");
   }
 
-  function applyDeviceMachineState(node, state) {
+  function applyDeviceMachineState(node, state, payload = {}) {
     if (!node) return;
-    const enabled = Boolean(state?.enabled);
+    const machineStatus = normalizeMachineStateStatus(state);
     const method = String(state?.method || "").trim();
-    node.checked = enabled;
+    const errorText = compactMachineStateError(state?.error || payload?.error || "");
+    node.checked = machineStatus === "enable";
     node.disabled = false;
-    node.dataset.machineLoaded = "1";
-    node.title = method ? `method=${method}` : "";
-    setDeviceControlText(node, enabled ? "Enable" : "Disable", false);
+    node.dataset.machineLoaded = machineStatus === "error" ? "0" : "1";
+    node.dataset.machineStatus = machineStatus;
+    if (machineStatus === "enable") {
+      node.title = method ? `method=${method}` : "";
+      setDeviceControlText(node, "Enable", false);
+      return;
+    }
+    if (machineStatus === "disable") {
+      node.title = method ? `method=${method}` : "";
+      setDeviceControlText(node, "Disable", false);
+      return;
+    }
+    const details = [];
+    if (method) details.push(`method=${method}`);
+    if (errorText) details.push(`error=${errorText}`);
+    node.title = details.join(" | ");
+    setDeviceControlText(node, errorText ? `Error: ${errorText}` : "Error", false, "error");
   }
 
   async function refreshSingleDeviceMachineState(node) {
@@ -138,7 +189,11 @@
     if (!data?.ok) {
       throw new Error(String(data?.error || "Unable to read machine state"));
     }
-    applyDeviceMachineState(node, data?.state || {});
+    if (!data?.state || typeof data.state !== "object") {
+      throw new Error("Machine state payload is missing");
+    }
+    applyDeviceMachineState(node, data.state, data);
+    updateDeviceCredentialCell(node, data?.auth_user, data?.auth_password);
   }
 
   async function refreshDeviceMachineStates(body) {
@@ -166,10 +221,12 @@
         }
         try {
           await refreshSingleDeviceMachineState(node);
-        } catch (_err) {
-          node.disabled = false;
-          node.dataset.machineLoaded = "0";
-          setDeviceControlText(node, "Error", false);
+        } catch (err) {
+          applyDeviceMachineState(node, {
+            status: "error",
+            state: "error",
+            error: String(err?.message || err || "Unable to read machine state"),
+          });
         }
       })
     );
@@ -1204,7 +1261,7 @@
         const hasIp = Boolean(d.ip);
         const canQuery = hasIp;
         const mac = d.mac_id || "-";
-        const userDisplay = (d.user && d.password) ? `${d.user} / ${d.password}` : (d.user || "-");
+        const userDisplay = formatDeviceCredential(d.user, d.password);
         return `
       <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-printer-type="${d.type || "unknown"}">
         <td>
@@ -1216,7 +1273,7 @@
         <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
         <td>${d.source || "-"}</td>
-        <td>${userDisplay}</td>
+        <td data-device-user-cell="1">${userDisplay}</td>
         <td>
           <div class="device-control-wrap">
             <label class="mini-switch">

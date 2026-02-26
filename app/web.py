@@ -1654,31 +1654,94 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             )
             try:
                 state = ricoh_service.read_machine_control_state(target)
-                LOGGER.info(
-                    "Machine state success: trace_id=%s ip=%s attempt=%s enabled=%s method=%s",
-                    trace_id,
-                    ip,
-                    label,
-                    bool(state.get("enabled", False)),
-                    str(state.get("method", "")),
-                )
-                return jsonify({"ok": True, "ip": ip, "state": state, "trace_id": trace_id, "auth_attempt": label})
             except Exception as exc:  # noqa: BLE001
-                last_error = str(exc)
+                state = {
+                    "enabled": False,
+                    "method": "",
+                    "known": False,
+                    "source": "/web/entry/en/websys/config/getUserAuthenticationManager.cgi",
+                    "status": "error",
+                    "state": "error",
+                    "error": str(exc),
+                }
                 LOGGER.warning(
-                    "Machine state attempt failed: trace_id=%s ip=%s attempt=%s error=%s",
+                    "Machine state exception: trace_id=%s ip=%s attempt=%s error=%s",
                     trace_id,
                     ip,
                     label,
                     exc,
                 )
 
+            state_status_raw = str(state.get("status") or state.get("state") or "").strip().lower()
+            if state_status_raw in {"enabled"}:
+                state_status = "enable"
+            elif state_status_raw in {"disabled"}:
+                state_status = "disable"
+            elif state_status_raw in {"enable", "disable", "error"}:
+                state_status = state_status_raw
+            elif "error" in state:
+                state_status = "error"
+            else:
+                state_status = "enable" if bool(state.get("enabled", False)) else "disable"
+            state["status"] = state_status
+            state["state"] = state_status
+
+            if state_status == "error":
+                error_text = str(state.get("error") or "Unable to read machine state").strip()
+                state["error"] = error_text
+                last_error = error_text
+                LOGGER.warning(
+                    "Machine state attempt failed: trace_id=%s ip=%s attempt=%s error=%s",
+                    trace_id,
+                    ip,
+                    label,
+                    error_text,
+                )
+                continue
+
+            auth_user = str(target.user or "").strip()
+            auth_password = str(target.password or "").strip()
+            LOGGER.info(
+                "Machine state success: trace_id=%s ip=%s attempt=%s status=%s method=%s auth_user=%s has_password=%s",
+                trace_id,
+                ip,
+                label,
+                state_status,
+                str(state.get("method", "")),
+                auth_user,
+                bool(auth_password),
+            )
+            return jsonify(
+                {
+                    "ok": True,
+                    "ip": ip,
+                    "state": state,
+                    "trace_id": trace_id,
+                    "auth_attempt": label,
+                    "auth_user": auth_user,
+                    "auth_password": auth_password,
+                }
+            )
+
+        error_text = last_error or "Unable to read machine state"
         return jsonify(
             {
-                "ok": False,
-                "error": last_error or "Unable to read machine state",
+                "ok": True,
+                "error": error_text,
                 "ip": ip,
                 "trace_id": trace_id,
+                "auth_attempt": "",
+                "auth_user": "",
+                "auth_password": "",
+                "state": {
+                    "enabled": False,
+                    "method": "",
+                    "known": False,
+                    "source": "/web/entry/en/websys/config/getUserAuthenticationManager.cgi",
+                    "status": "error",
+                    "state": "error",
+                    "error": error_text,
+                },
             }
         )
 

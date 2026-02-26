@@ -22,28 +22,44 @@ class RicohControlMixin(RicohServiceBase):
         return match.group(1) if match else ""
 
     def read_machine_control_state(self, printer: Printer) -> dict[str, Any]:
+        config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
         try:
-            config_url = "/web/entry/en/websys/config/getUserAuthenticationManager.cgi"
             try:
                 session = self.create_http_client(printer)
                 html = self.authenticate_and_get(session, printer, config_url)
             except Exception as exc:
+                error_text = str(exc).strip() or "Unable to authenticate/read machine state"
                 LOGGER.warning("Machine control state fetch failed: ip=%s error=%s", printer.ip, exc)
                 return {
                     "enabled": False,
                     "method": "",
                     "known": False,
                     "source": config_url,
-                    "error": str(exc),
+                    "status": "error",
+                    "state": "error",
+                    "error": error_text,
                 }
 
             method = self._extract_user_authentication_method(html)
+            if not method:
+                return {
+                    "enabled": False,
+                    "method": "",
+                    "known": False,
+                    "source": config_url,
+                    "status": "error",
+                    "state": "error",
+                    "error": "Unable to parse user authentication method",
+                }
             enabled = method in {"RADIO_OFF", "OFF", "0", "UA_NONE", "UA_OFF", "OFF_MODE"}
+            machine_state = "enable" if enabled else "disable"
             return {
                 "enabled": enabled,
                 "method": method,
-                "known": bool(method),
+                "known": True,
                 "source": config_url,
+                "status": machine_state,
+                "state": machine_state,
             }
         finally:
             self._logout_after_collect(printer, source="machine_state")
