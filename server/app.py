@@ -161,6 +161,11 @@ def _resolve_lan_info_from_body(body: dict[str, Any]) -> tuple[str, str]:
         return datetime.now(timezone.utc)
 
 
+def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
+    uid, _ = _resolve_lan_info_from_body(body)
+    return uid
+
+
 def _to_page(value: Any, default: int) -> int:
     try:
         return max(1, int(str(value)))
@@ -2152,6 +2157,102 @@ def create_app() -> Flask:
                 })
 
         return jsonify({"ok": True, "printers": output})
+
+    @app.get("/api/public/device/latest")
+    def public_device_latest() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        mac = _to_text(request.args.get("mac")).replace("-", ":").upper()
+
+        if not lead or not lan_uid or not mac:
+            return jsonify({"ok": False, "error": "Missing parameters: lead, lan_uid, mac"}), 400
+
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        expected_token = lead_key_map.get(lead)
+        if not expected_token or sent_token != expected_token:
+            return jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401
+
+        with session_factory() as session:
+            # 1. Find the printer by mac and lan_uid
+            printer = session.execute(
+                select(Printer).where(
+                    Printer.lead == lead,
+                    Printer.lan_uid == lan_uid,
+                    func.upper(Printer.mac_address) == mac
+                )
+            ).scalar_one_or_none()
+
+            if not printer:
+                return jsonify({"ok": False, "error": "Printer not found with given mac and lan_uid"}), 404
+
+            # 2. Get latest counter
+            latest_counter = session.execute(
+                select(CounterInfor)
+                .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == printer.ip)
+                .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            # 3. Get latest status
+            latest_status = session.execute(
+                select(StatusInfor)
+                .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == printer.ip)
+                .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            # 4. Get baseline for counter calculation
+            baseline_row = session.execute(
+                select(CounterBaseline)
+                .where(CounterBaseline.lead == lead, CounterBaseline.lan_uid == lan_uid, CounterBaseline.ip == printer.ip)
+            ).scalar_one_or_none()
+            base = baseline_row.raw_payload if baseline_row and isinstance(baseline_row.raw_payload, dict) else {}
+
+            # Prepare combined result
+            result = {
+                "ok": True,
+                "printer_name": printer.printer_name,
+                "ip": printer.ip,
+                "mac": printer.mac_address,
+                "lan_uid": printer.lan_uid,
+                "last_seen_at": printer.updated_at.isoformat() if printer.updated_at else "",
+                "counter": None,
+                "status": None
+            }
+
+            if latest_counter:
+                counter_payload = latest_counter.raw_payload if isinstance(latest_counter.raw_payload, dict) else {}
+                combined_counter = {}
+                for key in COUNTER_KEYS:
+                    val = _apply_baseline(getattr(latest_counter, key, None), base, key)
+                    combined_counter[key] = val
+                
+                result["counter"] = {
+                    "timestamp": latest_counter.timestamp.isoformat(),
+                    "data": combined_counter,
+                    "raw_delta": counter_payload
+                }
+
+            if latest_status:
+                result["status"] = {
+                    "timestamp": latest_status.timestamp.isoformat(),
+                    "system_status": latest_status.system_status,
+                    "printer_status": latest_status.printer_status,
+                    "printer_alerts": latest_status.printer_alerts,
+                    "copier_status": latest_status.copier_status,
+                    "copier_alerts": latest_status.copier_alerts,
+                    "scanner_status": latest_status.scanner_status,
+                    "scanner_alerts": latest_status.scanner_alerts,
+                    "toner_black": latest_status.toner_black,
+                    "tray_1_status": latest_status.tray_1_status,
+                    "tray_2_status": latest_status.tray_2_status,
+                    "tray_3_status": latest_status.tray_3_status,
+                    "bypass_tray_status": latest_status.bypass_tray_status,
+                    "other_info": latest_status.other_info,
+                    "raw_payload": latest_status.raw_payload
+                }
+
+            return jsonify(result)
 
     return app
 
