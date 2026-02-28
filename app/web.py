@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+có nha
 import csv
 import json
 import logging
@@ -755,6 +755,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_dashboard_config() -> Any:
         store: ConfigStore = app.config["CONFIG_STORE"]
         app_cfg: AppConfig = app.config["APP_CONFIG"]
+        bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        
+        # Get LAN UID for display
+        hostname = socket.gethostname()
+        local_ip = bridge._resolve_local_ip()
+        lan_uid, fingerprint = bridge._resolve_lan_info(hostname, local_ip)
+        
         payload = store.get_dashboard_payload()
         env_payload = _merge_env_overrides(_env_snapshot(app_cfg, updater), payload.env_overrides)
         return jsonify(
@@ -766,6 +773,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 "links": payload.links,
                 "env_overrides": payload.env_overrides,
                 "device_filters": payload.device_filters,
+                "lan_uid": lan_uid,
+                "fingerprint": fingerprint,
             }
         )
 

@@ -2069,6 +2069,13 @@
       dashboardState.printers = data.printers || [];
       dashboardState.links = data.links || [];
 
+      // Update Sidebar LAN Info
+      const lanEl = document.getElementById("sidebar-lan-uid");
+      if (lanEl && data.lan_uid) {
+        lanEl.textContent = data.lan_uid;
+        lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
+      }
+
       renderEnvGrid(dashboardState.env);
       renderEnvOverrideForm(dashboardState.env_overrides);
       renderDeviceFilterForm(dashboardState.device_filters);
@@ -2078,6 +2085,20 @@
       renderLinkMatrix(dashboardState.computers, dashboardState.printers, dashboardState.links);
     } catch (err) {
       setDashboardMessage(`Load dashboard config failed: ${err.message}`);
+    }
+  }
+
+  async function initSidebarLanInfo() {
+    const lanEl = document.getElementById("sidebar-lan-uid");
+    if (!lanEl) return;
+    try {
+      const data = await jsonFetch("/api/dashboard/config");
+      if (data.lan_uid) {
+        lanEl.textContent = data.lan_uid;
+        lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
+      }
+    } catch (_e) {
+      lanEl.textContent = "UID: Unknown";
     }
   }
 
@@ -2101,6 +2122,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     bindMobileMenu();
+    initSidebarLanInfo();
     const page = document.body.dataset.page;
     if (page === "dashboard") {
       bindDashboardActions();
