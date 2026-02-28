@@ -471,10 +471,24 @@ def _scan_devices_payload(
             mac = ricoh_service.fetch_mac_address_direct(ip)
              
         is_ricoh = bool(is_ricoh_result or is_ricoh_mac or is_known_ricoh)
+        
+        display_name = f"Máy Photo {ip}"
+        if is_ricoh:
+            try:
+                # Create a temporary printer object for name discovery
+                temp_p = Printer(name="Discovery", ip=ip, user="", password="", printer_type="ricoh")
+                dev_info = ricoh_service.process_device_info(temp_p, should_post=False)
+                info_dict = dev_info.get("device_info", {})
+                # Try common Ricoh keys for model name
+                model_name = info_dict.get("Machine Name") or info_dict.get("Device Name") or info_dict.get("Product Name")
+                if model_name:
+                    display_name = f"{model_name} ({ip})"
+            except Exception as e:
+                LOGGER.debug("Failed to discover model name for %s: %s", ip, e)
              
         row = {
             "id": 0,
-            "name": f"Máy Photo {ip}",
+            "name": display_name,
             "ip": ip,
             "mac_id": mac,
             "type": "ricoh" if is_ricoh else "unknown",

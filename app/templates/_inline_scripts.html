@@ -1302,6 +1302,8 @@
     }
 
     body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
+      if (btn.dataset.boundTrigger) return;
+      btn.dataset.boundTrigger = "1";
       btn.addEventListener("click", async () => {
         const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
         const selectedIp = String(btn.dataset.ip || "").trim();
