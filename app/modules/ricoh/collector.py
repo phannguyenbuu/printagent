@@ -15,22 +15,34 @@ LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
     def read_counter(self, printer: Printer) -> str:
-        session = self.create_http_client(printer, authenticated=False)
-        return self.authenticate_and_get(session, printer, "/web/guest/en/manual/counter/readCounter.cgi")
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/counter/readCounter.cgi")
+        finally:
+            self._logout_after_collect(printer, source="read_counter")
 
     def read_device_info(self, printer: Printer) -> str:
-        session = self.create_http_client(printer, authenticated=False)
-        return self.authenticate_and_get(session, printer, "/web/guest/en/manual/configuration/readDeviceInfo.cgi")
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/configuration/readDeviceInfo.cgi")
+        finally:
+            self._logout_after_collect(printer, source="read_device_info")
 
     def read_status(self, printer: Printer) -> str:
-        session = self.create_http_client(printer, authenticated=False)
-        return self.authenticate_and_get(session, printer, "/web/guest/en/manual/status/readStatus.cgi")
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/status/readStatus.cgi")
+        finally:
+            self._logout_after_collect(printer, source="read_status")
 
     def read_network_interface(self, printer: Printer) -> str:
-        session = self.create_http_client(printer, authenticated=False)
-        return self.authenticate_and_get(
-            session, printer, "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi"
-        )
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            return self.authenticate_and_get(
+                session, printer, "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi"
+            )
+        finally:
+            self._logout_after_collect(printer, source="read_network_interface")
 
     def fetch_mac_address_direct(self, ip: str) -> str:
         printer = Printer(name="MAC Discovery", ip=ip, user="", password="", printer_type="ricoh")

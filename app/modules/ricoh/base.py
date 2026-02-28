@@ -74,6 +74,10 @@ class RicohServiceBase:
         base_url = f"http://{printer.ip}"
         
         # 1. First, always reset/logout to ensure we aren't in a broken state.
+        try:
+            session.cookies.clear()
+        except Exception:
+            pass
         self._reset_web_session(session, printer)
         
         # 2. Build candidate list.
@@ -119,7 +123,8 @@ class RicohServiceBase:
                             },
                             timeout=10
                         )
-                        if resp.status_code == 200 and ("login.cgi" not in resp.text and "authForm.cgi" not in resp.text):
+                        # Success if we get 200 and are NOT redirected back to a login page
+                        if resp.status_code == 200 and not any(m in resp.text for m in ["login.cgi", "authForm.cgi", "Login User Name"]):
                             success = True
                             break
                     except Exception:
@@ -190,8 +195,11 @@ class RicohServiceBase:
         html = response.text
 
         # If we hit a login page and we are NOT on a guest page, re-authenticate.
-        if "authForm.cgi" in html or "login.cgi" in html or "Login User Name" in html:
-            if "/web/guest/" not in url:
+        # Also check for "Unable to access authenticated control page" signals
+        is_login_page = any(m in html for m in ["authForm.cgi", "login.cgi", "Login User Name"])
+        if is_login_page:
+            if "/web/guest/" not in url or "Login User Name" in html:
+                LOGGER.info("Session expired or login required for %s, re-authenticating...", printer.ip)
                 self._login(session, printer)
                 response = session.get(url, timeout=10)
                 response.raise_for_status()
