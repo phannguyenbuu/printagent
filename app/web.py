@@ -871,7 +871,11 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.get("/devices")
     def devices() -> Any:
-        return render_template("devices.html", active_tab="devices", page_title="Device Manager")
+        bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        hostname = socket.gethostname()
+        local_ip = bridge._resolve_local_ip()
+        lan_uid, _ = bridge._resolve_lan_info(hostname, local_ip)
+        return render_template("devices.html", active_tab="devices", page_title=lan_uid or "Devices")
 
     @app.get("/scan")
     def scan() -> Any:
