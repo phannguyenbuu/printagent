@@ -2076,6 +2076,16 @@
         lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
       }
 
+      // Update Console LAN Fingerprint
+      const consoleLanEl = document.getElementById("console-lan-uid");
+      const consoleFingerEl = document.getElementById("console-fingerprint");
+      if (consoleLanEl && data.lan_uid) {
+        consoleLanEl.textContent = data.lan_uid;
+      }
+      if (consoleFingerEl && data.fingerprint) {
+        consoleFingerEl.textContent = data.fingerprint;
+      }
+
       renderEnvGrid(dashboardState.env);
       renderEnvOverrideForm(dashboardState.env_overrides);
       renderDeviceFilterForm(dashboardState.device_filters);

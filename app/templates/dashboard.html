@@ -196,4 +196,29 @@
   </div>
   <pre id="dashboard-config-output" class="json-output"></pre>
 </section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Console: LAN Fingerprint</h3>
+    <span>Technical breakdown of why this site is unique</span>
+  </div>
+  <div class="json-output console-output">
+    <div style="margin-bottom: 12px; border-bottom: 1px solid #d9e0ea; padding-bottom: 8px;">
+      <strong style="color: var(--accent-blue);">LAN UID:</strong> <span id="console-lan-uid" style="font-family: monospace; font-weight: 700;">-</span>
+    </div>
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; color: var(--muted); margin-bottom: 4px;">FINGERPRINT SIGNATURE (used to match with server)</div>
+      <div id="console-fingerprint" style="font-family: monospace; font-size: 12px; background: #fff; padding: 8px; border-radius: 6px; border: 1px solid #d9e0ea; word-break: break-all;">-</div>
+    </div>
+    <div style="font-size: 13px; line-height: 1.6; color: #3a4a5f;">
+      <p><strong>Tại sao lan_uid là duy nhất?</strong></p>
+      <ul style="padding-left: 20px; margin: 8px 0;">
+        <li><strong>Network Topology:</strong> UID được tạo từ sự kết hợp của <em>Subnet</em>, <em>Gateway IP</em>, và đặc biệt là <strong>Gateway MAC address</strong>.</li>
+        <li><strong>Lead Context:</strong> Nó gắn liền với mã khách hàng (Lead), đảm bảo cùng một mô hình mạng ở 2 công ty khác nhau vẫn ra 2 UID khác nhau.</li>
+        <li><strong>Stability:</strong> Một khi đã được Server xác nhận, UID này sẽ được lưu trữ cục bộ (fingerprint cache) để giữ tính nhất quán ngay cả khi thông số mạng thay đổi nhỏ.</li>
+        <li><strong>Server-side Mapping:</strong> Server sử dụng các chỉ số phần cứng và mạng để nhận diện và gán UID cố định cho mỗi chi nhánh, tránh trùng lặp dữ liệu khi cài lại Agent.</li>
+      </ul>
+    </div>
+  </div>
+</section>
 {% endblock %}
