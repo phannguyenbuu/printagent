@@ -83,7 +83,23 @@ def run_test_mode(config: AppConfig, service: RicohService) -> None:
             print(f"Loi: {exc}")
 
 
-def run_normal_mode(service: RicohService) -> None:
+def run_normal_mode(service: RicohService, config: AppConfig) -> None:
+    from app.services.polling_bridge import PollingBridge
+    import socket
+    
+    # Resolve LAN UID for display
+    hostname = socket.gethostname()
+    local_ip = PollingBridge._resolve_local_ip()
+    bridge = PollingBridge(config, service._api_client, service)
+    lan_uid, _ = bridge._resolve_lan_info(hostname, local_ip)
+    
+    print(f"\n{'='*60}")
+    print(f" PRINT AGENT STARTING...")
+    print(f" MODE: SERVICE")
+    print(f" LAN UID: {lan_uid}")
+    print(f" LEAD   : {config.get_string('polling.lead')}")
+    print(f"{'='*60}\n")
+    
     stop = False
 
     def handle_signal(_sig: int, _frame: object) -> None:
@@ -140,7 +156,7 @@ def main() -> int:
     if args.mode == "test":
         run_test_mode(config, service)
     else:
-        run_normal_mode(service)
+        run_normal_mode(service, config)
     return 0
 
 

@@ -103,6 +103,7 @@ class LanSite(Base):
     subnet_cidr: Mapped[str] = mapped_column(String(64), default="")
     gateway_ip: Mapped[str] = mapped_column(String(64), default="")
     gateway_mac: Mapped[str] = mapped_column(String(64), default="")
+    fingerprint_signature: Mapped[str | None] = mapped_column(Text, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 

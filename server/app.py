@@ -116,10 +116,12 @@ def _parse_query_datetime(value: Any, end_of_minute: bool = False) -> datetime |
     return dt.astimezone(timezone.utc)
 
 
-def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
-    raw = _to_text(body.get("lan_uid"))
-    if raw and raw.lower() not in {"lan-default", "legacy-lan", "default", "lan_default"}:
-        return raw
+def _resolve_lan_info_from_body(body: dict[str, Any]) -> tuple[str, str]:
+    """
+    Returns (lan_uid, fingerprint_signature)
+    """
+    raw_lan_uid = _to_text(body.get("lan_uid"))
+    fingerprint = _to_text(body.get("fingerprint_signature") or body.get("fingerprint"))
 
     lead = _to_text(body.get("lead"))
     local_ip = _normalize_ipv4(_to_text(body.get("local_ip")))
@@ -129,18 +131,26 @@ def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
     hostname = _to_text(body.get("hostname"))
     subnet = ".".join(local_ip.split(".")[:3]) + ".0/24" if local_ip else ""
 
+    # Signature is the physical identifier
     signature = "|".join(
         [
             f"lead={lead}",
             f"subnet={subnet}",
             f"gateway_ip={gateway_ip}",
             f"gateway_mac={gateway_mac}",
-            f"agent_uid={agent_uid}",
-            f"hostname={hostname}",
         ]
     )
+    
+    if not fingerprint:
+        fingerprint = signature
+
+    if raw_lan_uid and raw_lan_uid.lower() not in {"lan-default", "legacy-lan", "default", "lan_default"}:
+        return raw_lan_uid, fingerprint
+
+    # Default fallback lan_uid generation if not provided
     digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:16]
-    return f"lanf-{digest}"
+    generated_uid = f"lanf-{digest}"
+    return generated_uid, fingerprint
     normalized = text.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(normalized)
@@ -285,8 +295,20 @@ def _upsert_lan_and_agent(
     hostname: str,
     local_ip: str,
     local_mac: str,
-) -> None:
-    lan = session.execute(select(LanSite).where(LanSite.lead == lead, LanSite.lan_uid == lan_uid)).scalar_one_or_none()
+    fingerprint_signature: str = "",
+) -> str:
+    """
+    Returns the resolved lan_uid.
+    """
+    lan = None
+    if fingerprint_signature:
+        lan = session.execute(
+            select(LanSite).where(LanSite.lead == lead, LanSite.fingerprint_signature == fingerprint_signature)
+        ).scalar_one_or_none()
+
+    if lan is None:
+        lan = session.execute(select(LanSite).where(LanSite.lead == lead, LanSite.lan_uid == lan_uid)).scalar_one_or_none()
+
     if lan is None:
         lan = LanSite(
             lead=lead,
@@ -295,13 +317,18 @@ def _upsert_lan_and_agent(
             subnet_cidr=subnet_cidr,
             gateway_ip=gateway_ip,
             gateway_mac=gateway_mac,
+            fingerprint_signature=fingerprint_signature,
         )
         session.add(lan)
     else:
+        # If found by fingerprint but lan_uid differs, we tell the agent to use the existing one
+        lan_uid = lan.lan_uid
         lan.lan_name = lan_name or lan.lan_name
         lan.subnet_cidr = subnet_cidr or lan.subnet_cidr
         lan.gateway_ip = gateway_ip or lan.gateway_ip
         lan.gateway_mac = gateway_mac or lan.gateway_mac
+        if fingerprint_signature:
+            lan.fingerprint_signature = fingerprint_signature
 
     agent = session.execute(
         select(AgentNode).where(AgentNode.lead == lead, AgentNode.lan_uid == lan_uid, AgentNode.agent_uid == agent_uid)
@@ -322,6 +349,8 @@ def _upsert_lan_and_agent(
         agent.local_ip = local_ip or agent.local_ip
         agent.local_mac = local_mac or agent.local_mac
         agent.last_seen_at = datetime.now(timezone.utc)
+
+    return lan_uid
 
 
 def _upsert_printer_from_polling(
@@ -511,6 +540,9 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS mac_address VARCHAR(64) NOT NULL DEFAULT \'\';'))
+        
+        # Self-heal LanSite table
+        session.execute(text('ALTER TABLE "LanSite" ADD COLUMN IF NOT EXISTS fingerprint_signature TEXT;'))
         session.commit()
 
     lead_key_map = cfg.lead_keys()
@@ -530,6 +562,31 @@ def create_app() -> Flask:
     @app.get("/devices")
     def devices_page() -> Any:
         return render_template("devices.html", active_tab="devices", page_title="Devices")
+
+    @app.get("/lan-sites")
+    def lan_sites_page() -> Any:
+        return render_template("lan_sites.html", active_tab="lan_sites", page_title="Lan Network")
+
+    @app.get("/api/lan-sites")
+    def list_lan_sites() -> Any:
+        with session_factory() as session:
+            stmt = select(LanSite).order_by(LanSite.created_at.desc())
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({
+                "rows": [
+                    {
+                        "lead": r.lead,
+                        "lan_uid": r.lan_uid,
+                        "lan_name": r.lan_name,
+                        "subnet_cidr": r.subnet_cidr,
+                        "gateway_ip": r.gateway_ip,
+                        "gateway_mac": r.gateway_mac,
+                        "fingerprint_signature": r.fingerprint_signature,
+                        "created_at": r.created_at.isoformat() if r.created_at else "",
+                    }
+                    for r in rows
+                ]
+            })
 
     @app.get("/counter")
     def counter_page() -> Any:
@@ -577,7 +634,7 @@ def create_app() -> Flask:
             LOGGER.warning("register: unauthorized lead=%s ip=%s", lead, request.remote_addr)
             return jsonify({"ok": False, "error": "Unauthorized lead/token"}), 401
 
-        lan_uid = _resolve_lan_uid_from_body(body)
+        lan_uid, fingerprint = _resolve_lan_info_from_body(body)
         agent_uid = _to_text(body.get("agent_uid")) or "legacy-agent"
         lan_name = _to_text(body.get("lan_name"))
         subnet_cidr = _to_text(body.get("subnet_cidr"))
@@ -588,7 +645,7 @@ def create_app() -> Flask:
         local_mac = _to_text(body.get("local_mac"))
 
         with session_factory() as session:
-            _upsert_lan_and_agent(
+            lan_uid = _upsert_lan_and_agent(
                 session=session,
                 lead=lead,
                 lan_uid=lan_uid,
@@ -600,6 +657,7 @@ def create_app() -> Flask:
                 hostname=hostname,
                 local_ip=local_ip,
                 local_mac=local_mac,
+                fingerprint_signature=fingerprint,
             )
             session.commit()
         LOGGER.info("register: lead=%s lan_uid=%s agent_uid=%s hostname=%s", lead, lan_uid, agent_uid, hostname)

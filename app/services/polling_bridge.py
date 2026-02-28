@@ -286,12 +286,11 @@ if ($r) { $r }
         except Exception:  # noqa: BLE001
             return
 
-    def _resolve_lan_uid(self, hostname: str, local_ip: str) -> str:
+    def _resolve_lan_info(self, hostname: str, local_ip: str) -> tuple[str, str]:
+        """
+        Returns (lan_uid, fingerprint_signature)
+        """
         configured = self._config.get_string("polling.lan_uid", "").strip()
-        if configured and configured.lower() not in {"lan-default", "default", "lan_default"}:
-            self._resolved_lan_uid = configured
-            return configured
-
         gateway_ip = self._resolve_default_gateway()
         gateway_mac = self._resolve_gateway_mac(gateway_ip)
         subnet = self._subnet_hint(local_ip)
@@ -309,6 +308,13 @@ if ($r) { $r }
             lan_core_parts.append(f"fallback_hostname={hostname}")
         signature = "|".join(lan_core_parts)
 
+        if configured and configured.lower() not in {"lan-default", "default", "lan_default"}:
+            self._resolved_lan_uid = configured
+            return configured, signature
+
+        if self._resolved_lan_uid:
+            return self._resolved_lan_uid, signature
+
         if LAN_FINGER_FILE.exists():
             try:
                 payload = json.loads(LAN_FINGER_FILE.read_text(encoding="utf-8"))
@@ -317,25 +323,30 @@ if ($r) { $r }
                     saved_signature = str(payload.get("signature", "")).strip()
                     if saved_uid and saved_signature == signature:
                         self._resolved_lan_uid = saved_uid
-                        return saved_uid
+                        return saved_uid, signature
             except Exception:  # noqa: BLE001
                 pass
 
+        # If not resolved locally, we use a temporary generated one until server responds
         digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:16]
-        lan_uid = f"lanf-{digest}"
-        payload = {
-            "lan_uid": lan_uid,
-            "signature": signature,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+        temp_uid = f"lanf-{digest}"
+        return temp_uid, signature
+
+    def _save_lan_finger(self, lan_uid: str, signature: str) -> None:
+        if not lan_uid or not signature:
+            return
         try:
+            payload = {
+                "lan_uid": lan_uid,
+                "signature": signature,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
             LAN_FINGER_FILE.parent.mkdir(parents=True, exist_ok=True)
             LAN_FINGER_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
             self._best_effort_hide_file(LAN_FINGER_FILE)
+            self._resolved_lan_uid = lan_uid
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Cannot persist lan finger file (%s): %s", LAN_FINGER_FILE, exc)
-        self._resolved_lan_uid = lan_uid
-        return lan_uid
 
     def _polling_base_url(self) -> str:
         raw = self._config.get_string("polling.url").strip()
@@ -452,7 +463,7 @@ if ($r) { $r }
         lead = self._config.get_string("polling.lead").strip()
         hostname = socket.gethostname()
         local_ip = self._resolve_local_ip()
-        lan_uid = self._resolve_lan_uid(hostname=hostname, local_ip=local_ip) or "legacy-lan"
+        lan_uid, fingerprint = self._resolve_lan_info(hostname=hostname, local_ip=local_ip)
         agent_uid = self._config.get_string("polling.agent_uid", "").strip() or hostname
         LOGGER.info(
             "Scan watcher loop running: lead=%s lan_uid=%s agent_uid=%s interval=%ss dirs=%s",
@@ -463,7 +474,9 @@ if ($r) { $r }
             ",".join(self._scan_dirs()),
         )
         while not self._stop_event.is_set():
-            self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, reason="timer")
+            # Refresh lan_uid in case it was reassigned by server in _worker thread
+            current_lan_uid = self._resolved_lan_uid or lan_uid
+            self._run_scan_cycle(lead, current_lan_uid, agent_uid, hostname, local_ip, fingerprint, reason="timer")
             self._stop_event.wait(interval)
         self._save_scan_upload_state()
 
@@ -494,6 +507,7 @@ if ($r) { $r }
         agent_uid: str,
         hostname: str,
         local_ip: str,
+        fingerprint: str,
         reason: str = "timer",
     ) -> None:
         if not self._scan_lock.acquire(blocking=False):
@@ -520,11 +534,11 @@ if ($r) { $r }
                 self._scan_file_state[key] = state
                 if stable < 2:
                     continue
-                fingerprint = self._file_fingerprint(path=path, size=size, mtime_ns=mtime_ns)
-                if fingerprint in self._scan_uploaded_fingerprints:
+                file_finger = self._file_fingerprint(path=path, size=size, mtime_ns=mtime_ns)
+                if file_finger in self._scan_uploaded_fingerprints:
                     continue
                 try:
-                    self._upload_scan_file(path, fingerprint, lead, lan_uid, agent_uid, hostname, local_ip)
+                    self._upload_scan_file(path, file_finger, lead, lan_uid, agent_uid, hostname, local_ip)
                     LOGGER.info("Scan upload ok: file=%s size=%s reason=%s", path, size, reason)
                 except Exception as exc:  # noqa: BLE001
                     self._scan_failed_total += 1
@@ -572,7 +586,7 @@ if ($r) { $r }
         self._last_control_total = len(mapping)
         return mapping
 
-    def _push_inventory(self, printers: list[Printer], hostname: str, local_ip: str, lan_uid: str) -> None:
+    def _push_inventory(self, printers: list[Printer], hostname: str, local_ip: str, lan_uid: str, fingerprint: str = "") -> None:
         base_url = self._polling_base_url()
         if not base_url:
             return
@@ -599,6 +613,7 @@ if ($r) { $r }
             "local_ip": local_ip,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "devices": devices,
+            "fingerprint_signature": fingerprint,
         }
         headers = {"Content-Type": "application/json", "X-Lead-Token": token}
         url = f"{base_url}/api/polling/inventory"
@@ -702,15 +717,42 @@ if ($r) { $r }
         lead = self._config.get_string("polling.lead").strip()
         hostname = socket.gethostname()
         local_ip = self._resolve_local_ip()
-        lan_uid = self._resolve_lan_uid(hostname=hostname, local_ip=local_ip) or "legacy-lan"
+        lan_uid, fingerprint = self._resolve_lan_info(hostname=hostname, local_ip=local_ip)
         agent_uid = self._config.get_string("polling.agent_uid", "").strip() or hostname
-        LOGGER.info("Polling worker loop running: hostname=%s local_ip=%s", hostname, local_ip)
+        
+        # Initial registration to get/confirm lan_uid from server
+        try:
+            reg_url = f"{self._polling_base_url()}/api/agent/register"
+            reg_payload = {
+                "lead": lead,
+                "lan_uid": lan_uid,
+                "agent_uid": agent_uid,
+                "hostname": hostname,
+                "local_ip": local_ip,
+                "local_mac": self._mac_address(),
+                "gateway_ip": self._resolve_default_gateway(),
+                "gateway_mac": self._resolve_gateway_mac(self._resolve_default_gateway()),
+                "fingerprint_signature": fingerprint,
+            }
+            reg_headers = {"Content-Type": "application/json", "X-Lead-Token": self._config.get_string("polling.token").strip()}
+            reg_resp = requests.post(reg_url, json=reg_payload, headers=reg_headers, timeout=20)
+            if reg_resp.ok:
+                server_data = reg_resp.json()
+                server_lan_uid = server_data.get("lan_uid")
+                if server_lan_uid and server_lan_uid != lan_uid:
+                    LOGGER.info("Server reassigned lan_uid: %s -> %s", lan_uid, server_lan_uid)
+                    lan_uid = server_lan_uid
+                    self._save_lan_finger(lan_uid, fingerprint)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Initial agent registration failed: %s", exc)
+
+        LOGGER.info("Polling worker loop running: hostname=%s local_ip=%s lan_uid=%s", hostname, local_ip, lan_uid)
         while not self._stop_event.is_set():
             cycle_started_at = self._now_iso()
             self._last_cycle_at = self._now_iso()
             printers = self._load_printers()
             try:
-                self._push_inventory(printers, hostname=hostname, local_ip=local_ip, lan_uid=lan_uid)
+                self._push_inventory(printers, hostname=hostname, local_ip=local_ip, lan_uid=lan_uid, fingerprint=fingerprint)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("Polling inventory sync failed: %s", exc)
             controls: dict[str, dict[str, object]] = {}
@@ -786,6 +828,7 @@ if ($r) { $r }
                         "timestamp": counter_payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         "counter_data": counter_data,
                         "status_data": status_payload.get("status_data", {}),
+                        "fingerprint_signature": fingerprint,
                     }
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
                     ack = self._post_payload(payload)
@@ -818,5 +861,5 @@ if ($r) { $r }
             )
             if self.scan_enabled() and scan_counter_changed:
                 LOGGER.info("Counter detected new scan pages -> trigger immediate scan watcher cycle")
-                self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, reason="counter-delta")
+                self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, fingerprint, reason="counter-delta")
             self._stop_event.wait(interval)

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-section">
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Lead</th>
+          <th>LAN UID</th>
+          <th>LAN Name</th>
+          <th>Subnet</th>
+          <th>Gateway IP</th>
+          <th>Gateway MAC</th>
+          <th>Created At</th>
+          <th>Fingerprint Signature</th>
+        </tr>
+      </thead>
+      <tbody id="lan-sites-table-body">
+        <tr>
+          <td colspan="8" style="text-align: center;">Loading LAN sites...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const fetchLanSites = async () => {
+        try {
+            const resp = await fetch('/api/lan-sites');
+            const data = await resp.json();
+            const body = document.getElementById('lan-sites-table-body');
+            body.innerHTML = '';
+            
+            if (data.rows && data.rows.length > 0) {
+                data.rows.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${row.lead}</td>
+                        <td style="font-family: monospace; font-weight: bold;">${row.lan_uid}</td>
+                        <td>${row.lan_name || '-'}</td>
+                        <td>${row.subnet_cidr || '-'}</td>
+                        <td>${row.gateway_ip || '-'}</td>
+                        <td style="font-family: monospace;">${row.gateway_mac || '-'}</td>
+                        <td>${row.created_at}</td>
+                        <td style="font-size: 10px; color: #666; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.fingerprint_signature}">
+                            ${row.fingerprint_signature || '-'}
+                        </td>
+                    `;
+                    body.appendChild(tr);
+                });
+            } else {
+                body.innerHTML = '<tr><td colspan="8" style="text-align: center;">No LAN sites found</td></tr>';
+            }
+        } catch (err) {
+            console.error('Failed to fetch LAN sites:', err);
+        }
+    };
+
+    fetchLanSites();
+    
+    // Auto refresh if enabled
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', fetchLanSites);
+    }
+});
+</script>
+{% endblock %}
