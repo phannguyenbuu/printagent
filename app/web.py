@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import re
+import socket
 import subprocess
 import threading
 from datetime import datetime
