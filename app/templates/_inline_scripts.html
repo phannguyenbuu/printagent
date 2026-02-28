@@ -1269,18 +1269,18 @@
         </td>
         <td>${d.ip || "-"}</td>
         <td class="device-mac" data-ip="${d.ip || ""}">${mac}</td>
-        <td>${d.port_name || "-"}</td>
-        <td>${d.connection_type || "-"}</td>
         <td>${d.type}</td>
-        <td>${d.source || "-"}</td>
         <td data-device-user-cell="1">${userDisplay}</td>
         <td>
           <div class="device-control-wrap">
-            <label class="mini-switch">
-              <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" disabled />
-              <span class="mini-slider"></span>
-            </label>
-            <span class="device-control-text">${hasIp ? "Loading..." : "N/A"}</span>
+            <button class="btn ghost btn-check-status" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"}>Check Status</button>
+            <div class="device-control-state-display" style="display:none; align-items:center; gap:8px;">
+                <label class="mini-switch">
+                  <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" disabled />
+                  <span class="mini-slider"></span>
+                </label>
+                <span class="device-control-text"></span>
+            </div>
           </div>
         </td>
       </tr>`;
@@ -1326,6 +1326,27 @@
       });
     });
 
+    body.querySelectorAll(".btn-check-status").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const wrap = btn.closest(".device-control-wrap");
+        const display = wrap.querySelector(".device-control-state-display");
+        const node = wrap.querySelector('input[data-device-enable-toggle="1"]');
+        
+        btn.disabled = true;
+        btn.textContent = "Checking...";
+        
+        try {
+          await refreshSingleDeviceMachineState(node);
+          btn.style.display = "none";
+          display.style.display = "flex";
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = "Check Status";
+          alert(String(err?.message || err || "Check failed"));
+        }
+      });
+    });
+
     body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
       node.addEventListener("change", async () => {
         const ip = String(node.dataset.ip || "").trim();
@@ -1358,8 +1379,6 @@
         }
       });
     });
-
-    await refreshDeviceMachineStates(body);
 
     applyValidPrinterFilter();
   }
