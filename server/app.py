@@ -543,6 +543,10 @@ def create_app() -> Flask:
         
         # Self-heal LanSite table
         session.execute(text('ALTER TABLE "LanSite" ADD COLUMN IF NOT EXISTS fingerprint_signature TEXT;'))
+        session.execute(text('CREATE INDEX IF NOT EXISTS idx_lansite_fingerprint ON "LanSite" (lead, fingerprint_signature);'))
+        
+        # Self-heal AgentNode table
+        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.commit()
 
     lead_key_map = cfg.lead_keys()
