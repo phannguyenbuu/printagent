@@ -474,7 +474,7 @@ def _scan_devices_payload(
              
         row = {
             "id": 0,
-            "name": f"Discovered: {ip}",
+            "name": f"Máy Photo {ip}",
             "ip": ip,
             "mac_id": mac,
             "type": "ricoh" if is_ricoh else "unknown",

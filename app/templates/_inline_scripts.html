@@ -1187,7 +1187,7 @@
     if (t === "unknown") {
       const lowered = String(name || "").toLowerCase();
       // If it was discovered but not identified as Ricoh, it's NOT a valid printer for our purposes.
-      if (lowered.includes("discovered:")) return false;
+      if (lowered.includes("máy photo:")) return false;
     }
 
     const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
