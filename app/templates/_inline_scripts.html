@@ -2074,12 +2074,17 @@
       // Update Sidebar LAN Info
       const lanEl = document.getElementById("sidebar-lan-uid");
       const tabDevicesEl = document.getElementById("nav-tab-devices");
+      const pageTitleH1 = document.querySelector(".topbar h1");
+      
       if (lanEl && data.lan_uid) {
         lanEl.textContent = data.lan_uid;
         lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
       }
-      if (tabDevicesEl && data.lan_uid) {
-        tabDevicesEl.textContent = data.lan_uid;
+      if (tabDevicesEl) {
+        tabDevicesEl.textContent = "Devices";
+      }
+      if (pageTitleH1 && data.lan_uid && document.body.dataset.page === "devices") {
+        pageTitleH1.textContent = data.lan_uid;
       }
 
       // Update Console LAN Fingerprint
@@ -2114,7 +2119,7 @@
         lanEl.textContent = data.lan_uid;
         lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
         if (tabDevicesEl) {
-          tabDevicesEl.textContent = data.lan_uid;
+          tabDevicesEl.textContent = "Devices";
         }
       }
     } catch (_e) {
