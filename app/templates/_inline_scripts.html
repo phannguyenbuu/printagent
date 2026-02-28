@@ -2073,9 +2073,13 @@
 
       // Update Sidebar LAN Info
       const lanEl = document.getElementById("sidebar-lan-uid");
+      const tabDevicesEl = document.getElementById("nav-tab-devices");
       if (lanEl && data.lan_uid) {
         lanEl.textContent = data.lan_uid;
         lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
+      }
+      if (tabDevicesEl && data.lan_uid) {
+        tabDevicesEl.textContent = data.lan_uid;
       }
 
       // Update Console LAN Fingerprint
@@ -2102,12 +2106,16 @@
 
   async function initSidebarLanInfo() {
     const lanEl = document.getElementById("sidebar-lan-uid");
+    const tabDevicesEl = document.getElementById("nav-tab-devices");
     if (!lanEl) return;
     try {
       const data = await jsonFetch("/api/dashboard/config");
       if (data.lan_uid) {
         lanEl.textContent = data.lan_uid;
         lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
+        if (tabDevicesEl) {
+          tabDevicesEl.textContent = data.lan_uid;
+        }
       }
     } catch (_e) {
       lanEl.textContent = "UID: Unknown";

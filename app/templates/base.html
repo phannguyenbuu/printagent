@@ -40,7 +40,7 @@
 
         <div class="nav-tabs">
           <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
-          <a class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Device Manager</a>
+          <a id="nav-tab-devices" class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Device Manager</a>
         </div>
 
         {% block content %}{% endblock %}
