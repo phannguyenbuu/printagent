@@ -54,6 +54,24 @@ class RicohCollectorMixin(RicohServiceBase):
         html, _ = self._read_guest_mainframe_with_source(printer)
         return html
 
+    def _read_guest_counter_with_source(self, printer: Printer) -> tuple[str, str]:
+        path = "/web/guest/en/websys/status/getUnificationCounter.cgi"
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            html = self.authenticate_and_get(session, printer, path)
+            return html, f"http://{printer.ip}{path}"
+        finally:
+            self._logout_after_collect(printer, source="read_counter")
+
+    def _read_guest_status_with_source(self, printer: Printer) -> tuple[str, str]:
+        path = "/web/guest/en/websys/webArch/getStatus.cgi"
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            html = self.authenticate_and_get(session, printer, path)
+            return html, f"http://{printer.ip}{path}"
+        finally:
+            self._logout_after_collect(printer, source="read_status")
+
     @staticmethod
     def _extract_guest_cgi_candidates(text: str) -> list[str]:
         candidates: list[str] = []
@@ -306,7 +324,8 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source=f"read_{keyword}")
 
     def read_counter(self, printer: Printer) -> str:
-        return self._read_guest_mainframe(printer)
+        html, _ = self._read_guest_counter_with_source(printer)
+        return html
 
     def read_device_info(self, printer: Printer) -> str:
         try:
@@ -316,7 +335,8 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source="read_device_info")
 
     def read_status(self, printer: Printer) -> str:
-        return self._read_guest_mainframe(printer)
+        html, _ = self._read_guest_status_with_source(printer)
+        return html
 
     def read_network_interface(self, printer: Printer) -> str:
         try:
@@ -373,7 +393,7 @@ class RicohCollectorMixin(RicohServiceBase):
         return payload
 
     def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html, source_url = self._read_guest_mainframe_with_source(printer)
+        html, source_url = self._read_guest_status_with_source(printer)
         data = self.parse_status(html)
         plain = RicohServiceBase._strip_html(html or "")
         status_markers = self._marker_flags(plain, ["status", "system status", "toner", "tray", "paper"])
@@ -415,7 +435,7 @@ class RicohCollectorMixin(RicohServiceBase):
         return payload
 
     def process_counter(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html, source_url = self._read_guest_mainframe_with_source(printer)
+        html, source_url = self._read_guest_counter_with_source(printer)
         data = self.parse_counter(html)
         plain = RicohServiceBase._strip_html(html or "")
         counter_markers = self._marker_flags(
