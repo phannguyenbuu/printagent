@@ -487,12 +487,19 @@ function renderDevicesGrid() {
   grid.innerHTML = pageRows
     .map((r) => {
       const rowId = Number(r.id || 0);
-      const counter = r.counter && typeof r.counter === "object" ? r.counter : {};
-      const status = r.status && typeof r.status === "object" ? r.status : {};
+      const counter = r.counter_data && typeof r.counter_data === "object"
+        ? r.counter_data
+        : (r.counter && typeof r.counter === "object" ? r.counter : {});
+      const status = r.status_data && typeof r.status_data === "object"
+        ? r.status_data
+        : (r.status && typeof r.status === "object" ? r.status : {});
       const total = Number(r.counter_total || counter.total || 0);
       const systemStatus = String(r.status_system || status.system_status || status.printer_status || "-");
       const statusLine = systemStatus.length > 140 ? `${systemStatus.slice(0, 140)}...` : systemStatus;
-      return `<article class="counter-card latest">
+      const createAt = String(r.createAt || r.created_at || "");
+      const counterPreview = JSON.stringify(counter || {}, null, 2);
+      const statusPreview = JSON.stringify(status || {}, null, 2);
+      return `<article class="counter-card latest infor-card" data-kind="infor-card" data-id="${rowId}">
         <header class="counter-card-head">
           <div class="counter-card-index">#${rowId}</div>
           <div class="counter-card-time">${escapeHtml(r.printer_name || "unknown")} ${escapeHtml(r.ip ? `(${r.ip})` : "")}</div>
@@ -500,17 +507,87 @@ function renderDevicesGrid() {
         <div class="counter-card-body">
           <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v">${escapeHtml(r.lan_uid || "-")}</span></div>
           <div class="counter-kv"><span class="counter-k">MAC ID</span><span class="counter-v">${escapeHtml(r.mac_id || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">CreateAt</span><span class="counter-v">${escapeHtml(fmtTimestampGmt7(createAt))}</span></div>
           <div class="counter-kv"><span class="counter-k">Counter</span><span class="counter-v">${fmtNumber(total)}</span></div>
           <div class="counter-kv"><span class="counter-k">Status</span><span class="counter-v">${escapeHtml(statusLine || "-")}</span></div>
           <div class="counter-kv"><span class="counter-k">Updated</span><span class="counter-v">${escapeHtml(fmtTimestampGmt7(r.updated_at || r.last_counter_at || r.last_status_at))}</span></div>
+          <div class="counter-kv"><span class="counter-k">counter_data</span><span class="counter-v"></span></div>
+          <pre class="infor-json-preview">${escapeHtml(counterPreview)}</pre>
+          <div class="counter-kv"><span class="counter-k">status_data</span><span class="counter-v"></span></div>
+          <pre class="infor-json-preview">${escapeHtml(statusPreview)}</pre>
         </div>
       </article>`;
     })
     .join("");
 
+  grid.querySelectorAll('.infor-card').forEach((card) => {
+    card.addEventListener("click", () => {
+      const rowId = Number(card.getAttribute("data-id") || 0);
+      const row = rows.find((x) => Number(x.id || 0) === rowId);
+      if (!row) return;
+      openInforDetailModal(row);
+    });
+  });
+
   if (meta) {
     meta.textContent = `Devices: ${rows.length} | Page ${state.devices.page}/${state.devices.totalPages} | Per page ${perPage}`;
   }
+}
+
+function openInforDetailModal(row) {
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (!modal || !body || !row) return;
+
+  const counter = row.counter_data && typeof row.counter_data === "object"
+    ? row.counter_data
+    : (row.counter && typeof row.counter === "object" ? row.counter : {});
+  const status = row.status_data && typeof row.status_data === "object"
+    ? row.status_data
+    : (row.status && typeof row.status === "object" ? row.status : {});
+
+  const generalPairs = [
+    ["ID", row.id || "-"],
+    ["Lead", row.lead || "-"],
+    ["LAN UID", row.lan_uid || "-"],
+    ["Agent UID", row.agent_uid || "-"],
+    ["Printer", row.printer_name || "-"],
+    ["IP", row.ip || "-"],
+    ["MAC ID", row.mac_id || "-"],
+    ["CreateAt", fmtTimestampGmt7(row.createAt || row.created_at || "")],
+    ["Updated", fmtTimestampGmt7(row.updated_at || "")],
+    ["Counter Total", fmtNumber(row.counter_total || 0)],
+  ];
+  const renderPairs = (pairs) =>
+    pairs
+      .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(String(k))}</span><span class="counter-v">${escapeHtml(String(v ?? "-"))}</span></div>`)
+      .join("");
+
+  body.innerHTML = `
+    <article class="counter-card detail-card">
+      <header class="counter-card-head">
+        <button id="detail-close-btn" class="card-delete-btn" type="button" aria-label="Close">${iconCloseSvg()}</button>
+        <div class="counter-card-index">Infor Detail</div>
+        <div class="counter-card-time">${escapeHtml(row.printer_name || "-")} ${escapeHtml(row.ip ? `(${row.ip})` : "")}</div>
+      </header>
+      <div class="counter-card-body">
+        <section class="detail-section">
+          <h4 class="detail-section-title">General</h4>
+          ${renderPairs(generalPairs)}
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section-title">counter_data</h4>
+          <pre class="detail-json-block">${escapeHtml(JSON.stringify(counter || {}, null, 2))}</pre>
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section-title">status_data</h4>
+          <pre class="detail-json-block">${escapeHtml(JSON.stringify(status || {}, null, 2))}</pre>
+        </section>
+      </div>
+    </article>
+  `;
+  modal.hidden = false;
+  qs("detail-close-btn")?.addEventListener("click", closeDetailModal);
 }
 
 async function loadDevicesPage() {

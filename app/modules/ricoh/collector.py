@@ -563,12 +563,20 @@ class RicohCollectorMixin(RicohServiceBase):
             return alts
 
         def _first_status_token(text: str) -> str:
-            match = re.search(r"\b(Status OK|Alert|Warning|Error|Offline|Online)\b", text or "", re.IGNORECASE)
+            match = re.search(
+                r"\b(Status OK|Alert|Warning|Error|Offline|Online|Energy Saver Mode|No Paper)\b",
+                text or "",
+                re.IGNORECASE,
+            )
             return match.group(1) if match else ""
 
         # Parse all detail rows globally, then classify by dt label.
+        dtm_pattern = (
+            r'<dt[^>]*class=["\'][^"\']*listboxdtm[^"\']*["\'][^>]*>\s*(.*?)\s*</dt>\s*'
+            r'<dd[^>]*>(.*?)</dd>'
+        )
         status_rows = re.findall(
-            r'<dt[^>]*class="listboxdtm"[^>]*>\s*(.*?)\s*</dt>\s*<dd[^>]*>(.*?)</dd>',
+            dtm_pattern,
             html or "",
             re.IGNORECASE | re.DOTALL,
         )
@@ -631,8 +639,12 @@ class RicohCollectorMixin(RicohServiceBase):
             results["toner_black"] = toner_json["black"].get("state", "")
 
         # Parse alert/messages summary block
+        dtl_pattern = (
+            r'<dt[^>]*class=["\'][^"\']*listboxdtl[^"\']*["\'][^>]*>\s*(.*?)\s*</dt>\s*'
+            r'<dd[^>]*>(.*?)</dd>'
+        )
         alert_rows = re.findall(
-            r'<dt[^>]*class="listboxdtl"[^>]*>\s*(.*?)\s*</dt>\s*<dd[^>]*>(.*?)</dd>',
+            dtl_pattern,
             html or "",
             re.IGNORECASE | re.DOTALL,
         )
@@ -655,13 +667,17 @@ class RicohCollectorMixin(RicohServiceBase):
             plain = _clean(html)
             system_match = re.search(r"System\s+Status\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
             if system_match:
-                results["system_status"] = system_match.group(1).strip(" :-")
+                value = system_match.group(1).strip(" :-")
+                if value and len(value) <= 120:
+                    results["system_status"] = value
             toner_match = re.search(r"Toner(?:\s+Status)?\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
             if toner_match:
-                results["toner_black"] = toner_match.group(1).strip(" :-")
+                value = toner_match.group(1).strip(" :-")
+                if value and len(value) <= 120:
+                    results["toner_black"] = value
             for tray_no, tray_value in re.findall(r"Tray\s+(\d+)\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE):
                 normalized = str(tray_value).strip(" :-")
-                if normalized:
+                if normalized and len(normalized) <= 120:
                     results[f"tray_{tray_no}_status"] = normalized
         return results
 
