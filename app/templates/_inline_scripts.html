@@ -43,6 +43,7 @@
     const data = payload || {};
     const counter = data.counter_data || {};
     const status = data.status_data || {};
+    const rawHtml = String(data.html || "");
     const counterSource = String(data.counter_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
     const statusSource = String(data.status_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
     const lines = [];
@@ -58,7 +59,10 @@
     lines.push("counter_data:");
     const counterKeys = Object.keys(counter || {}).sort();
     if (!counterKeys.length) {
-      lines.push("  - (empty)");
+      lines.push("  - (empty -> raw html below)");
+      lines.push("");
+      lines.push("counter_raw_html:");
+      lines.push(rawHtml || "-");
     } else {
       counterKeys.forEach((key) => {
         lines.push(`  - ${key}: ${counter[key]}`);
@@ -68,7 +72,10 @@
     lines.push("status_data:");
     const statusKeys = Object.keys(status).sort();
     if (!statusKeys.length) {
-      lines.push("  - (empty)");
+      lines.push("  - (empty -> raw html below)");
+      lines.push("");
+      lines.push("status_raw_html:");
+      lines.push(rawHtml || "-");
     } else {
       statusKeys.forEach((key) => {
         lines.push(`  - ${key}: ${status[key]}`);
