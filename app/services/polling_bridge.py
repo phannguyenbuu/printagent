@@ -20,6 +20,7 @@ import requests
 from app.config import AppConfig
 from app.modules.ricoh.service import RicohService
 from app.services.api_client import APIClient, Printer
+from app.utils.scanner import SubnetScanner
 
 
 LOGGER = logging.getLogger(__name__)
@@ -207,9 +208,51 @@ class PollingBridge:
 
     def _load_printers(self) -> list[Printer]:
         try:
-            return self._api_client.get_printers()
+            scanner = SubnetScanner(max_workers=100)
+            scan_rows = scanner.scan_subnet()
+            printers: list[Printer] = []
+            seen: set[str] = set()
+            for row in scan_rows:
+                if not isinstance(row, dict):
+                    continue
+                ip = str(row.get("ip", "") or "").strip()
+                if not ip or ip in seen:
+                    continue
+                seen.add(ip)
+                is_ricoh = bool(row.get("is_ricoh"))
+                if not is_ricoh:
+                    continue
+                mac = str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip()
+                name = ip
+                try:
+                    temp = Printer(name="Discovery", ip=ip, user="", password="", printer_type="ricoh", mac_address=mac)
+                    info_payload = self._ricoh_service.process_device_info(temp, should_post=False)
+                    info = info_payload.get("device_info", {}) if isinstance(info_payload, dict) else {}
+                    model_name = (
+                        str(info.get("Model Name", "") or "").strip()
+                        or str(info.get("Machine Name", "") or "").strip()
+                        or str(info.get("model_name", "") or "").strip()
+                    )
+                    if model_name:
+                        name = model_name
+                except Exception:
+                    pass
+                printers.append(
+                    Printer(
+                        id=0,
+                        name=name,
+                        ip=ip,
+                        user="",
+                        password="",
+                        printer_type="ricoh",
+                        status="online",
+                        mac_address=mac,
+                    )
+                )
+            LOGGER.info("Polling bridge printers source=local_scan count=%s", len(printers))
+            return printers
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Polling bridge cannot load printers: %s", exc)
+            LOGGER.warning("Polling bridge local scan failed: %s", exc)
             return []
 
     def _post_payload(self, payload: dict) -> dict:
