@@ -16,6 +16,45 @@ from app.services.api_client import Printer
 LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
+    def _read_guest_mainframe(self, printer: Printer) -> str:
+        paths = [
+            "/web/guest/en/websys/webArch/mainFrame.cgi",
+            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
+        ]
+        last_exc: Exception | None = None
+        try:
+            session = self.create_http_client(printer, authenticated=False)
+            for path in paths:
+                try:
+                    return self.authenticate_and_get(session, printer, path)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError("Unable to load guest mainFrame.cgi")
+        finally:
+            self._logout_after_collect(printer, source="read_mainframe")
+
+    @staticmethod
+    def _extract_guest_cgi_candidates(text: str) -> list[str]:
+        candidates: list[str] = []
+        if not text:
+            return candidates
+        for match in re.finditer(
+            r"""['"]([^'"]*?\.cgi(?:\?[^'"]*)?)['"]""",
+            text,
+            re.IGNORECASE,
+        ):
+            candidates.append(match.group(1))
+        for match in re.finditer(
+            r"""(?:href|src)\s*=\s*['"]([^'"]+)['"]""",
+            text,
+            re.IGNORECASE,
+        ):
+            candidates.append(match.group(1))
+        return candidates
+
     @staticmethod
     def _looks_like_counter_content(html: str) -> bool:
         text = RicohServiceBase._strip_html(html or "")
@@ -59,8 +98,11 @@ class RicohCollectorMixin(RicohServiceBase):
             value = f"/{value}"
         return value
 
-    def _discover_guest_paths(self, session: requests.Session, printer: Printer, keyword: str) -> list[str]:
-        found: list[str] = []
+    def _discover_guest_paths(self, session: requests.Session, printer: Printer, keyword: str = "") -> list[str]:
+        keyword_lower = str(keyword or "").strip().lower()
+        prioritized: list[str] = []
+        fallback: list[str] = []
+        js_sources: list[str] = []
         main_frame_candidates = [
             "/web/guest/en/websys/webArch/mainFrame.cgi",
             "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
@@ -73,24 +115,56 @@ class RicohCollectorMixin(RicohServiceBase):
                 continue
             if not html:
                 continue
-            for match in re.finditer(
-                r"""['"]([^'"]*(?:counter|status)[^'"]*?\.cgi(?:\?[^'"]*)?)['"]""",
+            candidates: list[str] = self._extract_guest_cgi_candidates(html)
+            for src_match in re.finditer(
+                r"""<script[^>]+src=['"]([^'"]+)['"]""",
                 html,
                 re.IGNORECASE,
             ):
-                raw = match.group(1)
-                if keyword.lower() not in raw.lower():
-                    continue
-                normalized = self._normalize_guest_path(raw)
+                js_src = self._normalize_guest_path(src_match.group(1))
+                if js_src and js_src.lower().endswith(".js") and "/web/guest/" in js_src.lower():
+                    js_sources.append(js_src)
+
+            for raw in candidates:
+                normalized = self._normalize_guest_path(str(raw or ""))
                 if not normalized:
                     continue
                 if "/web/guest/" not in normalized.lower():
                     continue
-                found.append(normalized)
+                if ".cgi" not in normalized.lower():
+                    continue
+                if keyword_lower and keyword_lower in normalized.lower():
+                    prioritized.append(normalized)
+                else:
+                    fallback.append(normalized)
+
+        # Parse referenced JS files for hidden/indirect .cgi endpoints.
+        js_seen: set[str] = set()
+        for js_src in js_sources:
+            key = js_src.lower()
+            if key in js_seen:
+                continue
+            js_seen.add(key)
+            try:
+                js_text = self.authenticate_and_get(session, printer, js_src)
+            except Exception:  # noqa: BLE001
+                continue
+            for raw in self._extract_guest_cgi_candidates(js_text):
+                normalized = self._normalize_guest_path(str(raw or ""))
+                if not normalized:
+                    continue
+                if "/web/guest/" not in normalized.lower():
+                    continue
+                if ".cgi" not in normalized.lower():
+                    continue
+                if keyword_lower and keyword_lower in normalized.lower():
+                    prioritized.append(normalized)
+                else:
+                    fallback.append(normalized)
         # Keep order, remove duplicates.
         unique: list[str] = []
         seen: set[str] = set()
-        for path in found:
+        for path in [*prioritized, *fallback]:
             key = path.lower()
             if key in seen:
                 continue
@@ -102,6 +176,7 @@ class RicohCollectorMixin(RicohServiceBase):
         last_exc: Exception | None = None
         tried: list[str] = []
         keyword_lower = str(keyword or "").strip().lower()
+        last_html = ""
         try:
             session = self.create_http_client(printer, authenticated=False)
             dynamic_paths = self._discover_guest_paths(session, printer, keyword)
@@ -122,7 +197,16 @@ class RicohCollectorMixin(RicohServiceBase):
             for path in unique_paths:
                 tried.append(path)
                 try:
-                    return self.authenticate_and_get(session, printer, path)
+                    html = self.authenticate_and_get(session, printer, path)
+                    last_html = html or last_html
+                    if keyword_lower == "counter":
+                        if self._looks_like_counter_content(html):
+                            return html
+                    elif keyword_lower == "status":
+                        if self._looks_like_status_content(html):
+                            return html
+                    else:
+                        return html
                 except requests.exceptions.HTTPError as exc:
                     last_exc = exc
                     code = getattr(exc.response, "status_code", None)
@@ -155,6 +239,40 @@ class RicohCollectorMixin(RicohServiceBase):
                     LOGGER.info("Status fallback used main frame: ip=%s path=%s", printer.ip, path)
                     return html
 
+            # Final fallback: brute-force all discovered guest cgi links from frames.
+            for path in self._discover_guest_paths(session, printer, keyword=""):
+                if path in tried:
+                    continue
+                if len(tried) > 60:
+                    break
+                tried.append(path)
+                try:
+                    html = self.authenticate_and_get(session, printer, path)
+                    last_html = html or last_html
+                except requests.exceptions.HTTPError as exc:
+                    last_exc = exc
+                    if getattr(exc.response, "status_code", None) == 404:
+                        continue
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+                if keyword_lower == "counter" and self._looks_like_counter_content(html):
+                    LOGGER.info("Counter brute-force endpoint matched: ip=%s path=%s", printer.ip, path)
+                    return html
+                if keyword_lower == "status" and self._looks_like_status_content(html):
+                    LOGGER.info("Status brute-force endpoint matched: ip=%s path=%s", printer.ip, path)
+                    return html
+
+            if last_html:
+                LOGGER.warning(
+                    "Using last HTML fallback for %s: ip=%s tried=%s",
+                    keyword,
+                    printer.ip,
+                    tried,
+                )
+                return last_html
+
             if last_exc is not None:
                 LOGGER.warning(
                     "No guest endpoint matched for %s: ip=%s tried=%s last_error=%s",
@@ -170,7 +288,14 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source=f"read_{keyword}")
 
     def read_counter(self, printer: Printer) -> str:
+        # User-requested primary source: Web Image Monitor guest mainFrame.cgi
+        try:
+            return self._read_guest_mainframe(printer)
+        except Exception:  # noqa: BLE001
+            pass
         candidates = [
+            "/web/guest/en/websys/webArch/mainFrame.cgi",
+            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
             "/web/guest/en/manual/counter/readCounter.cgi",
             "/web/guest/en/manual/counter/counter.cgi",
             "/web/guest/en/websys/status/getCounterData.cgi",
@@ -188,7 +313,14 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source="read_device_info")
 
     def read_status(self, printer: Printer) -> str:
+        # User-requested primary source: Web Image Monitor guest mainFrame.cgi
+        try:
+            return self._read_guest_mainframe(printer)
+        except Exception:  # noqa: BLE001
+            pass
         candidates = [
+            "/web/guest/en/websys/webArch/mainFrame.cgi",
+            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
             "/web/guest/en/manual/status/readStatus.cgi",
             "/web/guest/en/manual/status/status.cgi",
             "/web/guest/en/websys/status/getStatusData.cgi",
