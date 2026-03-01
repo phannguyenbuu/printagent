@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import hashlib
 import logging
 from bisect import bisect_right
@@ -31,6 +32,7 @@ LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
 ONLINE_STALE_SECONDS = 300
 SCAN_UPLOAD_ROOT = Path("storage/uploads/scans")
+LAST_DATA_FILE = Path("storage/data/last_data.json")
 COUNTER_KEYS = [
     "total",
     "copier_bw",
@@ -109,6 +111,14 @@ def _parse_timestamp(value: Any) -> datetime:
         return dt.astimezone(timezone.utc)
     except Exception:  # noqa: BLE001
         return datetime.now(timezone.utc)
+
+
+def _write_last_data(payload: dict[str, Any]) -> None:
+    try:
+        LAST_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_DATA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("last_data write failed: %s", exc)
 
 
 def _parse_query_datetime(value: Any, end_of_minute: bool = False) -> datetime | None:
@@ -1892,6 +1902,8 @@ def create_app() -> Flask:
         timestamp = _parse_timestamp(body.get("timestamp"))
         counter_data = body.get("counter_data") if isinstance(body.get("counter_data"), dict) else {}
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
+        collector_ok = bool(body.get("collector_ok", True))
+        skip_data_update = bool(body.get("skip_data_update", False))
         mac_id = _to_text(body.get("mac_id")) or _to_text(body.get("mac_address"))
         device_mac_address = mac_id or _to_text((status_data.get("other_info") or "")[:64])
         LOGGER.info(
@@ -1905,6 +1917,14 @@ def create_app() -> Flask:
             len(counter_data.keys()) if isinstance(counter_data, dict) else 0,
             len(status_data.keys()) if isinstance(status_data, dict) else 0,
         )
+        logging_payload = {
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "remote_addr": _to_text(request.remote_addr),
+            "path": "/api/polling",
+            "payload": body,
+        }
+        LOGGER.info("polling payload json: %s", json.dumps(logging_payload, ensure_ascii=False))
+        _write_last_data(logging_payload)
 
         inserted_counter = 0
         inserted_status = 0
@@ -1939,7 +1959,7 @@ def create_app() -> Flask:
                     auth_user=_to_text(body.get("auth_user")),
                     auth_password=_to_text(body.get("auth_password")),
                 )
-            if printer_row is not None:
+            if printer_row is not None and collector_ok:
                 _set_printer_online_state(session=session, printer=printer_row, is_online=True, changed_at=timestamp)
             device_enabled = True if printer_row is None else bool(printer_row.enabled)
             if not device_enabled:
@@ -2118,7 +2138,8 @@ def create_app() -> Flask:
                         inserted_status = 1
 
             # Unified root record for downstream filtering/reporting.
-            if infor is None:
+            can_update_infor_data = (not skip_data_update) and bool(counter_data or status_data)
+            if infor is None and can_update_infor_data:
                 infor = DeviceInfor(
                     lead=lead,
                     lan_uid=lan_uid,
@@ -2134,14 +2155,24 @@ def create_app() -> Flask:
                     updated_at=datetime.now(timezone.utc),
                 )
                 session.add(infor)
-            else:
+            elif infor is not None:
                 infor.agent_uid = agent_uid or infor.agent_uid
                 infor.printer_name = printer_name or infor.printer_name
                 infor.ip = ip or infor.ip
-                if counter_data and isinstance(counter_data, dict) and not duplicate_counter_by_infor:
+                if (
+                    not skip_data_update
+                    and counter_data
+                    and isinstance(counter_data, dict)
+                    and not duplicate_counter_by_infor
+                ):
                     infor.counter_data = counter_data
                     infor.last_counter_at = timestamp
-                if status_data and isinstance(status_data, dict) and not duplicate_status_by_infor:
+                if (
+                    not skip_data_update
+                    and status_data
+                    and isinstance(status_data, dict)
+                    and not duplicate_status_by_infor
+                ):
                     infor.status_data = status_data
                     infor.last_status_at = timestamp
                 infor.updated_at = datetime.now(timezone.utc)
@@ -2174,6 +2205,8 @@ def create_app() -> Flask:
                 "skipped_counter": skipped_counter,
                 "skipped_status": skipped_status,
                 "skipped_disabled": skipped_disabled,
+                "collector_ok": collector_ok,
+                "skip_data_update": skip_data_update,
             }
         )
 

@@ -838,6 +838,7 @@ if ($r) { $r }
                         "timestamp": counter_payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         "counter_data": counter_data,
                         "status_data": status_payload.get("status_data", {}),
+                        "collector_ok": True,
                         "fingerprint_signature": fingerprint,
                     }
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
@@ -877,6 +878,9 @@ if ($r) { $r }
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "counter_data": {},
                             "status_data": {},
+                            "collector_ok": False,
+                            "skip_data_update": True,
+                            "collector_error": str(exc),
                             "fingerprint_signature": fingerprint,
                         }
                         ack = self._post_payload(fallback_payload)

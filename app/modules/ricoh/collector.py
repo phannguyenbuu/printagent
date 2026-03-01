@@ -18,6 +18,19 @@ LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
     @staticmethod
+    def _guest_get(session: requests.Session, printer: Printer, target_url: str, timeout: int = 10) -> str:
+        """
+        Direct guest/public fetch. No re-auth/login fallback.
+        Use this for counter/status polling to avoid triggering login flow.
+        """
+        url = target_url
+        if not (str(target_url).startswith("http://") or str(target_url).startswith("https://")):
+            url = f"http://{printer.ip}{target_url if str(target_url).startswith('/') else '/' + str(target_url)}"
+        response = session.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.text
+
+    @staticmethod
     def _resolve_webarch_relative_path(path: str) -> str:
         raw = str(path or "").strip()
         if not raw:
@@ -53,7 +66,7 @@ class RicohCollectorMixin(RicohServiceBase):
             session = self.create_http_client(printer, authenticated=False)
             for path in paths:
                 try:
-                    html = self.authenticate_and_get(session, printer, path)
+                    html = self._guest_get(session, printer, path)
                     return html, f"http://{printer.ip}{path}"
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
@@ -72,7 +85,7 @@ class RicohCollectorMixin(RicohServiceBase):
         path = "/web/guest/en/websys/status/getUnificationCounter.cgi"
         try:
             session = self.create_http_client(printer, authenticated=False)
-            html = self.authenticate_and_get(session, printer, path)
+            html = self._guest_get(session, printer, path)
             return html, f"http://{printer.ip}{path}"
         finally:
             self._logout_after_collect(printer, source="read_counter")
@@ -81,7 +94,7 @@ class RicohCollectorMixin(RicohServiceBase):
         path = "/web/guest/en/websys/webArch/getStatus.cgi"
         try:
             session = self.create_http_client(printer, authenticated=False)
-            html = self.authenticate_and_get(session, printer, path)
+            html = self._guest_get(session, printer, path)
             return html, f"http://{printer.ip}{path}"
         finally:
             self._logout_after_collect(printer, source="read_status")
