@@ -8,18 +8,116 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from app.modules.ricoh.base import RicohServiceBase
 from app.services.api_client import Printer
 
 LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
-    def read_counter(self, printer: Printer) -> str:
+    @staticmethod
+    def _normalize_guest_path(path: str) -> str:
+        value = str(path or "").strip()
+        if not value:
+            return ""
+        if value.startswith("http://") or value.startswith("https://"):
+            match = re.search(r"https?://[^/]+(/.*)$", value, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+        if not value.startswith("/"):
+            value = f"/{value}"
+        return value
+
+    def _discover_guest_paths(self, session: requests.Session, printer: Printer, keyword: str) -> list[str]:
+        found: list[str] = []
+        main_frame_candidates = [
+            "/web/guest/en/websys/webArch/mainFrame.cgi",
+            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
+            "/web/guest/en/manual/mainFrame.cgi",
+        ]
+        for path in main_frame_candidates:
+            try:
+                html = self.authenticate_and_get(session, printer, path)
+            except Exception:  # noqa: BLE001
+                continue
+            if not html:
+                continue
+            for match in re.finditer(
+                r"""['"]([^'"]*(?:counter|status)[^'"]*?\.cgi(?:\?[^'"]*)?)['"]""",
+                html,
+                re.IGNORECASE,
+            ):
+                raw = match.group(1)
+                if keyword.lower() not in raw.lower():
+                    continue
+                normalized = self._normalize_guest_path(raw)
+                if not normalized:
+                    continue
+                if "/web/guest/" not in normalized.lower():
+                    continue
+                found.append(normalized)
+        # Keep order, remove duplicates.
+        unique: list[str] = []
+        seen: set[str] = set()
+        for path in found:
+            key = path.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(path)
+        return unique
+
+    def _read_guest_with_fallback(self, printer: Printer, candidate_paths: list[str], keyword: str) -> str:
+        last_exc: Exception | None = None
+        tried: list[str] = []
         try:
             session = self.create_http_client(printer, authenticated=False)
-            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/counter/readCounter.cgi")
+            dynamic_paths = self._discover_guest_paths(session, printer, keyword)
+            paths = [*candidate_paths, *dynamic_paths]
+
+            unique_paths: list[str] = []
+            seen: set[str] = set()
+            for path in paths:
+                normalized = self._normalize_guest_path(path)
+                if not normalized:
+                    continue
+                key = normalized.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_paths.append(normalized)
+
+            for path in unique_paths:
+                tried.append(path)
+                try:
+                    return self.authenticate_and_get(session, printer, path)
+                except requests.exceptions.HTTPError as exc:
+                    last_exc = exc
+                    code = getattr(exc.response, "status_code", None)
+                    if code == 404:
+                        continue
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError(f"No valid guest endpoint for {keyword}: tried={tried}")
         finally:
-            self._logout_after_collect(printer, source="read_counter")
+            self._logout_after_collect(printer, source=f"read_{keyword}")
+
+    def read_counter(self, printer: Printer) -> str:
+        candidates = [
+            "/web/guest/en/manual/counter/readCounter.cgi",
+            "/web/guest/en/manual/counter/counter.cgi",
+            "/web/guest/en/websys/status/getCounterData.cgi",
+            "/web/guest/en/websys/status/counter.cgi",
+            "/web/guest/en/websys/webArch/counter.cgi",
+            "/web/guest/en/websys/webArch/getCounter.cgi",
+        ]
+        return self._read_guest_with_fallback(printer, candidates, keyword="counter")
 
     def read_device_info(self, printer: Printer) -> str:
         try:
@@ -29,11 +127,15 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source="read_device_info")
 
     def read_status(self, printer: Printer) -> str:
-        try:
-            session = self.create_http_client(printer, authenticated=False)
-            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/status/readStatus.cgi")
-        finally:
-            self._logout_after_collect(printer, source="read_status")
+        candidates = [
+            "/web/guest/en/manual/status/readStatus.cgi",
+            "/web/guest/en/manual/status/status.cgi",
+            "/web/guest/en/websys/status/getStatusData.cgi",
+            "/web/guest/en/websys/status/status.cgi",
+            "/web/guest/en/websys/webArch/status.cgi",
+            "/web/guest/en/websys/webArch/deviceStatus.cgi",
+        ]
+        return self._read_guest_with_fallback(printer, candidates, keyword="status")
 
     def read_network_interface(self, printer: Printer) -> str:
         try:
@@ -160,6 +262,24 @@ class RicohCollectorMixin(RicohServiceBase):
             match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
             if match:
                 val = RicohServiceBase._strip_html(match.group(1)).replace(",", "")
+                if val.isdigit():
+                    results[key] = val
+
+        # Older Web Image Monitor pages render values as plain text blocks.
+        if not results:
+            plain = RicohServiceBase._strip_html(html)
+            fallback_patterns = {
+                "copier_bw": r"Copier\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
+                "printer_bw": r"Printer\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
+                "fax_bw": r"Fax\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
+                "scanner_send_bw": r"Send/TX\s+Total\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
+                "scanner_send_color": r"Send/TX\s+Total\s+Color\s*:\s*([0-9,]+)",
+            }
+            for key, pattern in fallback_patterns.items():
+                match = re.search(pattern, plain, re.IGNORECASE)
+                if not match:
+                    continue
+                val = match.group(1).replace(",", "").strip()
                 if val.isdigit():
                     results[key] = val
         return results
