@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import json
@@ -93,6 +93,13 @@ def _normalize_ipv4(value: str) -> str:
     if any(int(part) > 255 for part in parts):
         return ""
     return ".".join(str(int(part)) for part in parts)
+
+
+def _clean_printer_display_name(name: str, ip: str = "") -> str:
+    text = str(name or "").strip()
+    if text:
+        text = re.sub(r"^\s*(m[aáàạảã]y|may)\s*photo\s*", "", text, flags=re.IGNORECASE).strip(" -_()")
+    return text or str(ip or "").strip() or "Printer"
 
 
 def _extract_port_link_id(port_name: str) -> str:
@@ -421,7 +428,7 @@ def _scan_devices_payload(
     api_payload = [
         {
             "id": p.id,
-            "name": p.name or "Printer",
+            "name": _clean_printer_display_name(p.name, p.ip),
             "ip": p.ip,
             "mac_id": machine_id_map.get(p.ip) or neighbor_mac_map.get(p.ip, ""),
             "type": p.printer_type or "unknown",
@@ -472,7 +479,7 @@ def _scan_devices_payload(
              
         is_ricoh = bool(is_ricoh_result or is_ricoh_mac or is_known_ricoh)
         
-        display_name = f"Máy Photo {ip}"
+        display_name = ip
         if is_ricoh:
             try:
                 # Create a temporary printer object for name discovery
@@ -482,10 +489,10 @@ def _scan_devices_payload(
                 # Try common Ricoh keys for model name
                 model_name = info_dict.get("Machine Name") or info_dict.get("Device Name") or info_dict.get("Product Name")
                 if model_name:
-                    display_name = f"{model_name} ({ip})"
+                    display_name = model_name
             except Exception as e:
                 LOGGER.debug("Failed to discover model name for %s: %s", ip, e)
-             
+        display_name = _clean_printer_display_name(display_name, ip)
         row = {
             "id": 0,
             "name": display_name,
@@ -1897,6 +1904,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         bridge.stop()
         return jsonify({"ok": True, "message": "Polling stopped", "status": bridge.status()})
 
+    @app.post("/api/polling/trigger")
+    def api_polling_trigger() -> Any:
+        bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        ok, message = bridge.trigger_once()
+        code = 200 if ok else 400
+        return jsonify({"ok": ok, "message": message, "status": bridge.status()}), code
+
     @app.post("/api/ws/connect")
     def api_ws_connect() -> Any:
         ok, message = ws_client.connect()
@@ -1961,3 +1975,4 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         return jsonify({"ok": ok, "message": message, "status": updater.status()})
 
     return app
+

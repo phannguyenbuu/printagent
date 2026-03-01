@@ -59,6 +59,7 @@ class PollingBridge:
         self._scan_file_state: dict[str, dict[str, int]] = {}
         self._scan_uploaded_fingerprints: dict[str, str] = self._load_scan_upload_state()
         self._scan_lock = threading.Lock()
+        self._trigger_event = threading.Event()
 
     def is_configured(self) -> bool:
         return bool(self._config.get_string("polling.url").strip()) and bool(self._config.get_string("polling.lead").strip()) and bool(
@@ -146,6 +147,7 @@ class PollingBridge:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._trigger_event.set()
         self._save_scan_upload_state()
         try:
             if self._thread and self._thread.is_alive():
@@ -155,6 +157,20 @@ class PollingBridge:
         except Exception:  # noqa: BLE001
             pass
         LOGGER.info("Polling bridge stop requested")
+
+    def trigger_once(self) -> tuple[bool, str]:
+        if not self._config.get_bool("polling.enabled", False):
+            return False, "Polling disabled"
+        if not self.is_configured():
+            issues = ", ".join(self._config_issues()) or "unknown"
+            return False, f"Polling not configured ({issues})"
+        if not (self._thread and self._thread.is_alive()):
+            ok, message = self.start()
+            if not ok:
+                return False, message
+        self._trigger_event.set()
+        LOGGER.info("Polling trigger requested: immediate next cycle")
+        return True, "Trigger queued"
 
     def status(self) -> dict[str, object]:
         issues = self._config_issues()
@@ -477,7 +493,9 @@ if ($r) { $r }
             # Refresh lan_uid in case it was reassigned by server in _worker thread
             current_lan_uid = self._resolved_lan_uid or lan_uid
             self._run_scan_cycle(lead, current_lan_uid, agent_uid, hostname, local_ip, fingerprint, reason="timer")
-            self._stop_event.wait(interval)
+            triggered = self._trigger_event.wait(interval)
+            if triggered:
+                self._trigger_event.clear()
         self._save_scan_upload_state()
 
     @staticmethod

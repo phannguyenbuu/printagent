@@ -4,11 +4,6 @@
 <section class="panel">
   <div class="panel-head">
     <div class="panel-head-title">
-      <h3>Devices</h3>
-      <label class="inline-check">
-        <input id="valid-printer-only" type="checkbox" />
-        Valid printer only
-      </label>
       <div class="inline-check">
         <span>Polling</span>
         <label class="mini-switch" title="Toggle polling bridge">
@@ -17,6 +12,7 @@
         </label>
       </div>
       <span id="devices-polling-status" class="badge">Polling: checking...</span>
+      <button id="devices-polling-trigger" class="btn ghost" type="button">Trigger Send</button>
     </div>
     <span>Device inventory loaded from backend API and local Windows printers</span>
   </div>

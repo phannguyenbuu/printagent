@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -142,6 +142,27 @@ class Printer(Base):
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     online_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     mac_address: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
+class DeviceInfor(Base):
+    __tablename__ = "DeviceInfor"
+    __table_args__ = (
+        UniqueConstraint("lead", "lan_uid", "mac_id", name="uq_deviceinfor_lead_lan_mac"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    mac_id: Mapped[str] = mapped_column(String(64), index=True)
+    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True, default="")
+    counter_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    last_counter_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 

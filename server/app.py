@@ -18,6 +18,7 @@ from models import (
     Base,
     CounterBaseline,
     CounterInfor,
+    DeviceInfor,
     LanSite,
     Printer,
     PrinterControlCommand,
@@ -559,6 +560,7 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "StatusInfor" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_counterinfor_lead_lan_agent_ip_mac ON "CounterInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_statusinfor_lead_lan_agent_ip_mac ON "StatusInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
+        session.execute(text('CREATE INDEX IF NOT EXISTS idx_deviceinfor_lead_lan_mac ON "DeviceInfor" (lead, lan_uid, mac_id);'))
         session.commit()
 
     lead_key_map = cfg.lead_keys()
@@ -577,7 +579,11 @@ def create_app() -> Flask:
 
     @app.get("/devices")
     def devices_page() -> Any:
-        return render_template("devices.html", active_tab="devices", page_title="Devices")
+        return redirect(url_for("infor_page"))
+
+    @app.get("/infor")
+    def infor_page() -> Any:
+        return render_template("devices.html", active_tab="infor", page_title="Infor")
 
     @app.get("/lan-sites")
     def lan_sites_page() -> Any:
@@ -1001,6 +1007,7 @@ def create_app() -> Flask:
                         "online_changed_at": r.online_changed_at.isoformat() if r.online_changed_at else "",
                         "last_seen_at": r.updated_at.isoformat() if r.updated_at else "",
                         "label": f"{r.lan_uid} / {r.printer_name}",
+                        "mac_id": r.mac_address or "",
                         "user": r.auth_user or "",
                         "password": r.auth_password or "",
                     }
@@ -1059,6 +1066,7 @@ def create_app() -> Flask:
                     "id": int(printer.id),
                     "lead": printer.lead,
                     "lan_uid": printer.lan_uid,
+                    "mac_id": printer.mac_address or "",
                     "agent_uid": printer.agent_uid,
                     "printer_name": printer.printer_name,
                     "ip": printer.ip,
@@ -2071,6 +2079,43 @@ def create_app() -> Flask:
                     if row.begin_record_id is None:
                         row.begin_record_id = row.id
                     inserted_status = 1
+
+            # Unified root record for downstream filtering/reporting.
+            root_mac_id = _to_text(mac_id) or (f"IP:{ip}" if ip else "UNKNOWN")
+            infor = session.execute(
+                select(DeviceInfor).where(
+                    DeviceInfor.lead == lead,
+                    DeviceInfor.lan_uid == lan_uid,
+                    DeviceInfor.mac_id == root_mac_id,
+                )
+            ).scalar_one_or_none()
+            if infor is None:
+                infor = DeviceInfor(
+                    lead=lead,
+                    lan_uid=lan_uid,
+                    mac_id=root_mac_id,
+                    agent_uid=agent_uid,
+                    printer_name=printer_name or "Unknown Printer",
+                    ip=ip,
+                    counter_data=counter_data if isinstance(counter_data, dict) else {},
+                    status_data=status_data if isinstance(status_data, dict) else {},
+                    last_counter_at=timestamp if counter_data else None,
+                    last_status_at=timestamp if status_data else None,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                session.add(infor)
+            else:
+                infor.agent_uid = agent_uid or infor.agent_uid
+                infor.printer_name = printer_name or infor.printer_name
+                infor.ip = ip or infor.ip
+                if counter_data and isinstance(counter_data, dict):
+                    infor.counter_data = counter_data
+                    infor.last_counter_at = timestamp
+                if status_data and isinstance(status_data, dict):
+                    infor.status_data = status_data
+                    infor.last_status_at = timestamp
+                infor.updated_at = datetime.now(timezone.utc)
             session.commit()
         LOGGER.info(
             "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s)",
@@ -2173,6 +2218,37 @@ def create_app() -> Flask:
                 })
 
         return jsonify({"ok": True, "printers": output})
+
+    @app.get("/api/infor/list")
+    def infor_list() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        with session_factory() as session:
+            stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+            if lead:
+                stmt = stmt.where(DeviceInfor.lead == lead)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify(
+                {
+                    "rows": [
+                        {
+                            "id": int(r.id),
+                            "lead": r.lead,
+                            "lan_uid": r.lan_uid,
+                            "mac_id": r.mac_id,
+                            "agent_uid": r.agent_uid,
+                            "printer_name": r.printer_name,
+                            "ip": r.ip,
+                            "counter_data": r.counter_data if isinstance(r.counter_data, dict) else {},
+                            "status_data": r.status_data if isinstance(r.status_data, dict) else {},
+                            "last_counter_at": r.last_counter_at.isoformat() if r.last_counter_at else "",
+                            "last_status_at": r.last_status_at.isoformat() if r.last_status_at else "",
+                            "created_at": r.created_at.isoformat() if r.created_at else "",
+                            "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+                        }
+                        for r in rows
+                    ]
+                }
+            )
 
     @app.get("/api/public/device/latest")
     def public_device_latest() -> Any:

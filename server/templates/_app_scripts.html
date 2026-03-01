@@ -343,7 +343,7 @@ function renderPager(pageId, currentPageValue, totalPagesValue, onSelectPage) {
 function refreshCurrentPage() {
   const page = currentPage();
   if (page === "dashboard") return loadSummary();
-  if (page === "devices") return loadDevicesPage();
+  if (page === "devices" || page === "infor") return loadDevicesPage();
   if (page === "counter") return loadCounter();
   if (page === "status") return loadStatus();
   if (page === "heatmap") return loadHeatmap();
@@ -447,7 +447,9 @@ function renderDeviceTabs() {
   host.innerHTML = sortedRows
     .map((r) => {
       const live = r.is_online ? "Online" : "Offline";
-      return `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(r.label || `${r.lan_uid} / ${r.printer_name}`)} <span class="device-live ${r.is_online ? "online" : "offline"}">(${live})</span></button>`;
+      const baseLabel = r.label || `${r.lan_uid} / ${r.printer_name}`;
+      const macTag = r.mac_id ? ` | ${r.mac_id}` : "";
+      return `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(`${baseLabel}${macTag}`)} <span class="device-live ${r.is_online ? "online" : "offline"}">(${live})</span></button>`;
     })
     .join("");
   host.querySelectorAll(".device-tab-btn").forEach((btn) => {
@@ -473,7 +475,7 @@ async function loadDeviceEvents(printerId) {
       </label>
       <div>
         <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
-        <div class="devices-meta">IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
+        <div class="devices-meta">MAC: ${escapeHtml(p.mac_id || "-")} | IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
       </div>
     `;
     qs("device-enable-toggle")?.addEventListener("change", async (event) => {
@@ -1044,7 +1046,7 @@ async function bind() {
   });
 
   if (page === "dashboard") loadSummary().catch(() => {});
-  if (page === "devices") loadDevicesPage().catch(() => {});
+  if (page === "devices" || page === "infor") loadDevicesPage().catch(() => {});
   if (page === "configs") {
     qs("cfg-chart-columns").value = String(uiConfig.chart_columns);
     qs("cfg-card-columns").value = String(uiConfig.card_columns);

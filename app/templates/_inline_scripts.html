@@ -1409,6 +1409,40 @@
   async function initDevicesPage() {
     bindResultModal();
     startDevicesPollingStatusLoop();
+    const pollingTrigger = document.getElementById("devices-polling-trigger");
+    if (pollingTrigger && !pollingTrigger.dataset.bound) {
+      pollingTrigger.dataset.bound = "1";
+      pollingTrigger.addEventListener("click", async () => {
+        const badge = document.getElementById("devices-polling-status");
+        pollingTrigger.disabled = true;
+        if (badge) {
+          badge.classList.remove("ok", "warn", "off");
+          badge.classList.add("loading");
+          badge.textContent = "Polling: triggering...";
+        }
+        try {
+          const data = await jsonFetch("/api/polling/trigger", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          renderDevicesPollingStatus(data?.status || {}, "");
+          setTimeout(() => {
+            loadDevicesPollingStatus().catch(() => { });
+          }, 800);
+        } catch (err) {
+          const message = String(err?.message || err || "Trigger polling failed");
+          if (badge) {
+            badge.classList.remove("ok", "off", "loading");
+            badge.classList.add("warn");
+            badge.textContent = "Polling: error";
+            badge.title = message;
+          }
+        } finally {
+          pollingTrigger.disabled = false;
+        }
+      });
+    }
     const pollingToggle = document.getElementById("devices-polling-toggle");
     if (pollingToggle && !pollingToggle.dataset.bound) {
       pollingToggle.dataset.bound = "1";
