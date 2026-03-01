@@ -4,7 +4,6 @@ import csv
 import hashlib
 import json
 import logging
-import os
 import re
 import socket
 import subprocess
@@ -25,7 +24,6 @@ from app.utils.scanner import SubnetScanner
 
 LOGGER = logging.getLogger(__name__)
 CONTROL_LOG_FILE = Path("storage/data/control_actions.csv")
-LAN_FINGER_FILE = Path("storage/data/.lan_finger.json")
 SCAN_UPLOAD_STATE_FILE = Path("storage/data/scan_upload_state.json")
 LAST_POLLING_DATA_FILE = Path("storage/data/last_data.json")
 
@@ -351,15 +349,6 @@ if ($r) { $r }
         except Exception:  # noqa: BLE001
             return ""
 
-    @staticmethod
-    def _best_effort_hide_file(path: Path) -> None:
-        if os.name != "nt":
-            return
-        try:
-            subprocess.run(["attrib", "+h", str(path)], capture_output=True, text=True, timeout=5, check=False)
-        except Exception:  # noqa: BLE001
-            return
-
     def _resolve_lan_info(self, hostname: str, local_ip: str) -> tuple[str, str]:
         """
         Returns (lan_uid, fingerprint_signature)
@@ -386,41 +375,11 @@ if ($r) { $r }
             self._resolved_lan_uid = configured
             return configured, signature
 
-        if self._resolved_lan_uid:
-            return self._resolved_lan_uid, signature
-
-        if LAN_FINGER_FILE.exists():
-            try:
-                payload = json.loads(LAN_FINGER_FILE.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    saved_uid = str(payload.get("lan_uid", "")).strip()
-                    saved_signature = str(payload.get("signature", "")).strip()
-                    if saved_uid and saved_signature == signature:
-                        self._resolved_lan_uid = saved_uid
-                        return saved_uid, signature
-            except Exception:  # noqa: BLE001
-                pass
-
-        # If not resolved locally, we use a temporary generated one until server responds
+        # Deterministic LAN UID from current fingerprint signature; no local file cache.
         digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:16]
         temp_uid = f"lanf-{digest}"
+        self._resolved_lan_uid = temp_uid
         return temp_uid, signature
-
-    def _save_lan_finger(self, lan_uid: str, signature: str) -> None:
-        if not lan_uid or not signature:
-            return
-        try:
-            payload = {
-                "lan_uid": lan_uid,
-                "signature": signature,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            LAN_FINGER_FILE.parent.mkdir(parents=True, exist_ok=True)
-            LAN_FINGER_FILE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
-            self._best_effort_hide_file(LAN_FINGER_FILE)
-            self._resolved_lan_uid = lan_uid
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Cannot persist lan finger file (%s): %s", LAN_FINGER_FILE, exc)
 
     def _polling_base_url(self) -> str:
         raw = self._config.get_string("polling.url").strip()
@@ -818,7 +777,7 @@ if ($r) { $r }
                 if server_lan_uid and server_lan_uid != lan_uid:
                     LOGGER.info("Server reassigned lan_uid: %s -> %s", lan_uid, server_lan_uid)
                     lan_uid = server_lan_uid
-                    self._save_lan_finger(lan_uid, fingerprint)
+                    self._resolved_lan_uid = lan_uid
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Initial agent registration failed: %s", exc)
 

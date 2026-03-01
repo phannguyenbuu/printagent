@@ -8,6 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
+import urllib3
+
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LOGGER = logging.getLogger(__name__)
 

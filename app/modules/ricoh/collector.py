@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import re
 import time
@@ -538,36 +539,126 @@ class RicohCollectorMixin(RicohServiceBase):
         return results
 
     @staticmethod
-    def parse_status(html: str) -> dict[str, str]:
-        results = {}
-        def parse_alerts(section: str, key_prefix: str) -> None:
-            match = re.search(f"{section}.*?>(.*?)</td>", html, re.IGNORECASE | re.DOTALL)
-            if match:
-                content = RicohServiceBase._strip_html(match.group(1))
-                if content and content != "---":
-                    results[key_prefix] = content
+    def parse_status(html: str) -> dict[str, Any]:
+        results: dict[str, Any] = {}
 
-        parse_alerts("System Status", "system_status")
-        parse_alerts("Toner Status", "toner_black")
-        tray_matches = re.finditer(r"Tray\s+(\d+).*?>(.*?)</td>", html, re.IGNORECASE | re.DOTALL)
-        for m in tray_matches:
-            results[f"tray_{m.group(1)}_status"] = RicohServiceBase._strip_html(m.group(2))
+        def _clean(text: str) -> str:
+            value = unescape(re.sub(r"<[^>]*>", " ", text or ""))
+            return re.sub(r"\s+", " ", value).strip()
 
-        if not results:
-            plain = RicohServiceBase._strip_html(html)
+        def _extract_items_from_dd(dd_html: str) -> list[str]:
+            items: list[str] = []
+            for li in re.findall(r"<li[^>]*>(.*?)</li>", dd_html or "", re.IGNORECASE | re.DOTALL):
+                text = _clean(li)
+                if text:
+                    items.append(text)
+            return items
 
+        def _extract_img_alts(dd_html: str) -> list[str]:
+            alts: list[str] = []
+            for alt in re.findall(r'alt="([^"]+)"', dd_html or "", re.IGNORECASE):
+                text = str(alt or "").strip()
+                if text:
+                    alts.append(text)
+            return alts
+
+        def _first_status_token(text: str) -> str:
+            match = re.search(r"\b(Status OK|Alert|Warning|Error|Offline|Online)\b", text or "", re.IGNORECASE)
+            return match.group(1) if match else ""
+
+        # Parse all detail rows globally, then classify by dt label.
+        status_rows = re.findall(
+            r'<dt[^>]*class="listboxdtm"[^>]*>\s*(.*?)\s*</dt>\s*<dd[^>]*>(.*?)</dd>',
+            html or "",
+            re.IGNORECASE | re.DOTALL,
+        )
+        status_json: dict[str, Any] = {}
+        toner_json: dict[str, Any] = {}
+        input_trays: dict[str, Any] = {}
+        output_trays: dict[str, Any] = {}
+        for raw_name, dd_html in status_rows:
+            name = _clean(raw_name).lower()
+            dd_text = _clean(dd_html)
+            li_items = _extract_items_from_dd(dd_html)
+            token = _first_status_token(dd_text)
+            if name in {"system", "printer", "copier", "scanner"}:
+                status_json[name] = {
+                    "state": token or dd_text,
+                    "details": li_items,
+                    "text": dd_text,
+                }
+                continue
+            if name == "black":
+                alts = _extract_img_alts(dd_html)
+                toner_json[name] = {
+                    "state": token or dd_text,
+                    "icons": alts,
+                    "text": dd_text,
+                }
+                continue
+            if name.startswith("tray ") or name == "bypass tray":
+                tray_key = re.sub(r"\s+", "_", name.lower())
+                alts = _extract_img_alts(dd_html)
+                input_trays[tray_key] = {"text": dd_text, "icons": alts}
+                if tray_key == "tray_1":
+                    results["tray_1_status"] = dd_text
+                elif tray_key == "tray_2":
+                    results["tray_2_status"] = dd_text
+                elif tray_key == "tray_3":
+                    results["tray_3_status"] = dd_text
+                elif tray_key == "bypass_tray":
+                    results["bypass_tray_status"] = dd_text
+                continue
+            # Remaining tray labels are typically output tray entries.
+            if "tray" in name:
+                key = re.sub(r"\s+", "_", name.lower())
+                alts = _extract_img_alts(dd_html)
+                output_trays[key] = {"text": dd_text, "icons": alts}
+
+        if status_json.get("system"):
+            results["system_status"] = status_json["system"].get("state", "")
+        if status_json.get("printer"):
+            results["printer_status"] = status_json["printer"].get("state", "")
+            results["printer_alerts"] = status_json["printer"].get("details", [])
+        if status_json.get("copier"):
+            results["copier_status"] = status_json["copier"].get("state", "")
+            results["copier_alerts"] = status_json["copier"].get("details", [])
+        if status_json.get("scanner"):
+            results["scanner_status"] = status_json["scanner"].get("state", "")
+            results["scanner_alerts"] = status_json["scanner"].get("details", [])
+
+        if "black" in toner_json:
+            results["toner_black"] = toner_json["black"].get("state", "")
+
+        # Parse alert/messages summary block
+        alert_rows = re.findall(
+            r'<dt[^>]*class="listboxdtl"[^>]*>\s*(.*?)\s*</dt>\s*<dd[^>]*>(.*?)</dd>',
+            html or "",
+            re.IGNORECASE | re.DOTALL,
+        )
+        alert_json: dict[str, Any] = {}
+        for raw_name, dd_html in alert_rows:
+            key = re.sub(r"\s+", "_", _clean(raw_name).lower())
+            alert_json[key] = _clean(dd_html)
+
+        # Structured JSON for backend/CRM.
+        results["status_json"] = {
+            "alert": alert_json,
+            "status": status_json,
+            "toner": toner_json,
+            "input_tray": input_trays,
+            "output_tray": output_trays,
+        }
+
+        # Fallback text parser for older HTML variants.
+        if not any(k in results for k in ["system_status", "toner_black", "tray_1_status", "tray_2_status", "tray_3_status"]):
+            plain = _clean(html)
             system_match = re.search(r"System\s+Status\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
             if system_match:
-                value = system_match.group(1).strip(" :-")
-                if value:
-                    results["system_status"] = value
-
+                results["system_status"] = system_match.group(1).strip(" :-")
             toner_match = re.search(r"Toner(?:\s+Status)?\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
             if toner_match:
-                value = toner_match.group(1).strip(" :-")
-                if value:
-                    results["toner_black"] = value
-
+                results["toner_black"] = toner_match.group(1).strip(" :-")
             for tray_no, tray_value in re.findall(r"Tray\s+(\d+)\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE):
                 normalized = str(tray_value).strip(" :-")
                 if normalized:
@@ -660,15 +751,21 @@ class RicohCollectorMixin(RicohServiceBase):
 
         return results
 
-    def _prepare_csv_row(self, timestamp: str, printer: Printer, status_data: dict[str, str]) -> list[str]:
+    def _prepare_csv_row(self, timestamp: str, printer: Printer, status_data: dict[str, Any]) -> list[str]:
+        def _as_text(value: Any) -> str:
+            if isinstance(value, list):
+                return "; ".join(str(item) for item in value)
+            if isinstance(value, dict):
+                return RicohServiceBase._strip_html(json.dumps(value, ensure_ascii=False))
+            return str(value or "")
         return [
             timestamp, printer.name, printer.ip,
-            status_data.get("system_status", ""),
-            status_data.get("toner_black", ""),
-            status_data.get("tray_1_status", ""),
-            status_data.get("tray_2_status", ""),
-            status_data.get("tray_3_status", ""),
-            status_data.get("tray_4_status", ""),
+            _as_text(status_data.get("system_status", "")),
+            _as_text(status_data.get("toner_black", "")),
+            _as_text(status_data.get("tray_1_status", "")),
+            _as_text(status_data.get("tray_2_status", "")),
+            _as_text(status_data.get("tray_3_status", "")),
+            _as_text(status_data.get("tray_4_status", "")),
         ]
 
     def start_counter_logging(self, printer: Printer) -> None:
