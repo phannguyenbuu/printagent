@@ -161,6 +161,42 @@ class RicohCollectorMixin(RicohServiceBase):
             value = f"/{value}"
         return value
 
+    @staticmethod
+    def _extract_first_mac(text: str) -> str:
+        if not text:
+            return ""
+        match = re.search(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", text)
+        if not match:
+            return ""
+        return match.group(0).replace("-", ":").upper()
+
+    def _read_interface_public_with_source(self, printer: Printer) -> tuple[str, str]:
+        """
+        Read network/interface page via public endpoints only (no auth fallback).
+        Prioritize new endpoint requested by user, then legacy guest paths.
+        """
+        paths = [
+            "/web/entry/en/websys/netw/getInterface.cgi",
+            "/web/guest/en/websys/netw/getInterface.cgi",
+            "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi",
+            "/web/guest/en/manual/configuration/network/readNetworkInterface.cgi",
+            "/web/guest/en/manual/configuration/readNetworkInterface.cgi",
+            "/web/entry/en/manual/configuration/network/interface/readNetworkInterface.cgi",
+        ]
+        last_err: Exception | None = None
+        session = self.create_http_client(printer, authenticated=False)
+        for path in paths:
+            try:
+                html = self._guest_get(session, printer, path)
+                if html:
+                    return html, f"http://{printer.ip}{path}"
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                continue
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("Unable to load interface page")
+
     def _discover_guest_paths(self, session: requests.Session, printer: Printer, keyword: str = "") -> list[str]:
         keyword_lower = str(keyword or "").strip().lower()
         prioritized: list[str] = []
@@ -357,7 +393,8 @@ class RicohCollectorMixin(RicohServiceBase):
     def read_device_info(self, printer: Printer) -> str:
         try:
             session = self.create_http_client(printer, authenticated=False)
-            return self.authenticate_and_get(session, printer, "/web/guest/en/manual/configuration/readDeviceInfo.cgi")
+            # Public guest endpoint containing Model Name + Machine ID.
+            return self._guest_get(session, printer, "/web/guest/en/websys/status/configuration.cgi")
         finally:
             self._logout_after_collect(printer, source="read_device_info")
 
@@ -367,43 +404,22 @@ class RicohCollectorMixin(RicohServiceBase):
 
     def read_network_interface(self, printer: Printer) -> str:
         try:
-            session = self.create_http_client(printer, authenticated=False)
-            # Try multiple common paths for Ricoh network interface info
-            paths = [
-                "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi",
-                "/web/guest/en/manual/configuration/network/readNetworkInterface.cgi",
-                "/web/guest/en/manual/configuration/readNetworkInterface.cgi",
-                "/web/entry/en/manual/configuration/network/interface/readNetworkInterface.cgi"
-            ]
-            
-            last_err = None
-            for path in paths:
-                try:
-                    html = self.authenticate_and_get(session, printer, path)
-                    if html and "Network Interface" in html:
-                        return html
-                except Exception as e:
-                    last_err = e
-                    continue
-            
-            if last_err:
-                raise last_err
-            return ""
+            html, _ = self._read_interface_public_with_source(printer)
+            return html
         finally:
             self._logout_after_collect(printer, source="read_network_interface")
 
     def fetch_mac_address_direct(self, ip: str) -> str:
         printer = Printer(name="MAC Discovery", ip=ip, user="", password="", printer_type="ricoh")
         try:
-            session = self.create_http_client(printer, authenticated=True)
-            html = self.authenticate_and_get(
-                session, printer, "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi"
-            )
-            match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", html)
-            if match:
-                return match.group(0).replace("-", ":").upper()
-        except Exception:
-            pass
+            html, source_url = self._read_interface_public_with_source(printer)
+            mac = self._extract_first_mac(html)
+            if mac:
+                LOGGER.info("MAC direct success: ip=%s source=%s mac=%s", ip, source_url, mac)
+                return mac
+            LOGGER.warning("MAC direct parse empty: ip=%s source=%s html_len=%s", ip, source_url, len(html or ""))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("MAC direct fetch failed: ip=%s error=%s", ip, exc)
         return ""
 
     def process_device_info(self, printer: Printer, should_post: bool) -> dict[str, Any]:
@@ -508,16 +524,32 @@ class RicohCollectorMixin(RicohServiceBase):
 
     @staticmethod
     def parse_device_info(html: str) -> dict[str, str]:
-        results = {}
-        clean = re.sub(r'<(?!td|/td|tr|/tr)[^>]*>', '', html, flags=re.IGNORECASE)
-        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', clean, flags=re.IGNORECASE | re.DOTALL)
+        results: dict[str, str] = {}
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html or "", flags=re.IGNORECASE | re.DOTALL)
         for row in rows:
-            tds = re.findall(r'<td[^>]*>(.*?)</td>', row, flags=re.IGNORECASE | re.DOTALL)
-            if len(tds) >= 2:
-                key = RicohServiceBase._strip_html(tds[0]).rstrip(":")
-                val = RicohServiceBase._strip_html(tds[1])
-                if key and val:
-                    results[key] = val
+            tds = re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.IGNORECASE | re.DOTALL)
+            cells = [RicohServiceBase._strip_html(cell) for cell in tds]
+            cells = [c for c in cells if c and c != ":"]
+            if len(cells) < 2:
+                continue
+            # Typical structure: [bullet-empty, key, ":", value, ...]
+            # After cleaning, this becomes [key, value, ...].
+            key = cells[0].rstrip(":").strip()
+            val = cells[1].strip()
+            if not key or not val:
+                continue
+            results[key] = val
+
+        # Normalize aliases for downstream code.
+        model = results.get("Model Name") or results.get("Machine Name") or results.get("Device Name") or ""
+        machine_id = results.get("Machine ID") or results.get("MachineId") or results.get("Serial Number") or ""
+        if model:
+            results["Model Name"] = model
+            results["Machine Name"] = model
+            results["model_name"] = model
+        if machine_id:
+            results["Machine ID"] = machine_id
+            results["machine_id"] = machine_id
         return results
 
     @staticmethod

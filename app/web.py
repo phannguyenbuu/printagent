@@ -492,7 +492,13 @@ def _scan_devices_payload(
                 dev_info = ricoh_service.process_device_info(temp_p, should_post=False)
                 info_dict = dev_info.get("device_info", {})
                 # Try common Ricoh keys for model name
-                model_name = info_dict.get("Machine Name") or info_dict.get("Device Name") or info_dict.get("Product Name")
+                model_name = (
+                    info_dict.get("Model Name")
+                    or info_dict.get("Machine Name")
+                    or info_dict.get("Device Name")
+                    or info_dict.get("Product Name")
+                    or info_dict.get("model_name")
+                )
                 if model_name:
                     display_name = model_name
             except Exception as e:
