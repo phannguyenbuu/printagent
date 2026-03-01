@@ -638,6 +638,30 @@
     return resultModalState.counterPayload;
   }
 
+  function hasRealSummaryData(payload) {
+    const data = payload || {};
+    const counterSource = String(data.counter_source || "").toLowerCase();
+    const statusSource = String(data.status_source || "").toLowerCase();
+    const counterIsFinal = counterSource.includes("/web/guest/en/websys/status/getunificationcounter.cgi");
+    const statusIsFinal = statusSource.includes("/web/guest/en/websys/webarch/getstatus.cgi");
+    const hasCounterData = Object.keys(data.counter_data || {}).length > 0;
+    const hasStatusData = Object.keys(data.status_data || {}).length > 0;
+    return counterIsFinal && statusIsFinal && (hasCounterData || hasStatusData);
+  }
+
+  async function waitForRealSummaryData(maxAttempts = 6, delayMs = 700) {
+    let lastPayload = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const payload = await loadCounterStatusForModal();
+      lastPayload = payload;
+      if (hasRealSummaryData(payload)) return payload;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return lastPayload;
+  }
+
   async function ensureScanIsolationForModal() {
     if (resultModalState.isolated) return;
     const ip = String(resultModalState.ip || "").trim();
@@ -749,8 +773,8 @@
       tools.hidden = false;
       setResultModalView("summary");
     }
-    // Default opening tab: Scan (Address List), not Summary.
-    setResultModalView("scan");
+    // Default opening tab: Summary.
+    setResultModalView("summary");
     setResultModalScanView("list");
     modal.hidden = false;
     forceResetScanIsolationForModal()
@@ -1305,19 +1329,23 @@
         resultModalState.printerName = printerName;
         resultModalState.scanLoadedIp = "";
         resultModalState.isolated = false;
-        showResultModalLoading(baseTitle, "Opening scan...");
+        showResultModalLoading(baseTitle, "Loading summary from device...");
         const modal = document.getElementById("result-modal");
         if (!modal || modal.hidden) return;
-        const dataView = {
-          printer_name: printerName || "Local Printer",
-          ip: selectedIp || "",
-          timestamp: "",
-          counter_data: {},
-          status_data: {},
-          html: "",
-        };
         const finalTitle = `${baseTitle}`;
-        showResultModal(finalTitle, dataView);
+        try {
+          const payload = await waitForRealSummaryData();
+          showResultModal(finalTitle, payload || {
+            printer_name: printerName || "Local Printer",
+            ip: selectedIp || "",
+            timestamp: "",
+            counter_data: {},
+            status_data: {},
+            html: "",
+          });
+        } catch (err) {
+          showResultModalError(finalTitle, String(err?.message || err || "Failed to load summary"));
+        }
       });
     });
 
