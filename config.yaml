@@ -1,4 +1,4 @@
-api_url: "http://31.97.76.62:8005/api"
+api_url: "https://agentapi.quanlymay.com/api"
 user_token: ""
 database_url: "sqlite:///storage/data/agent_config.db"
 
@@ -23,7 +23,7 @@ webhook:
 
 polling:
   enabled: true
-  url: "http://31.97.76.62:8005/api/polling"
+  url: "https://agentapi.quanlymay.com/api/polling"
   lead: "default"
   token: "change-me"
   lan_uid: "lan-default"
