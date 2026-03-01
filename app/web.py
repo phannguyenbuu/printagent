@@ -1391,6 +1391,10 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.post("/api/scan/release-session")
     def api_scan_release_session() -> Any:
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
+        status = bridge.status()
+        if bool(status.get("running", False)):
+            # UI can call release on load/cleanup; ignore silently when polling is already active.
+            return jsonify({"ok": True, "polling_start_ok": True, "message": "Polling already running", "status": status})
         ok, message = bridge.start()
         LOGGER.info("Scan release session: polling_start_ok=%s message=%s", ok, message)
         return jsonify({"ok": True, "polling_start_ok": ok, "message": message, "status": bridge.status()})

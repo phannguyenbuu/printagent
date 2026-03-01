@@ -510,9 +510,7 @@ if ($r) { $r }
             # Refresh lan_uid in case it was reassigned by server in _worker thread
             current_lan_uid = self._resolved_lan_uid or lan_uid
             self._run_scan_cycle(lead, current_lan_uid, agent_uid, hostname, local_ip, fingerprint, reason="timer")
-            triggered = self._trigger_event.wait(interval)
-            if triggered:
-                self._trigger_event.clear()
+            self._stop_event.wait(interval)
         self._save_scan_upload_state()
 
     @staticmethod
@@ -916,4 +914,6 @@ if ($r) { $r }
             if self.scan_enabled() and scan_counter_changed:
                 LOGGER.info("Counter detected new scan pages -> trigger immediate scan watcher cycle")
                 self._run_scan_cycle(lead, lan_uid, agent_uid, hostname, local_ip, fingerprint, reason="counter-delta")
-            self._stop_event.wait(interval)
+            triggered = self._trigger_event.wait(interval)
+            if triggered:
+                self._trigger_event.clear()

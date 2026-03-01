@@ -665,20 +665,57 @@ class RicohCollectorMixin(RicohServiceBase):
         # Fallback text parser for older HTML variants.
         if not any(k in results for k in ["system_status", "toner_black", "tray_1_status", "tray_2_status", "tray_3_status"]):
             plain = _clean(html)
-            system_match = re.search(r"System\s+Status\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
-            if system_match:
-                value = system_match.group(1).strip(" :-")
-                if value and len(value) <= 120:
-                    results["system_status"] = value
-            toner_match = re.search(r"Toner(?:\s+Status)?\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
-            if toner_match:
-                value = toner_match.group(1).strip(" :-")
-                if value and len(value) <= 120:
-                    results["toner_black"] = value
-            for tray_no, tray_value in re.findall(r"Tray\s+(\d+)\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE):
-                normalized = str(tray_value).strip(" :-")
-                if normalized and len(normalized) <= 120:
-                    results[f"tray_{tray_no}_status"] = normalized
+            lowered = plain.lower()
+
+            def _slice_between(start_pat: str, end_pats: list[str]) -> str:
+                start = re.search(start_pat, plain, re.IGNORECASE)
+                if not start:
+                    return ""
+                segment = plain[start.end():]
+                end_idx = len(segment)
+                for ep in end_pats:
+                    m = re.search(ep, segment, re.IGNORECASE)
+                    if m:
+                        end_idx = min(end_idx, m.start())
+                return segment[:end_idx].strip(" :-")
+
+            def _compact_status(value: str, max_len: int = 80) -> str:
+                v = re.sub(r"\s+", " ", str(value or "")).strip(" :-")
+                if not v:
+                    return ""
+                m = re.search(r"(Status OK|Alert|Warning|Error|Offline|Online|Energy Saver Mode|No Paper)", v, re.IGNORECASE)
+                if m:
+                    return m.group(1)
+                return v[:max_len]
+
+            # Prefer extracting bounded sections to avoid giant concatenated strings.
+            if "system" in lowered:
+                sys_seg = _slice_between(r"\bSystem\b", [r"\bPrinter\b", r"\bCopier\b", r"\bScanner\b", r"\bToner\b"])
+                sys_val = _compact_status(sys_seg)
+                if sys_val:
+                    results["system_status"] = sys_val
+
+            if "toner" in lowered:
+                toner_seg = _slice_between(r"\bBlack\b", [r"\bInput\s+Tray\b", r"\bOutput\s+Tray\b"])
+                toner_val = _compact_status(toner_seg)
+                if toner_val:
+                    results["toner_black"] = toner_val
+
+            for tray_no in ("1", "2", "3"):
+                tray_seg = _slice_between(
+                    rf"\bTray\s+{tray_no}\b",
+                    [rf"\bTray\s+{int(tray_no)+1}\b", r"\bBypass\s+Tray\b", r"\bOutput\s+Tray\b"],
+                )
+                if tray_seg:
+                    tray_val = re.sub(r"\s+", " ", tray_seg).strip(" :-")[:80]
+                    if tray_val:
+                        results[f"tray_{tray_no}_status"] = tray_val
+
+            bypass_seg = _slice_between(r"\bBypass\s+Tray\b", [r"\bOutput\s+Tray\b"])
+            if bypass_seg:
+                bypass_val = re.sub(r"\s+", " ", bypass_seg).strip(" :-")[:80]
+                if bypass_val:
+                    results["bypass_tray_status"] = bypass_val
         return results
 
     @staticmethod
