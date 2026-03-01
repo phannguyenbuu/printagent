@@ -648,10 +648,11 @@ class RicohCollectorMixin(RicohServiceBase):
             html or "",
             re.IGNORECASE | re.DOTALL,
         )
-        alert_json: dict[str, Any] = {}
+        alert_json: dict[str, Any] = {"alert": "", "messages": ""}
         for raw_name, dd_html in alert_rows:
             key = re.sub(r"\s+", "_", _clean(raw_name).lower())
-            alert_json[key] = _clean(dd_html)
+            if key in {"alert", "messages"}:
+                alert_json[key] = _clean(dd_html)
 
         # Structured JSON for backend/CRM.
         results["status_json"] = {
