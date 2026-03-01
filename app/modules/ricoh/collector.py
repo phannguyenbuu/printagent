@@ -288,22 +288,7 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source=f"read_{keyword}")
 
     def read_counter(self, printer: Printer) -> str:
-        # User-requested primary source: Web Image Monitor guest mainFrame.cgi
-        try:
-            return self._read_guest_mainframe(printer)
-        except Exception:  # noqa: BLE001
-            pass
-        candidates = [
-            "/web/guest/en/websys/webArch/mainFrame.cgi",
-            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
-            "/web/guest/en/manual/counter/readCounter.cgi",
-            "/web/guest/en/manual/counter/counter.cgi",
-            "/web/guest/en/websys/status/getCounterData.cgi",
-            "/web/guest/en/websys/status/counter.cgi",
-            "/web/guest/en/websys/webArch/counter.cgi",
-            "/web/guest/en/websys/webArch/getCounter.cgi",
-        ]
-        return self._read_guest_with_fallback(printer, candidates, keyword="counter")
+        return self._read_guest_mainframe(printer)
 
     def read_device_info(self, printer: Printer) -> str:
         try:
@@ -313,22 +298,7 @@ class RicohCollectorMixin(RicohServiceBase):
             self._logout_after_collect(printer, source="read_device_info")
 
     def read_status(self, printer: Printer) -> str:
-        # User-requested primary source: Web Image Monitor guest mainFrame.cgi
-        try:
-            return self._read_guest_mainframe(printer)
-        except Exception:  # noqa: BLE001
-            pass
-        candidates = [
-            "/web/guest/en/websys/webArch/mainFrame.cgi",
-            "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
-            "/web/guest/en/manual/status/readStatus.cgi",
-            "/web/guest/en/manual/status/status.cgi",
-            "/web/guest/en/websys/status/getStatusData.cgi",
-            "/web/guest/en/websys/status/status.cgi",
-            "/web/guest/en/websys/webArch/status.cgi",
-            "/web/guest/en/websys/webArch/deviceStatus.cgi",
-        ]
-        return self._read_guest_with_fallback(printer, candidates, keyword="status")
+        return self._read_guest_mainframe(printer)
 
     def read_network_interface(self, printer: Printer) -> str:
         try:

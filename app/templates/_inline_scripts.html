@@ -43,47 +43,24 @@
     const data = payload || {};
     const counter = data.counter_data || {};
     const status = data.status_data || {};
-    const renderValue = (value) => {
-      if (value === 0) return "0";
-      const text = String(value ?? "").trim();
-      return text ? text : "-";
-    };
+    const sourceUrl = data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-";
     const lines = [];
-    lines.push("COUNTER DATA");
+    lines.push("SUMMARY");
     lines.push(`printer_name: ${data.printer_name || "-"}`);
     lines.push(`ip: ${data.ip || "-"}`);
     lines.push(`timestamp: ${data.timestamp || "-"}`);
+    lines.push(`counter_source: ${sourceUrl}`);
+    lines.push(`status_source: ${sourceUrl}`);
     if (data.counter_error) lines.push(`counter_error: ${data.counter_error}`);
     if (data.status_error) lines.push(`status_error: ${data.status_error}`);
     lines.push("");
     lines.push("counter_data:");
-    const orderedKeys = [
-      "total",
-      "copier_bw",
-      "printer_bw",
-      "fax_bw",
-      "send_tx_total_bw",
-      "send_tx_total_color",
-      "fax_transmission_total",
-      "scanner_send_bw",
-      "scanner_send_color",
-      "coverage_copier_bw",
-      "coverage_printer_bw",
-      "coverage_fax_bw",
-      "a3_dlt",
-      "duplex",
-    ];
-    const hasCounterData = orderedKeys.some((key) => {
-      if (!(key in counter)) return false;
-      const value = counter[key];
-      if (value === 0) return true;
-      return String(value ?? "").trim() !== "";
-    });
-    if (!hasCounterData) {
+    const counterKeys = Object.keys(counter || {}).sort();
+    if (!counterKeys.length) {
       lines.push("  - (empty)");
     } else {
-      orderedKeys.forEach((key) => {
-        lines.push(`  - ${key}: ${renderValue(counter[key])}`);
+      counterKeys.forEach((key) => {
+        lines.push(`  - ${key}: ${counter[key]}`);
       });
     }
     lines.push("");
