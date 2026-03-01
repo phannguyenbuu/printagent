@@ -16,6 +16,19 @@ from app.services.api_client import Printer
 LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
+    @staticmethod
+    def _compact_preview(html: str, limit: int = 220) -> str:
+        text = RicohServiceBase._strip_html(html or "")
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}..."
+
+    @staticmethod
+    def _marker_flags(text: str, markers: list[str]) -> dict[str, bool]:
+        lowered = str(text or "").lower()
+        return {m: (m.lower() in lowered) for m in markers}
+
     def _read_guest_mainframe_with_source(self, printer: Printer) -> tuple[str, str]:
         paths = [
             "/web/guest/en/websys/webArch/mainFrame.cgi",
@@ -362,12 +375,39 @@ class RicohCollectorMixin(RicohServiceBase):
     def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
         html, source_url = self._read_guest_mainframe_with_source(printer)
         data = self.parse_status(html)
+        plain = RicohServiceBase._strip_html(html or "")
+        status_markers = self._marker_flags(plain, ["status", "system status", "toner", "tray", "paper"])
+        if not data:
+            LOGGER.warning(
+                "Status parse empty: ip=%s source=%s html_len=%s markers=%s preview=%s",
+                printer.ip,
+                source_url,
+                len(html or ""),
+                status_markers,
+                self._compact_preview(html),
+            )
+        else:
+            LOGGER.info(
+                "Status parse success: ip=%s source=%s keys=%s html_len=%s markers=%s",
+                printer.ip,
+                source_url,
+                sorted(data.keys()),
+                len(html or ""),
+                status_markers,
+            )
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "status_data": data,
             "status_source": source_url,
             "html": html,
+            "status_debug": {
+                "source": source_url,
+                "html_len": len(html or ""),
+                "markers": status_markers,
+                "empty": not bool(data),
+                "preview": self._compact_preview(html),
+            },
             "timestamp": self._timestamp(),
         }
         if should_post:
@@ -377,12 +417,42 @@ class RicohCollectorMixin(RicohServiceBase):
     def process_counter(self, printer: Printer, should_post: bool) -> dict[str, Any]:
         html, source_url = self._read_guest_mainframe_with_source(printer)
         data = self.parse_counter(html)
+        plain = RicohServiceBase._strip_html(html or "")
+        counter_markers = self._marker_flags(
+            plain,
+            ["counter", "copier", "printer", "black & white", "send/tx total", "total"],
+        )
+        if not data:
+            LOGGER.warning(
+                "Counter parse empty: ip=%s source=%s html_len=%s markers=%s preview=%s",
+                printer.ip,
+                source_url,
+                len(html or ""),
+                counter_markers,
+                self._compact_preview(html),
+            )
+        else:
+            LOGGER.info(
+                "Counter parse success: ip=%s source=%s keys=%s html_len=%s markers=%s",
+                printer.ip,
+                source_url,
+                sorted(data.keys()),
+                len(html or ""),
+                counter_markers,
+            )
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "counter_data": data,
             "counter_source": source_url,
             "html": html,
+            "counter_debug": {
+                "source": source_url,
+                "html_len": len(html or ""),
+                "markers": counter_markers,
+                "empty": not bool(data),
+                "preview": self._compact_preview(html),
+            },
             "timestamp": self._timestamp(),
         }
         if should_post:
