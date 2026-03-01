@@ -43,14 +43,15 @@
     const data = payload || {};
     const counter = data.counter_data || {};
     const status = data.status_data || {};
-    const sourceUrl = data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-";
+    const counterSource = String(data.counter_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
+    const statusSource = String(data.status_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
     const lines = [];
     lines.push("SUMMARY");
     lines.push(`printer_name: ${data.printer_name || "-"}`);
     lines.push(`ip: ${data.ip || "-"}`);
     lines.push(`timestamp: ${data.timestamp || "-"}`);
-    lines.push(`counter_source: ${sourceUrl}`);
-    lines.push(`status_source: ${sourceUrl}`);
+    lines.push(`counter_source: ${counterSource}`);
+    lines.push(`status_source: ${statusSource}`);
     if (data.counter_error) lines.push(`counter_error: ${data.counter_error}`);
     if (data.status_error) lines.push(`status_error: ${data.status_error}`);
     lines.push("");
@@ -79,18 +80,7 @@
   function buildCounterHtmlPreview(payload) {
     const data = payload || {};
     const rawHtml = String(data.html || "");
-    if (!rawHtml) return "";
-    const ip = String(data.ip || "").trim();
-    const baseTag = ip ? `<base href="http://${ip}/">` : "";
-    let prepared = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-    if (baseTag) {
-      if (/<head[^>]*>/i.test(prepared)) {
-        prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
-      } else {
-        prepared = `${baseTag}${prepared}`;
-      }
-    }
-    return prepared;
+    return rawHtml;
   }
 
   const resultModalState = {
@@ -237,9 +227,8 @@
     const scanPanel = document.getElementById("result-modal-panel-scan");
     const createPanel = document.getElementById("result-modal-panel-create-address");
     if (!summaryBtn || !htmlBtn || !scanBtn || !scanHtmlTopBtn || !createBtn || !modalBody || !htmlFrame || !scanPanel || !createPanel) return;
-    const htmlEnabled = htmlBtn.dataset.enabled === "1";
     let target = tab === "scan" || tab === "scan_html" || tab === "create" ? tab : "summary";
-    if (tab === "html" && htmlEnabled) target = "html";
+    if (tab === "html") target = "html";
     resultModalState.activeTab = target;
     summaryBtn.classList.toggle("active", target === "summary");
     htmlBtn.classList.toggle("active", target === "html");
@@ -633,7 +622,9 @@
       timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
       counter_data: counterPayload.counter_data || {},
       status_data: statusPayload.status_data || {},
-      html: counterPayload.html || "",
+      html: counterPayload.html || statusPayload.html || "",
+      counter_source: counterPayload.counter_source || "",
+      status_source: statusPayload.status_source || "",
       counter_error: counterResult.ok ? "" : String(counterResult.error || ""),
       status_error: statusResult.ok ? "" : String(statusResult.error || ""),
     };
@@ -736,19 +727,18 @@
     setResultModalScanView("list");
 
     const htmlPreview = buildCounterHtmlPreview(payload);
-    const htmlReady = Boolean(htmlPreview);
     if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
       counterBody.textContent = formatCounterResult(payload);
-      htmlBtn.dataset.enabled = htmlReady ? "1" : "0";
+      htmlBtn.dataset.enabled = "1";
       htmlBtn.disabled = false;
       htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
       tools.hidden = false;
       setResultModalView("summary");
     } else {
       counterBody.textContent = jsonString(payload || {});
-      htmlBtn.dataset.enabled = "0";
-      htmlBtn.disabled = true;
-      htmlFrame.srcdoc = "";
+      htmlBtn.dataset.enabled = "1";
+      htmlBtn.disabled = false;
+      htmlFrame.srcdoc = "<html><body><p>No HTML payload.</p></body></html>";
       tools.hidden = false;
       setResultModalView("summary");
     }
@@ -780,8 +770,8 @@
     modalLoadingText.textContent = loadingText || "Loading...";
     counterBody.textContent = "";
     htmlFrame.srcdoc = "";
-    htmlBtn.dataset.enabled = "0";
-    htmlBtn.disabled = true;
+    htmlBtn.dataset.enabled = "1";
+    htmlBtn.disabled = false;
     tools.hidden = false;
     counterBody.hidden = true;
     htmlFrame.hidden = true;
@@ -865,8 +855,8 @@
             if (counterBody) counterBody.textContent = formatCounterResult(payload);
             const htmlPreview = buildCounterHtmlPreview(payload);
             if (htmlBtn) {
-              htmlBtn.dataset.enabled = htmlPreview ? "1" : "0";
-              htmlBtn.disabled = !htmlPreview;
+              htmlBtn.dataset.enabled = "1";
+              htmlBtn.disabled = false;
             }
             if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
           })
@@ -891,8 +881,8 @@
             if (counterBody) counterBody.textContent = formatCounterResult(payload);
             const htmlPreview = buildCounterHtmlPreview(payload);
             if (htmlTopBtn) {
-              htmlTopBtn.dataset.enabled = htmlPreview ? "1" : "0";
-              htmlTopBtn.disabled = !htmlPreview;
+              htmlTopBtn.dataset.enabled = "1";
+              htmlTopBtn.disabled = false;
             }
             if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
             setResultModalView("html");

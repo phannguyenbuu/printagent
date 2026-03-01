@@ -16,7 +16,7 @@ from app.services.api_client import Printer
 LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
-    def _read_guest_mainframe(self, printer: Printer) -> str:
+    def _read_guest_mainframe_with_source(self, printer: Printer) -> tuple[str, str]:
         paths = [
             "/web/guest/en/websys/webArch/mainFrame.cgi",
             "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
@@ -26,7 +26,8 @@ class RicohCollectorMixin(RicohServiceBase):
             session = self.create_http_client(printer, authenticated=False)
             for path in paths:
                 try:
-                    return self.authenticate_and_get(session, printer, path)
+                    html = self.authenticate_and_get(session, printer, path)
+                    return html, f"http://{printer.ip}{path}"
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     continue
@@ -35,6 +36,10 @@ class RicohCollectorMixin(RicohServiceBase):
             raise RuntimeError("Unable to load guest mainFrame.cgi")
         finally:
             self._logout_after_collect(printer, source="read_mainframe")
+
+    def _read_guest_mainframe(self, printer: Printer) -> str:
+        html, _ = self._read_guest_mainframe_with_source(printer)
+        return html
 
     @staticmethod
     def _extract_guest_cgi_candidates(text: str) -> list[str]:
@@ -355,12 +360,14 @@ class RicohCollectorMixin(RicohServiceBase):
         return payload
 
     def process_status(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html = self.read_status(printer)
+        html, source_url = self._read_guest_mainframe_with_source(printer)
         data = self.parse_status(html)
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "status_data": data,
+            "status_source": source_url,
+            "html": html,
             "timestamp": self._timestamp(),
         }
         if should_post:
@@ -368,12 +375,14 @@ class RicohCollectorMixin(RicohServiceBase):
         return payload
 
     def process_counter(self, printer: Printer, should_post: bool) -> dict[str, Any]:
-        html = self.read_counter(printer)
+        html, source_url = self._read_guest_mainframe_with_source(printer)
         data = self.parse_counter(html)
         payload = {
             "printer_name": printer.name,
             "ip": printer.ip,
             "counter_data": data,
+            "counter_source": source_url,
+            "html": html,
             "timestamp": self._timestamp(),
         }
         if should_post:
