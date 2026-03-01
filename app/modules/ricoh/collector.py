@@ -17,6 +17,19 @@ LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
     @staticmethod
+    def _resolve_webarch_relative_path(path: str) -> str:
+        raw = str(path or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("http://") or raw.startswith("https://"):
+            match = re.search(r"https?://[^/]+(/.*)$", raw, re.IGNORECASE)
+            return match.group(1) if match else ""
+        if raw.startswith("/"):
+            return raw
+        # mainFrame/topPage usually contains relative paths like "header.cgi", "topPage.cgi".
+        return f"/web/guest/en/websys/webArch/{raw.lstrip('./')}"
+
+    @staticmethod
     def _compact_preview(html: str, limit: int = 220) -> str:
         text = RicohServiceBase._strip_html(html or "")
         text = re.sub(r"\s+", " ", text).strip()
@@ -55,20 +68,117 @@ class RicohCollectorMixin(RicohServiceBase):
         return html
 
     def _read_guest_counter_with_source(self, printer: Printer) -> tuple[str, str]:
-        path = "/web/guest/en/websys/status/getUnificationCounter.cgi"
+        paths: list[str] = []
         try:
             session = self.create_http_client(printer, authenticated=False)
-            html = self.authenticate_and_get(session, printer, path)
-            return html, f"http://{printer.ip}{path}"
+            main_html, main_source = self._read_guest_mainframe_with_source(printer)
+            paths.append("/web/guest/en/websys/status/getUnificationCounter.cgi")
+
+            frame_sources = re.findall(
+                r"""<frame[^>]+src=['"]([^'"]+)['"]""",
+                main_html or "",
+                flags=re.IGNORECASE,
+            )
+            for raw in frame_sources:
+                resolved = self._resolve_webarch_relative_path(raw)
+                if resolved:
+                    paths.append(resolved)
+
+            # Follow top/header frames to discover actual counter endpoint.
+            for frame_path in list(paths):
+                if not frame_path.lower().endswith(".cgi"):
+                    continue
+                try:
+                    frame_html = self.authenticate_and_get(session, printer, frame_path)
+                except Exception:  # noqa: BLE001
+                    continue
+                for raw in self._extract_guest_cgi_candidates(frame_html):
+                    resolved = self._resolve_webarch_relative_path(raw)
+                    if resolved:
+                        paths.append(resolved)
+
+            # Keep order, remove duplicates.
+            unique: list[str] = []
+            seen: set[str] = set()
+            for path in paths:
+                key = path.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(path)
+
+            # Prefer URLs that look like counter endpoint.
+            unique.sort(key=lambda p: ("counter" not in p.lower() and "unification" not in p.lower(), len(p)))
+
+            last_exc: Exception | None = None
+            for path in unique:
+                try:
+                    html = self.authenticate_and_get(session, printer, path)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+                if self.parse_counter(html):
+                    return html, f"http://{printer.ip}{path}"
+
+            if last_exc is not None:
+                raise last_exc
+            return main_html, main_source
         finally:
             self._logout_after_collect(printer, source="read_counter")
 
     def _read_guest_status_with_source(self, printer: Printer) -> tuple[str, str]:
-        path = "/web/guest/en/websys/webArch/getStatus.cgi"
+        paths: list[str] = [
+            "/web/guest/en/websys/webArch/getStatus.cgi",
+        ]
         try:
             session = self.create_http_client(printer, authenticated=False)
-            html = self.authenticate_and_get(session, printer, path)
-            return html, f"http://{printer.ip}{path}"
+            main_html, main_source = self._read_guest_mainframe_with_source(printer)
+
+            frame_sources = re.findall(
+                r"""<frame[^>]+src=['"]([^'"]+)['"]""",
+                main_html or "",
+                flags=re.IGNORECASE,
+            )
+            for raw in frame_sources:
+                resolved = self._resolve_webarch_relative_path(raw)
+                if resolved:
+                    paths.append(resolved)
+
+            for frame_path in list(paths):
+                if not frame_path.lower().endswith(".cgi"):
+                    continue
+                try:
+                    frame_html = self.authenticate_and_get(session, printer, frame_path)
+                except Exception:  # noqa: BLE001
+                    continue
+                for raw in self._extract_guest_cgi_candidates(frame_html):
+                    resolved = self._resolve_webarch_relative_path(raw)
+                    if resolved:
+                        paths.append(resolved)
+
+            unique: list[str] = []
+            seen: set[str] = set()
+            for path in paths:
+                key = path.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(path)
+            unique.sort(key=lambda p: ("status" not in p.lower(), len(p)))
+
+            last_exc: Exception | None = None
+            for path in unique:
+                try:
+                    html = self.authenticate_and_get(session, printer, path)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+                if self.parse_status(html):
+                    return html, f"http://{printer.ip}{path}"
+
+            if last_exc is not None:
+                raise last_exc
+            return main_html, main_source
         finally:
             self._logout_after_collect(printer, source="read_status")
 
