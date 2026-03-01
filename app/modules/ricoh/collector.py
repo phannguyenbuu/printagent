@@ -38,9 +38,27 @@ class RicohCollectorMixin(RicohServiceBase):
     def read_network_interface(self, printer: Printer) -> str:
         try:
             session = self.create_http_client(printer, authenticated=False)
-            return self.authenticate_and_get(
-                session, printer, "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi"
-            )
+            # Try multiple common paths for Ricoh network interface info
+            paths = [
+                "/web/guest/en/manual/configuration/network/interface/readNetworkInterface.cgi",
+                "/web/guest/en/manual/configuration/network/readNetworkInterface.cgi",
+                "/web/guest/en/manual/configuration/readNetworkInterface.cgi",
+                "/web/entry/en/manual/configuration/network/interface/readNetworkInterface.cgi"
+            ]
+            
+            last_err = None
+            for path in paths:
+                try:
+                    html = self.authenticate_and_get(session, printer, path)
+                    if html and "Network Interface" in html:
+                        return html
+                except Exception as e:
+                    last_err = e
+                    continue
+            
+            if last_err:
+                raise last_err
+            return ""
         finally:
             self._logout_after_collect(printer, source="read_network_interface")
 
