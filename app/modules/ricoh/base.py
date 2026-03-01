@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
