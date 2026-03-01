@@ -784,10 +784,6 @@ if ($r) { $r }
                     ip = str(printer.ip or "").strip()
                     if not ip or ip not in controls:
                         continue
-                    printer_type = str(printer.printer_type or "").strip().lower()
-                    printer_name = str(printer.name or "").strip().lower()
-                    if "ricoh" not in printer_type and "ricoh" not in printer_name:
-                        continue
                     try:
                         command = controls[ip].get("command")
                         if isinstance(command, dict):
@@ -820,11 +816,6 @@ if ($r) { $r }
                     continue
                 if controls and not bool((controls.get(str(printer.ip or "").strip(), {}) or {}).get("enabled", True)):
                     LOGGER.info("Polling skipped (disabled): name=%s ip=%s", printer.name, printer.ip)
-                    continue
-                printer_type = str(printer.printer_type or "").strip().lower()
-                printer_name = str(printer.name or "").strip().lower()
-                # Local devices often come as "windows-local"; accept brand detection by name too.
-                if "ricoh" not in printer_type and "ricoh" not in printer_name:
                     continue
                 self._last_cycle_ricoh_printers += 1
                 try:
@@ -871,6 +862,35 @@ if ($r) { $r }
                     self._last_cycle_failed += 1
                     self._last_error = str(exc)
                     LOGGER.warning("Polling bridge failed for %s (%s): %s", printer.name, printer.ip, exc)
+                    # Always send heartbeat payload even when collector fails.
+                    try:
+                        fallback_payload = {
+                            "lead": lead,
+                            "lan_uid": lan_uid,
+                            "agent_uid": agent_uid,
+                            "hostname": hostname,
+                            "local_ip": local_ip,
+                            "printer_name": str(printer.name or "").strip() or "Unknown Printer",
+                            "ip": str(printer.ip or "").strip(),
+                            "mac_id": str(printer.mac_address or "").strip(),
+                            "mac_address": str(printer.mac_address or "").strip(),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "counter_data": {},
+                            "status_data": {},
+                            "fingerprint_signature": fingerprint,
+                        }
+                        ack = self._post_payload(fallback_payload)
+                        self._last_cycle_sent += 1
+                        self._last_success_at = self._now_iso()
+                        LOGGER.info(
+                            "Polling fallback ack <- inserted(counter=%s,status=%s) skipped(counter=%s,status=%s)",
+                            ack.get("inserted_counter", "?"),
+                            ack.get("inserted_status", "?"),
+                            ack.get("skipped_counter", "?"),
+                            ack.get("skipped_status", "?"),
+                        )
+                    except Exception as post_exc:  # noqa: BLE001
+                        LOGGER.warning("Polling fallback post failed for %s (%s): %s", printer.name, printer.ip, post_exc)
             LOGGER.info(
                 "Polling cycle done: total=%s ricoh=%s sent=%s failed=%s",
                 self._last_cycle_total_printers,

@@ -306,6 +306,14 @@ body[data-page="status"] .timelapse-panel .counter-grid {
 .device-enable-wrap input:focus-visible {
   box-shadow: 0 0 0 2px rgba(143, 232, 255, 0.55);
 }
+.device-enable-wrap.compact { gap: 8px; font-size: 12px; color: #12273f; }
+.device-enable-wrap.compact input { width: 38px; height: 20px; border-color: rgba(28, 58, 114, 0.35); background: rgba(19, 42, 83, 0.22); }
+.device-enable-wrap.compact input::before { top: 1px; left: 1px; width: 16px; height: 16px; }
+.device-enable-wrap.compact input:checked::before { transform: translateX(18px); }
+.device-enable-wrap.compact span { font-weight: 700; }
+.counter-card.device-offline .counter-card-head { background: linear-gradient(135deg, #4f6488, #60779e); }
+.device-live-online { color: #0e8f44; }
+.device-live-offline { color: #bf2c2c; }
 .device-auth-dialog-form { display: grid; gap: 10px; margin-bottom: 10px; }
 .device-auth-dialog-form label { display: grid; gap: 6px; }
 .device-auth-dialog-form label span { font-size: 12px; color: #4d627b; font-weight: 700; }

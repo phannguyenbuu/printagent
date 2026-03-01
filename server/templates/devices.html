@@ -1,30 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel devices-panel">
-  <div class="devices-layout">
-    <aside class="devices-nav">
-      <h3>Infor</h3>
-      <div id="devices-tabs" class="devices-tabs">
-        <div class="meta-line">Loading devices...</div>
-      </div>
-    </aside>
-    <section class="devices-content">
-      <div id="devices-head" class="devices-head"></div>
-      <div class="table-wrap">
-        <table id="devices-events-table" class="devices-events-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td colspan="3">No data</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+<section class="panel timelapse-panel">
+  <div id="devices-meta" class="meta-line">DB: checking...</div>
+  <div id="devices-grid" class="counter-grid">
+    <div class="counter-card loading">Loading...</div>
+  </div>
+  <div class="pager">
+    <button id="devices-prev" aria-label="Previous page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"></path></svg>
+    </button>
+    <div id="devices-page" class="pager-pages"></div>
+    <button id="devices-next" aria-label="Next page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6.5 15 12l-5.5 5.5"></path></svg>
+    </button>
   </div>
 </section>
 {% endblock %}

@@ -309,7 +309,7 @@ const state = {
   counter: { page: 1, totalPages: 1 },
   status: { page: 1, totalPages: 1 },
   heatmap: { page: 1, totalPages: 1, mode: "day", hour: 0 },
-  devices: { rows: [], selectedId: 0 },
+  devices: { rows: [], page: 1, totalPages: 1 },
   autoRefresh: { enabled: true, intervalMs: 60000, timerId: null },
   charts: {},
   pendingDelete: null,
@@ -429,109 +429,107 @@ function closeDeviceAuthDialog(result = null) {
   if (typeof resolver === "function") resolver(result);
 }
 
-function renderDeviceTabs() {
-  const host = qs("devices-tabs");
-  if (!host) return;
-  if (!state.devices.rows.length) {
-    host.innerHTML = `<div class="meta-line">No devices from agent yet.</div>`;
-    return;
-  }
-  const sortedRows = [...state.devices.rows].sort((a, b) => {
-    const ao = a?.is_online ? 1 : 0;
-    const bo = b?.is_online ? 1 : 0;
-    if (ao !== bo) return bo - ao; // online first
-    const an = String(a?.printer_name || "").toLowerCase();
-    const bn = String(b?.printer_name || "").toLowerCase();
-    return an.localeCompare(bn);
-  });
-  host.innerHTML = sortedRows
-    .map((r) => {
-      const live = r.is_online ? "Online" : "Offline";
-      const baseLabel = r.label || `${r.lan_uid} / ${r.printer_name}`;
-      const macTag = r.mac_id ? ` | ${r.mac_id}` : "";
-      return `<button class="device-tab-btn ${state.devices.selectedId === r.id ? "active" : ""}" type="button" data-id="${r.id}">${escapeHtml(`${baseLabel}${macTag}`)} <span class="device-live ${r.is_online ? "online" : "offline"}">(${live})</span></button>`;
-    })
-    .join("");
-  host.querySelectorAll(".device-tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.devices.selectedId = Number(btn.dataset.id || 0);
-      renderDeviceTabs();
-      loadDeviceEvents(state.devices.selectedId).catch(() => {});
-    });
-  });
+function devicesPerPage() {
+  const cfg = loadUiConfig();
+  const cols = Math.max(1, Number(cfg.card_columns || 5));
+  const rows = Math.max(1, Number(cfg.card_rows || 4));
+  return cols * rows;
 }
 
-async function loadDeviceEvents(printerId) {
-  if (!printerId) return;
-  const data = await jget(`/api/devices/${printerId}/events`);
-  const p = data.printer || {};
-  const head = qs("devices-head");
-  if (head) {
-    const live = p.is_online ? "Online" : "Offline";
-    head.innerHTML = `
-      <label class="device-enable-wrap">
-        <input id="device-enable-toggle" type="checkbox" ${p.enabled ? "checked" : ""} />
-        <span>Enable</span>
-      </label>
-      <div>
-        <div class="devices-title">${escapeHtml(`${p.lan_uid || "-"} / ${p.printer_name || "-"}`)}</div>
-        <div class="devices-meta">MAC: ${escapeHtml(p.mac_id || "-")} | IP: ${escapeHtml(p.ip || "-")} | Lead: ${escapeHtml(p.lead || "-")} | Agent: ${escapeHtml(p.agent_uid || "-")} | Live: <span class="device-live ${p.is_online ? "online" : "offline"}">${live}</span> | Last Seen: ${escapeHtml(fmtTimestampGmt7(p.last_seen_at))}</div>
-      </div>
-    `;
-    qs("device-enable-toggle")?.addEventListener("change", async (event) => {
-      const next = Boolean(event.target.checked);
-      const creds = await openDeviceAuthDialog(p.auth_user || "", p.auth_password || "");
-      if (!creds) {
-        event.target.checked = !next;
-        return;
-      }
-      const authUser = String(creds.user || "").trim();
-      const authPassword = String(creds.password || "").trim();
-      try {
-        const res = await fetch(`/api/devices/${printerId}/enable`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: next, auth_user: authUser, auth_password: authPassword }),
-        });
-        if (!res.ok) {
-          const payload = await res.json().catch(() => ({}));
-          throw new Error(payload.error || `HTTP ${res.status}`);
-        }
-        await loadDevicesPage();
-      } catch (err) {
-        event.target.checked = !next;
-        const msg = err && err.message ? err.message : "Lock/Unlock failed";
-        window.alert(msg);
-      }
-    });
+async function toggleDeviceEnabled(row, desiredEnabled, inputNode) {
+  const creds = await openDeviceAuthDialog(row.user || "", row.password || "");
+  if (!creds) {
+    if (inputNode) inputNode.checked = !desiredEnabled;
+    return;
   }
-  const tbody = qs("devices-events-table")?.querySelector("tbody");
-  if (!tbody) return;
-  const events = Array.isArray(data.events) ? data.events : [];
-  tbody.innerHTML = events.length
-    ? events.map((e) => `<tr><td>${escapeHtml(fmtTimestampGmt7(e.changed_at))}</td><td>${escapeHtml(e.kind || "-")}</td><td>${escapeHtml(e.value || "-")}</td></tr>`).join("")
-    : `<tr><td colspan="3">No status history</td></tr>`;
+  const authUser = String(creds.user || "").trim();
+  const authPassword = String(creds.password || "").trim();
+  try {
+    const res = await fetch(`/api/devices/${row.id}/enable`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: desiredEnabled, auth_user: authUser, auth_password: authPassword }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${res.status}`);
+    }
+    await loadDevicesPage();
+  } catch (err) {
+    if (inputNode) inputNode.checked = !desiredEnabled;
+    const msg = err && err.message ? err.message : "Enable/Disable failed";
+    window.alert(msg);
+  }
+}
+
+function renderDevicesGrid() {
+  const grid = qs("devices-grid");
+  const meta = qs("devices-meta");
+  if (!grid) return;
+  const rows = Array.isArray(state.devices.rows) ? state.devices.rows : [];
+  const perPage = devicesPerPage();
+  state.devices.totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+  state.devices.page = Math.min(state.devices.totalPages, Math.max(1, Number(state.devices.page || 1)));
+
+  renderPager("devices-page", state.devices.page, state.devices.totalPages, (targetPage) => {
+    state.devices.page = targetPage;
+    renderDevicesGrid();
+  });
+
+  if (!rows.length) {
+    grid.innerHTML = `<div class="counter-card loading">No devices from agent yet.</div>`;
+    if (meta) meta.textContent = "No device";
+    return;
+  }
+
+  const start = (state.devices.page - 1) * perPage;
+  const pageRows = rows.slice(start, start + perPage);
+  grid.innerHTML = pageRows
+    .map((r) => {
+      const rowId = Number(r.id || 0);
+      const counter = r.counter && typeof r.counter === "object" ? r.counter : {};
+      const status = r.status && typeof r.status === "object" ? r.status : {};
+      const total = Number(r.counter_total || counter.total || 0);
+      const systemStatus = String(r.status_system || status.system_status || status.printer_status || "-");
+      const statusLine = systemStatus.length > 140 ? `${systemStatus.slice(0, 140)}...` : systemStatus;
+      return `<article class="counter-card latest">
+        <header class="counter-card-head">
+          <div class="counter-card-index">#${rowId}</div>
+          <div class="counter-card-time">${escapeHtml(r.printer_name || "unknown")} ${escapeHtml(r.ip ? `(${r.ip})` : "")}</div>
+        </header>
+        <div class="counter-card-body">
+          <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v">${escapeHtml(r.lan_uid || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">MAC ID</span><span class="counter-v">${escapeHtml(r.mac_id || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">Counter</span><span class="counter-v">${fmtNumber(total)}</span></div>
+          <div class="counter-kv"><span class="counter-k">Status</span><span class="counter-v">${escapeHtml(statusLine || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">Updated</span><span class="counter-v">${escapeHtml(fmtTimestampGmt7(r.updated_at || r.last_counter_at || r.last_status_at))}</span></div>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  if (meta) {
+    meta.textContent = `Devices: ${rows.length} | Page ${state.devices.page}/${state.devices.totalPages} | Per page ${perPage}`;
+  }
 }
 
 async function loadDevicesPage() {
   const lead = (qs("global-filter-lead")?.value || "").trim();
   const query = new URLSearchParams({ lead });
-  const data = await jget(`/api/devices/list?${query.toString()}`);
-  state.devices.rows = Array.isArray(data.rows) ? data.rows : [];
-  if (!state.devices.rows.length) {
-    state.devices.selectedId = 0;
-  } else if (!state.devices.rows.some((x) => x.id === state.devices.selectedId)) {
-    state.devices.selectedId = state.devices.rows[0].id;
-  }
-  renderDeviceTabs();
-  if (state.devices.selectedId) {
-    await loadDeviceEvents(state.devices.selectedId);
-  } else {
-    const head = qs("devices-head");
-    if (head) head.innerHTML = `<div class="meta-line">No device selected.</div>`;
-    const tbody = qs("devices-events-table")?.querySelector("tbody");
-    if (tbody) tbody.innerHTML = `<tr><td colspan="3">No data</td></tr>`;
-  }
+  const data = await jget(`/api/infor/list?${query.toString()}`);
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  state.devices.rows = rows.sort((a, b) => {
+    const at = String(a?.updated_at || a?.last_counter_at || "").trim();
+    const bt = String(b?.updated_at || b?.last_counter_at || "").trim();
+    if (at !== bt) return bt.localeCompare(at);
+    const an = String(a?.printer_name || "").toLowerCase();
+    const bn = String(b?.printer_name || "").toLowerCase();
+    return an.localeCompare(bn);
+  });
+  state.devices.totalPages = Math.max(1, Math.ceil(state.devices.rows.length / devicesPerPage()));
+  if (state.devices.page > state.devices.totalPages) state.devices.page = state.devices.totalPages;
+  if (state.devices.page < 1) state.devices.page = 1;
+  renderDevicesGrid();
 }
 
 function syncFavoriteButtonOnGrid(kind, rowId, isActive) {
@@ -1047,6 +1045,16 @@ async function bind() {
 
   if (page === "dashboard") loadSummary().catch(() => {});
   if (page === "devices" || page === "infor") loadDevicesPage().catch(() => {});
+  if (page === "devices" || page === "infor") {
+    qs("devices-prev")?.addEventListener("click", () => {
+      state.devices.page = Math.max(1, Number(state.devices.page || 1) - 1);
+      renderDevicesGrid();
+    });
+    qs("devices-next")?.addEventListener("click", () => {
+      state.devices.page = Math.min(Number(state.devices.totalPages || 1), Number(state.devices.page || 1) + 1);
+      renderDevicesGrid();
+    });
+  }
   if (page === "configs") {
     qs("cfg-chart-columns").value = String(uiConfig.chart_columns);
     qs("cfg-card-columns").value = String(uiConfig.card_columns);

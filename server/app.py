@@ -65,6 +65,16 @@ def _to_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_status_payload(payload: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in payload.items():
+        k = _to_text(key)
+        if not k:
+            continue
+        out[k] = _to_text(value)
+    return out
+
+
 def _safe_path_token(value: str) -> str:
     text = _to_text(value)
     if not text:
@@ -1935,62 +1945,86 @@ def create_app() -> Flask:
             if not device_enabled:
                 skipped_disabled = 1
 
-            if counter_data and device_enabled:
-                normalized_counter = _normalize_counter_payload(counter_data)
-                begin_record_id_for_counter: int | None = None
-                latest_begin_row = session.execute(
-                    select(CounterInfor.begin_record_id)
-                    .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
-                    .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-                if isinstance(latest_begin_row, int):
-                    begin_record_id_for_counter = latest_begin_row
-                baseline_row = session.execute(
-                    select(CounterBaseline).where(CounterBaseline.lead == lead, CounterBaseline.lan_uid == lan_uid, CounterBaseline.ip == ip)
-                ).scalar_one_or_none()
-                if baseline_row is None:
-                    baseline_row = CounterBaseline(
-                        lead=lead,
-                        lan_uid=lan_uid,
-                        agent_uid=agent_uid,
-                        printer_name=printer_name or "Unknown Printer",
-                        ip=ip,
-                        baseline_timestamp=timestamp,
-                        raw_payload=normalized_counter,
-                    )
-                    session.add(baseline_row)
-                    delta_counter = {k: 0 for k in normalized_counter}
-                else:
-                    baseline_payload = baseline_row.raw_payload if isinstance(baseline_row.raw_payload, dict) else {}
-                    normalized_baseline = _normalize_counter_payload(baseline_payload)
-                    delta_counter, has_reset = _compute_delta_payload(normalized_counter, normalized_baseline)
-                    if has_reset:
-                        baseline_row.baseline_timestamp = timestamp
-                        baseline_row.raw_payload = normalized_counter
-                        baseline_row.agent_uid = agent_uid
-                        baseline_row.printer_name = printer_name or baseline_row.printer_name
-                        delta_counter = {k: 0 for k in normalized_counter}
-                        begin_record_id_for_counter = None
+            # Server-side dedupe is based on the latest unified root row (DeviceInfor).
+            root_mac_id = _to_text(mac_id) or (f"IP:{ip}" if ip else "UNKNOWN")
+            infor = session.execute(
+                select(DeviceInfor).where(
+                    DeviceInfor.lead == lead,
+                    DeviceInfor.lan_uid == lan_uid,
+                    DeviceInfor.mac_id == root_mac_id,
+                )
+            ).scalar_one_or_none()
+            prev_counter_data = infor.counter_data if infor and isinstance(infor.counter_data, dict) else {}
+            prev_status_data = infor.status_data if infor and isinstance(infor.status_data, dict) else {}
+            normalized_counter = _normalize_counter_payload(counter_data) if counter_data else {}
+            normalized_prev_counter = _normalize_counter_payload(prev_counter_data) if prev_counter_data else {}
+            normalized_status = _normalize_status_payload(status_data) if status_data else {}
+            normalized_prev_status = _normalize_status_payload(prev_status_data) if prev_status_data else {}
+            duplicate_counter_by_infor = bool(counter_data) and normalized_counter == normalized_prev_counter
+            duplicate_status_by_infor = bool(status_data) and normalized_status == normalized_prev_status
 
-                latest_counter_row = session.execute(
-                    select(CounterInfor)
-                    .where(
-                        CounterInfor.lead == lead,
-                        CounterInfor.lan_uid == lan_uid,
-                        CounterInfor.agent_uid == agent_uid,
-                        CounterInfor.ip == ip,
-                        CounterInfor.mac_id == mac_id,
-                        CounterInfor.raw_payload == delta_counter,
-                    )
-                    .order_by(CounterInfor.updated_at.desc(), CounterInfor.id.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-                if latest_counter_row is not None:
-                    latest_counter_row.updated_at = datetime.now(timezone.utc)
+            if counter_data and device_enabled:
+                if duplicate_counter_by_infor:
                     skipped_counter = 1
                 else:
-                    row = CounterInfor(
+                    begin_record_id_for_counter: int | None = None
+                    latest_begin_row = session.execute(
+                        select(CounterInfor.begin_record_id)
+                        .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
+                        .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if isinstance(latest_begin_row, int):
+                        begin_record_id_for_counter = latest_begin_row
+                    baseline_row = session.execute(
+                        select(CounterBaseline).where(
+                            CounterBaseline.lead == lead,
+                            CounterBaseline.lan_uid == lan_uid,
+                            CounterBaseline.ip == ip,
+                        )
+                    ).scalar_one_or_none()
+                    if baseline_row is None:
+                        baseline_row = CounterBaseline(
+                            lead=lead,
+                            lan_uid=lan_uid,
+                            agent_uid=agent_uid,
+                            printer_name=printer_name or "Unknown Printer",
+                            ip=ip,
+                            baseline_timestamp=timestamp,
+                            raw_payload=normalized_counter,
+                        )
+                        session.add(baseline_row)
+                        delta_counter = {k: 0 for k in normalized_counter}
+                    else:
+                        baseline_payload = baseline_row.raw_payload if isinstance(baseline_row.raw_payload, dict) else {}
+                        normalized_baseline = _normalize_counter_payload(baseline_payload)
+                        delta_counter, has_reset = _compute_delta_payload(normalized_counter, normalized_baseline)
+                        if has_reset:
+                            baseline_row.baseline_timestamp = timestamp
+                            baseline_row.raw_payload = normalized_counter
+                            baseline_row.agent_uid = agent_uid
+                            baseline_row.printer_name = printer_name or baseline_row.printer_name
+                            delta_counter = {k: 0 for k in normalized_counter}
+                            begin_record_id_for_counter = None
+
+                    latest_counter_row = session.execute(
+                        select(CounterInfor)
+                        .where(
+                            CounterInfor.lead == lead,
+                            CounterInfor.lan_uid == lan_uid,
+                            CounterInfor.agent_uid == agent_uid,
+                            CounterInfor.ip == ip,
+                            CounterInfor.mac_id == mac_id,
+                            CounterInfor.raw_payload == delta_counter,
+                        )
+                        .order_by(CounterInfor.updated_at.desc(), CounterInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if latest_counter_row is not None:
+                        latest_counter_row.updated_at = datetime.now(timezone.utc)
+                        skipped_counter = 1
+                    else:
+                        row = CounterInfor(
                             lead=lead,
                             lan_uid=lan_uid,
                             agent_uid=agent_uid,
@@ -2016,40 +2050,43 @@ def create_app() -> Flask:
                             raw_payload=delta_counter,
                             updated_at=datetime.now(timezone.utc),
                         )
-                    session.add(row)
-                    session.flush()
-                    if row.begin_record_id is None:
-                        row.begin_record_id = row.id
-                    inserted_counter = 1
+                        session.add(row)
+                        session.flush()
+                        if row.begin_record_id is None:
+                            row.begin_record_id = row.id
+                        inserted_counter = 1
 
             if status_data and device_enabled:
-                begin_record_id_for_status: int | None = None
-                latest_status_begin = session.execute(
-                    select(StatusInfor.begin_record_id)
-                    .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
-                    .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-                if isinstance(latest_status_begin, int):
-                    begin_record_id_for_status = latest_status_begin
-                latest_status_row = session.execute(
-                    select(StatusInfor)
-                    .where(
-                        StatusInfor.lead == lead,
-                        StatusInfor.lan_uid == lan_uid,
-                        StatusInfor.agent_uid == agent_uid,
-                        StatusInfor.ip == ip,
-                        StatusInfor.mac_id == mac_id,
-                        StatusInfor.raw_payload == status_data,
-                    )
-                    .order_by(StatusInfor.updated_at.desc(), StatusInfor.id.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-                if latest_status_row is not None:
-                    latest_status_row.updated_at = datetime.now(timezone.utc)
+                if duplicate_status_by_infor:
                     skipped_status = 1
                 else:
-                    row = StatusInfor(
+                    begin_record_id_for_status: int | None = None
+                    latest_status_begin = session.execute(
+                        select(StatusInfor.begin_record_id)
+                        .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
+                        .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if isinstance(latest_status_begin, int):
+                        begin_record_id_for_status = latest_status_begin
+                    latest_status_row = session.execute(
+                        select(StatusInfor)
+                        .where(
+                            StatusInfor.lead == lead,
+                            StatusInfor.lan_uid == lan_uid,
+                            StatusInfor.agent_uid == agent_uid,
+                            StatusInfor.ip == ip,
+                            StatusInfor.mac_id == mac_id,
+                            StatusInfor.raw_payload == status_data,
+                        )
+                        .order_by(StatusInfor.updated_at.desc(), StatusInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if latest_status_row is not None:
+                        latest_status_row.updated_at = datetime.now(timezone.utc)
+                        skipped_status = 1
+                    else:
+                        row = StatusInfor(
                             lead=lead,
                             lan_uid=lan_uid,
                             agent_uid=agent_uid,
@@ -2074,21 +2111,13 @@ def create_app() -> Flask:
                             raw_payload=status_data,
                             updated_at=datetime.now(timezone.utc),
                         )
-                    session.add(row)
-                    session.flush()
-                    if row.begin_record_id is None:
-                        row.begin_record_id = row.id
-                    inserted_status = 1
+                        session.add(row)
+                        session.flush()
+                        if row.begin_record_id is None:
+                            row.begin_record_id = row.id
+                        inserted_status = 1
 
             # Unified root record for downstream filtering/reporting.
-            root_mac_id = _to_text(mac_id) or (f"IP:{ip}" if ip else "UNKNOWN")
-            infor = session.execute(
-                select(DeviceInfor).where(
-                    DeviceInfor.lead == lead,
-                    DeviceInfor.lan_uid == lan_uid,
-                    DeviceInfor.mac_id == root_mac_id,
-                )
-            ).scalar_one_or_none()
             if infor is None:
                 infor = DeviceInfor(
                     lead=lead,
@@ -2109,10 +2138,10 @@ def create_app() -> Flask:
                 infor.agent_uid = agent_uid or infor.agent_uid
                 infor.printer_name = printer_name or infor.printer_name
                 infor.ip = ip or infor.ip
-                if counter_data and isinstance(counter_data, dict):
+                if counter_data and isinstance(counter_data, dict) and not duplicate_counter_by_infor:
                     infor.counter_data = counter_data
                     infor.last_counter_at = timestamp
-                if status_data and isinstance(status_data, dict):
+                if status_data and isinstance(status_data, dict) and not duplicate_status_by_infor:
                     infor.status_data = status_data
                     infor.last_status_at = timestamp
                 infor.updated_at = datetime.now(timezone.utc)
@@ -2223,30 +2252,73 @@ def create_app() -> Flask:
     def infor_list() -> Any:
         lead = _to_text(request.args.get("lead"))
         with session_factory() as session:
-            stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+            _refresh_stale_offline(session=session, lead=lead)
+            session.commit()
+            printer_stmt = select(Printer).where(Printer.is_online.is_(True)).order_by(
+                Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc()
+            )
             if lead:
-                stmt = stmt.where(DeviceInfor.lead == lead)
-            rows = session.execute(stmt).scalars().all()
+                printer_stmt = printer_stmt.where(Printer.lead == lead)
+            printers = session.execute(printer_stmt).scalars().all()
+            rows: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for p in printers:
+                mac_id = _to_text(p.mac_address).replace("-", ":").upper()
+                if not mac_id:
+                    continue
+                dedupe_key = (_to_text(p.lead), _to_text(p.lan_uid), mac_id)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                d = session.execute(
+                    select(DeviceInfor)
+                    .where(
+                        DeviceInfor.lead == p.lead,
+                        DeviceInfor.lan_uid == p.lan_uid,
+                        DeviceInfor.mac_id == mac_id,
+                    )
+                    .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if d is None and _to_text(p.ip):
+                    d = session.execute(
+                        select(DeviceInfor)
+                        .where(
+                            DeviceInfor.lead == p.lead,
+                            DeviceInfor.lan_uid == p.lan_uid,
+                            DeviceInfor.ip == p.ip,
+                        )
+                        .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                if d is None:
+                    continue
+                counter_data = d.counter_data if isinstance(d.counter_data, dict) else {}
+                status_data = d.status_data if isinstance(d.status_data, dict) else {}
+                if not counter_data and not status_data:
+                    continue
+                rows.append(
+                    {
+                        "id": int(p.id),
+                        "lead": p.lead,
+                        "lan_uid": p.lan_uid,
+                        "agent_uid": p.agent_uid,
+                        "printer_name": p.printer_name or d.printer_name,
+                        "ip": p.ip or d.ip,
+                        "mac_id": mac_id,
+                        "counter": counter_data,
+                        "status": status_data,
+                        "counter_total": _to_int(counter_data.get("total")) or 0,
+                        "status_system": _to_text(status_data.get("system_status")) or _to_text(status_data.get("printer_status")),
+                        "last_counter_at": d.last_counter_at.isoformat() if d.last_counter_at else "",
+                        "last_status_at": d.last_status_at.isoformat() if d.last_status_at else "",
+                        "updated_at": d.updated_at.isoformat() if d.updated_at else "",
+                    }
+                )
+            rows.sort(key=lambda x: (_to_text(x.get("lan_uid")), _to_text(x.get("mac_id"))))
             return jsonify(
                 {
-                    "rows": [
-                        {
-                            "id": int(r.id),
-                            "lead": r.lead,
-                            "lan_uid": r.lan_uid,
-                            "mac_id": r.mac_id,
-                            "agent_uid": r.agent_uid,
-                            "printer_name": r.printer_name,
-                            "ip": r.ip,
-                            "counter_data": r.counter_data if isinstance(r.counter_data, dict) else {},
-                            "status_data": r.status_data if isinstance(r.status_data, dict) else {},
-                            "last_counter_at": r.last_counter_at.isoformat() if r.last_counter_at else "",
-                            "last_status_at": r.last_status_at.isoformat() if r.last_status_at else "",
-                            "created_at": r.created_at.isoformat() if r.created_at else "",
-                            "updated_at": r.updated_at.isoformat() if r.updated_at else "",
-                        }
-                        for r in rows
-                    ]
+                    "rows": rows
                 }
             )
 

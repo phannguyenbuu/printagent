@@ -99,7 +99,12 @@ def _clean_printer_display_name(name: str, ip: str = "") -> str:
     text = str(name or "").strip()
     if text:
         text = re.sub(r"^\s*(m[aáàạảã]y|may)\s*photo\s*", "", text, flags=re.IGNORECASE).strip(" -_()")
-    return text or str(ip or "").strip() or "Printer"
+    if text:
+        normalized = _normalize_ipv4(text)
+        if normalized and (not ip or normalized == _normalize_ipv4(ip)):
+            return "unknown"
+        return text
+    return "unknown"
 
 
 def _extract_port_link_id(port_name: str) -> str:
@@ -479,7 +484,7 @@ def _scan_devices_payload(
              
         is_ricoh = bool(is_ricoh_result or is_ricoh_mac or is_known_ricoh)
         
-        display_name = ip
+        display_name = "unknown"
         if is_ricoh:
             try:
                 # Create a temporary printer object for name discovery
