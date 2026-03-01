@@ -62,20 +62,17 @@ class RicohCollectorMixin(RicohServiceBase):
             "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
         ]
         last_exc: Exception | None = None
-        try:
-            session = self.create_http_client(printer, authenticated=False)
-            for path in paths:
-                try:
-                    html = self._guest_get(session, printer, path)
-                    return html, f"http://{printer.ip}{path}"
-                except Exception as exc:  # noqa: BLE001
-                    last_exc = exc
-                    continue
-            if last_exc is not None:
-                raise last_exc
-            raise RuntimeError("Unable to load guest mainFrame.cgi")
-        finally:
-            self._logout_after_collect(printer, source="read_mainframe")
+        session = self.create_http_client(printer, authenticated=False)
+        for path in paths:
+            try:
+                html = self._guest_get(session, printer, path)
+                return html, f"http://{printer.ip}{path}"
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                continue
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Unable to load guest mainFrame.cgi")
 
     def _read_guest_mainframe(self, printer: Printer) -> str:
         html, _ = self._read_guest_mainframe_with_source(printer)
@@ -83,21 +80,15 @@ class RicohCollectorMixin(RicohServiceBase):
 
     def _read_guest_counter_with_source(self, printer: Printer) -> tuple[str, str]:
         path = "/web/guest/en/websys/status/getUnificationCounter.cgi"
-        try:
-            session = self.create_http_client(printer, authenticated=False)
-            html = self._guest_get(session, printer, path)
-            return html, f"http://{printer.ip}{path}"
-        finally:
-            self._logout_after_collect(printer, source="read_counter")
+        session = self.create_http_client(printer, authenticated=False)
+        html = self._guest_get(session, printer, path)
+        return html, f"http://{printer.ip}{path}"
 
     def _read_guest_status_with_source(self, printer: Printer) -> tuple[str, str]:
         path = "/web/guest/en/websys/webArch/getStatus.cgi"
-        try:
-            session = self.create_http_client(printer, authenticated=False)
-            html = self._guest_get(session, printer, path)
-            return html, f"http://{printer.ip}{path}"
-        finally:
-            self._logout_after_collect(printer, source="read_status")
+        session = self.create_http_client(printer, authenticated=False)
+        html = self._guest_get(session, printer, path)
+        return html, f"http://{printer.ip}{path}"
 
     @staticmethod
     def _extract_guest_cgi_candidates(text: str) -> list[str]:
@@ -391,23 +382,17 @@ class RicohCollectorMixin(RicohServiceBase):
         return html
 
     def read_device_info(self, printer: Printer) -> str:
-        try:
-            session = self.create_http_client(printer, authenticated=False)
-            # Public guest endpoint containing Model Name + Machine ID.
-            return self._guest_get(session, printer, "/web/guest/en/websys/status/configuration.cgi")
-        finally:
-            self._logout_after_collect(printer, source="read_device_info")
+        session = self.create_http_client(printer, authenticated=False)
+        # Public guest endpoint containing Model Name + Machine ID.
+        return self._guest_get(session, printer, "/web/guest/en/websys/status/configuration.cgi")
 
     def read_status(self, printer: Printer) -> str:
         html, _ = self._read_guest_status_with_source(printer)
         return html
 
     def read_network_interface(self, printer: Printer) -> str:
-        try:
-            html, _ = self._read_interface_public_with_source(printer)
-            return html
-        finally:
-            self._logout_after_collect(printer, source="read_network_interface")
+        html, _ = self._read_interface_public_with_source(printer)
+        return html
 
     def fetch_mac_address_direct(self, ip: str) -> str:
         printer = Printer(name="MAC Discovery", ip=ip, user="", password="", printer_type="ricoh")
