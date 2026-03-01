@@ -43,11 +43,18 @@
     const data = payload || {};
     const counter = data.counter_data || {};
     const status = data.status_data || {};
+    const renderValue = (value) => {
+      if (value === 0) return "0";
+      const text = String(value ?? "").trim();
+      return text ? text : "-";
+    };
     const lines = [];
     lines.push("COUNTER DATA");
     lines.push(`printer_name: ${data.printer_name || "-"}`);
     lines.push(`ip: ${data.ip || "-"}`);
     lines.push(`timestamp: ${data.timestamp || "-"}`);
+    if (data.counter_error) lines.push(`counter_error: ${data.counter_error}`);
+    if (data.status_error) lines.push(`status_error: ${data.status_error}`);
     lines.push("");
     lines.push("counter_data:");
     const orderedKeys = [
@@ -66,9 +73,19 @@
       "a3_dlt",
       "duplex",
     ];
-    orderedKeys.forEach((key) => {
-      lines.push(`  - ${key}: ${counter[key] || "0"}`);
+    const hasCounterData = orderedKeys.some((key) => {
+      if (!(key in counter)) return false;
+      const value = counter[key];
+      if (value === 0) return true;
+      return String(value ?? "").trim() !== "";
     });
+    if (!hasCounterData) {
+      lines.push("  - (empty)");
+    } else {
+      orderedKeys.forEach((key) => {
+        lines.push(`  - ${key}: ${renderValue(counter[key])}`);
+      });
+    }
     lines.push("");
     lines.push("status_data:");
     const statusKeys = Object.keys(status).sort();
@@ -640,6 +657,8 @@
       counter_data: counterPayload.counter_data || {},
       status_data: statusPayload.status_data || {},
       html: counterPayload.html || "",
+      counter_error: counterResult.ok ? "" : String(counterResult.error || ""),
+      status_error: statusResult.ok ? "" : String(statusResult.error || ""),
     };
     return resultModalState.counterPayload;
   }
