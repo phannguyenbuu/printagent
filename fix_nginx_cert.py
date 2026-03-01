@@ -1,7 +1,7 @@
 import paramiko
 
 def fix_nginx_and_install_cert():
-    hostname = "31.97.76.62"
+    hostname = "agentapi.quanlymay.com"
     username = "root"
     password = "@baoLong0511"
     

@@ -27,6 +27,7 @@ LOGGER = logging.getLogger(__name__)
 CONTROL_LOG_FILE = Path("storage/data/control_actions.csv")
 LAN_FINGER_FILE = Path("storage/data/.lan_finger.json")
 SCAN_UPLOAD_STATE_FILE = Path("storage/data/scan_upload_state.json")
+LAST_POLLING_DATA_FILE = Path("storage/data/last_data.json")
 
 
 class PollingBridge:
@@ -256,6 +257,7 @@ class PollingBridge:
             return []
 
     def _post_payload(self, payload: dict) -> dict:
+        self._write_last_payload(payload)
         url = self._config.get_string("polling.url").strip()
         token = self._config.get_string("polling.token").strip()
         headers = {"Content-Type": "application/json", "X-Lead-Token": token}
@@ -276,6 +278,19 @@ class PollingBridge:
                     time.sleep(2)
         if last_exc is not None:
             raise last_exc
+
+    @staticmethod
+    def _write_last_payload(payload: dict) -> None:
+        try:
+            LAST_POLLING_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "payload": payload,
+            }
+            LAST_POLLING_DATA_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+            LOGGER.info("Saved polling payload to %s", LAST_POLLING_DATA_FILE.as_posix())
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to write last polling payload file: %s", exc)
 
     @staticmethod
     def _normalize_ipv4(value: str) -> str:

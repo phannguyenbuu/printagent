@@ -16,4 +16,4 @@ def get_vps_info(hostname, username, password):
         sys.exit(1)
 
 if __name__ == "__main__":
-    get_vps_info("31.97.76.62", "root", "@baoLong0511")
+    get_vps_info("agentapi.quanlymay.com", "root", "@baoLong0511")

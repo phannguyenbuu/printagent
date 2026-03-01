@@ -8,7 +8,7 @@ def progress(filename, size, sent):
     sys.stdout.flush()
 
 def deploy():
-    hostname = "31.97.76.62"
+    hostname = "agentapi.quanlymay.com"
     username = "root"
     password = "@baoLong0511"
     

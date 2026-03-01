@@ -1,4 +1,4 @@
-scp -r server/* root@31.97.76.62:goprinx
+scp -r server/* root@agentapi.quanlymay.com:goprinx
 @baoLong0511
 # Flask Printer Agent
 bash server/migrate_printer_control.sh

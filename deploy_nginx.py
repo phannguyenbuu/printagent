@@ -2,7 +2,7 @@ import paramiko
 import os
 
 def deploy_nginx_config():
-    hostname = "31.97.76.62"
+    hostname = "agentapi.quanlymay.com"
     username = "root"
     password = "@baoLong0511"
     

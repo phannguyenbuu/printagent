@@ -67,6 +67,24 @@ def _to_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _to_text_max(value: Any, max_len: int) -> str:
+    text = _to_text(value)
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
+
+
+def _to_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list, bool, int, float)):
+        return value
+    text = _to_text(value)
+    return text if text else None
+
+
 def _normalize_status_payload(payload: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in payload.items():
@@ -2111,23 +2129,23 @@ def create_app() -> Flask:
                             lan_uid=lan_uid,
                             agent_uid=agent_uid,
                             timestamp=timestamp,
-                            printer_name=printer_name or "Unknown Printer",
-                            ip=ip,
-                            mac_id=mac_id,
+                            printer_name=_to_text_max(printer_name or "Unknown Printer", 255),
+                            ip=_to_text_max(ip, 64),
+                            mac_id=_to_text_max(mac_id, 64),
                             begin_record_id=begin_record_id_for_status,
-                            system_status=_to_text(status_data.get("system_status")),
-                            printer_status=_to_text(status_data.get("printer_status")),
-                            printer_alerts=_to_text(status_data.get("printer_alerts")),
-                            copier_status=_to_text(status_data.get("copier_status")),
-                            copier_alerts=_to_text(status_data.get("copier_alerts")),
-                            scanner_status=_to_text(status_data.get("scanner_status")),
-                            scanner_alerts=_to_text(status_data.get("scanner_alerts")),
-                            toner_black=_to_text(status_data.get("toner_black")),
-                            tray_1_status=_to_text(status_data.get("tray_1_status")),
-                            tray_2_status=_to_text(status_data.get("tray_2_status")),
-                            tray_3_status=_to_text(status_data.get("tray_3_status")),
-                            bypass_tray_status=_to_text(status_data.get("bypass_tray_status")),
-                            other_info=_to_text(status_data.get("other_info")),
+                            system_status=_to_json_value(status_data.get("system_status")),
+                            printer_status=_to_json_value(status_data.get("printer_status")),
+                            printer_alerts=_to_json_value(status_data.get("printer_alerts")),
+                            copier_status=_to_json_value(status_data.get("copier_status")),
+                            copier_alerts=_to_json_value(status_data.get("copier_alerts")),
+                            scanner_status=_to_json_value(status_data.get("scanner_status")),
+                            scanner_alerts=_to_json_value(status_data.get("scanner_alerts")),
+                            toner_black=_to_json_value(status_data.get("toner_black")),
+                            tray_1_status=_to_json_value(status_data.get("tray_1_status")),
+                            tray_2_status=_to_json_value(status_data.get("tray_2_status")),
+                            tray_3_status=_to_json_value(status_data.get("tray_3_status")),
+                            bypass_tray_status=_to_json_value(status_data.get("bypass_tray_status")),
+                            other_info=_to_json_value(status_data.get("other_info")),
                             raw_payload=status_data,
                             updated_at=datetime.now(timezone.utc),
                         )

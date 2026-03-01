@@ -1,7 +1,7 @@
 import paramiko
 
 def explore_portal():
-    hostname = "31.97.76.62"
+    hostname = "agentapi.quanlymay.com"
     username = "root"
     password = "@baoLong0511"
     
