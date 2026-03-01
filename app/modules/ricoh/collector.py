@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -546,7 +547,10 @@ class RicohCollectorMixin(RicohServiceBase):
     @staticmethod
     def parse_counter(html: str) -> dict[str, str]:
         results = {}
-        plain = RicohServiceBase._strip_html(html)
+        # Keep spacing between nodes so labels like "Copier" + "Black & White"
+        # are not merged into "CopierBlack".
+        plain = unescape(re.sub(r"<[^>]*>", " ", html or ""))
+        plain = re.sub(r"\s+", " ", plain).strip()
 
         def _find_number(pattern: str, text: str) -> str:
             match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)

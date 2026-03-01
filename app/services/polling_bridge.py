@@ -87,12 +87,12 @@ class PollingBridge:
             return ""
 
     def interval_seconds(self) -> int:
-        raw = self._config.get_string("polling.interval_seconds", "15").strip()
+        raw = self._config.get_string("polling.interval_seconds", "300").strip()
         try:
             value = int(raw)
             return max(10, value)
         except Exception:  # noqa: BLE001
-            return 15
+            return 300
 
     def scan_enabled(self) -> bool:
         return self._config.get_bool("polling.scan_enabled", True)
@@ -824,6 +824,7 @@ if ($r) { $r }
                         "local_ip": local_ip,
                         "printer_name": counter_payload.get("printer_name", printer.name),
                         "ip": counter_payload.get("ip", printer.ip),
+                        "mac_id": printer.mac_address,
                         "mac_address": printer.mac_address,
                         "timestamp": counter_payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         "counter_data": counter_data,

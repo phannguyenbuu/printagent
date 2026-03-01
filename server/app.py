@@ -552,6 +552,13 @@ def create_app() -> Flask:
         
         # Self-heal AgentNode table
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        # Self-heal CounterInfor / StatusInfor for dedupe + touch-updated flow
+        session.execute(text('ALTER TABLE "CounterInfor" ADD COLUMN IF NOT EXISTS mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
+        session.execute(text('ALTER TABLE "CounterInfor" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        session.execute(text('ALTER TABLE "StatusInfor" ADD COLUMN IF NOT EXISTS mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
+        session.execute(text('ALTER TABLE "StatusInfor" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        session.execute(text('CREATE INDEX IF NOT EXISTS idx_counterinfor_lead_lan_agent_ip_mac ON "CounterInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
+        session.execute(text('CREATE INDEX IF NOT EXISTS idx_statusinfor_lead_lan_agent_ip_mac ON "StatusInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
         session.commit()
 
     lead_key_map = cfg.lead_keys()
@@ -1867,7 +1874,8 @@ def create_app() -> Flask:
         timestamp = _parse_timestamp(body.get("timestamp"))
         counter_data = body.get("counter_data") if isinstance(body.get("counter_data"), dict) else {}
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
-        device_mac_address = _to_text(body.get("mac_address")) or _to_text((status_data.get("other_info") or "")[:64])
+        mac_id = _to_text(body.get("mac_id")) or _to_text(body.get("mac_address"))
+        device_mac_address = mac_id or _to_text((status_data.get("other_info") or "")[:64])
         LOGGER.info(
             "polling request: lead=%s lan=%s agent=%s printer=%s ip=%s ts=%s counter_keys=%s status_keys=%s",
             lead,
@@ -1958,18 +1966,20 @@ def create_app() -> Flask:
                         begin_record_id_for_counter = None
 
                 latest_counter_row = session.execute(
-                    select(CounterInfor.timestamp, CounterInfor.raw_payload)
-                    .where(CounterInfor.lead == lead, CounterInfor.lan_uid == lan_uid, CounterInfor.ip == ip)
-                    .order_by(CounterInfor.timestamp.desc(), CounterInfor.id.desc())
+                    select(CounterInfor)
+                    .where(
+                        CounterInfor.lead == lead,
+                        CounterInfor.lan_uid == lan_uid,
+                        CounterInfor.agent_uid == agent_uid,
+                        CounterInfor.ip == ip,
+                        CounterInfor.mac_id == mac_id,
+                        CounterInfor.raw_payload == delta_counter,
+                    )
+                    .order_by(CounterInfor.updated_at.desc(), CounterInfor.id.desc())
                     .limit(1)
-                ).first()
-                latest_counter_ts = latest_counter_row[0] if latest_counter_row else None
-                latest_counter_payload = latest_counter_row[1] if latest_counter_row else None
-                if (
-                    isinstance(latest_counter_payload, dict)
-                    and latest_counter_payload == delta_counter
-                    and _is_same_utc_minute(latest_counter_ts, timestamp)
-                ):
+                ).scalar_one_or_none()
+                if latest_counter_row is not None:
+                    latest_counter_row.updated_at = datetime.now(timezone.utc)
                     skipped_counter = 1
                 else:
                     row = CounterInfor(
@@ -1979,6 +1989,7 @@ def create_app() -> Flask:
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
+                            mac_id=mac_id,
                             begin_record_id=begin_record_id_for_counter,
                             total=delta_counter.get("total"),
                             copier_bw=delta_counter.get("copier_bw"),
@@ -1995,6 +2006,7 @@ def create_app() -> Flask:
                             a3_dlt=delta_counter.get("a3_dlt"),
                             duplex=delta_counter.get("duplex"),
                             raw_payload=delta_counter,
+                            updated_at=datetime.now(timezone.utc),
                         )
                     session.add(row)
                     session.flush()
@@ -2013,18 +2025,20 @@ def create_app() -> Flask:
                 if isinstance(latest_status_begin, int):
                     begin_record_id_for_status = latest_status_begin
                 latest_status_row = session.execute(
-                    select(StatusInfor.timestamp, StatusInfor.raw_payload)
-                    .where(StatusInfor.lead == lead, StatusInfor.lan_uid == lan_uid, StatusInfor.ip == ip)
-                    .order_by(StatusInfor.timestamp.desc(), StatusInfor.id.desc())
+                    select(StatusInfor)
+                    .where(
+                        StatusInfor.lead == lead,
+                        StatusInfor.lan_uid == lan_uid,
+                        StatusInfor.agent_uid == agent_uid,
+                        StatusInfor.ip == ip,
+                        StatusInfor.mac_id == mac_id,
+                        StatusInfor.raw_payload == status_data,
+                    )
+                    .order_by(StatusInfor.updated_at.desc(), StatusInfor.id.desc())
                     .limit(1)
-                ).first()
-                latest_status_ts = latest_status_row[0] if latest_status_row else None
-                latest_status_payload = latest_status_row[1] if latest_status_row else None
-                if (
-                    isinstance(latest_status_payload, dict)
-                    and latest_status_payload == status_data
-                    and _is_same_utc_minute(latest_status_ts, timestamp)
-                ):
+                ).scalar_one_or_none()
+                if latest_status_row is not None:
+                    latest_status_row.updated_at = datetime.now(timezone.utc)
                     skipped_status = 1
                 else:
                     row = StatusInfor(
@@ -2034,6 +2048,7 @@ def create_app() -> Flask:
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
+                            mac_id=mac_id,
                             begin_record_id=begin_record_id_for_status,
                             system_status=_to_text(status_data.get("system_status")),
                             printer_status=_to_text(status_data.get("printer_status")),
@@ -2049,6 +2064,7 @@ def create_app() -> Flask:
                             bypass_tray_status=_to_text(status_data.get("bypass_tray_status")),
                             other_info=_to_text(status_data.get("other_info")),
                             raw_payload=status_data,
+                            updated_at=datetime.now(timezone.utc),
                         )
                     session.add(row)
                     session.flush()

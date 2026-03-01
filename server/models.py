@@ -25,6 +25,7 @@ class CounterInfor(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     printer_name: Mapped[str] = mapped_column(String(255))
     ip: Mapped[str] = mapped_column(String(64), index=True)
+    mac_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     begin_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
@@ -45,6 +46,7 @@ class CounterInfor(Base):
 
     raw_payload: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
 
 class CounterBaseline(Base):
@@ -72,6 +74,7 @@ class StatusInfor(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     printer_name: Mapped[str] = mapped_column(String(255))
     ip: Mapped[str] = mapped_column(String(64), index=True)
+    mac_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     begin_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
@@ -91,6 +94,7 @@ class StatusInfor(Base):
 
     raw_payload: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
 
 class LanSite(Base):
