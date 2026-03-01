@@ -2315,22 +2315,23 @@ def create_app() -> Flask:
             seen: set[tuple[str, str, str]] = set()
             for p in printers:
                 mac_id = _to_text(p.mac_address).replace("-", ":").upper()
-                if not mac_id:
-                    continue
-                dedupe_key = (_to_text(p.lead), _to_text(p.lan_uid), mac_id)
+                dedupe_token = mac_id or f"IP:{_to_text(p.ip)}"
+                dedupe_key = (_to_text(p.lead), _to_text(p.lan_uid), dedupe_token)
                 if dedupe_key in seen:
                     continue
                 seen.add(dedupe_key)
-                d = session.execute(
-                    select(DeviceInfor)
-                    .where(
-                        DeviceInfor.lead == p.lead,
-                        DeviceInfor.lan_uid == p.lan_uid,
-                        DeviceInfor.mac_id == mac_id,
-                    )
-                    .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
+                d = None
+                if mac_id:
+                    d = session.execute(
+                        select(DeviceInfor)
+                        .where(
+                            DeviceInfor.lead == p.lead,
+                            DeviceInfor.lan_uid == p.lan_uid,
+                            DeviceInfor.mac_id == mac_id,
+                        )
+                        .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
                 if d is None and _to_text(p.ip):
                     d = session.execute(
                         select(DeviceInfor)
@@ -2356,7 +2357,7 @@ def create_app() -> Flask:
                         "agent_uid": p.agent_uid,
                         "printer_name": p.printer_name or d.printer_name,
                         "ip": p.ip or d.ip,
-                        "mac_id": mac_id,
+                        "mac_id": mac_id or _to_text(d.mac_id),
                         "counter": counter_data,
                         "status": status_data,
                         "counter_total": _to_int(counter_data.get("total")) or 0,

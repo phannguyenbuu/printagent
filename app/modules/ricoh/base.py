@@ -171,6 +171,20 @@ class RicohServiceBase:
         except Exception:  # noqa: BLE001
             return
 
+    def reset_web_session(self, printer: Printer) -> None:
+        """
+        Public helper used by UI/polling flow to force-clear web session cookies
+        on device side without requiring authentication.
+        """
+        session = requests.Session()
+        try:
+            self._reset_web_session(session, printer)
+        finally:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     def create_http_client(self, printer: Printer, credential_candidates: list[tuple[str, str]] | None = None, authenticated: bool = True) -> requests.Session:
         """
         Creates a session. If authenticated=True, performs login.
