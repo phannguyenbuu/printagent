@@ -17,6 +17,36 @@ LOGGER = logging.getLogger(__name__)
 
 class RicohCollectorMixin(RicohServiceBase):
     @staticmethod
+    def _looks_like_counter_content(html: str) -> bool:
+        text = RicohServiceBase._strip_html(html or "")
+        if not text:
+            return False
+        markers = [
+            "counter",
+            "copier",
+            "printer",
+            "black & white",
+            "send/tx total",
+        ]
+        lowered = text.lower()
+        return sum(1 for marker in markers if marker in lowered) >= 2
+
+    @staticmethod
+    def _looks_like_status_content(html: str) -> bool:
+        text = RicohServiceBase._strip_html(html or "")
+        if not text:
+            return False
+        markers = [
+            "system status",
+            "toner",
+            "tray",
+            "paper",
+            "status",
+        ]
+        lowered = text.lower()
+        return sum(1 for marker in markers if marker in lowered) >= 2
+
+    @staticmethod
     def _normalize_guest_path(path: str) -> str:
         value = str(path or "").strip()
         if not value:
@@ -71,6 +101,7 @@ class RicohCollectorMixin(RicohServiceBase):
     def _read_guest_with_fallback(self, printer: Printer, candidate_paths: list[str], keyword: str) -> str:
         last_exc: Exception | None = None
         tried: list[str] = []
+        keyword_lower = str(keyword or "").strip().lower()
         try:
             session = self.create_http_client(printer, authenticated=False)
             dynamic_paths = self._discover_guest_paths(session, printer, keyword)
@@ -102,8 +133,38 @@ class RicohCollectorMixin(RicohServiceBase):
                     last_exc = exc
                     continue
 
+            # Legacy Web Image Monitor variants may embed usable guest data
+            # directly in mainFrame without explicit counter/status endpoint.
+            main_frame_candidates = [
+                "/web/guest/en/websys/webArch/mainFrame.cgi",
+                "/web/guest/en/websys/webArch/mainFrame.cgi?name=main",
+                "/web/guest/en/manual/mainFrame.cgi",
+                "/web/guest/en/websys/webArch/topFrame.cgi",
+            ]
+            for path in main_frame_candidates:
+                tried.append(path)
+                try:
+                    html = self.authenticate_and_get(session, printer, path)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    continue
+                if keyword_lower == "counter" and self._looks_like_counter_content(html):
+                    LOGGER.info("Counter fallback used main frame: ip=%s path=%s", printer.ip, path)
+                    return html
+                if keyword_lower == "status" and self._looks_like_status_content(html):
+                    LOGGER.info("Status fallback used main frame: ip=%s path=%s", printer.ip, path)
+                    return html
+
             if last_exc is not None:
+                LOGGER.warning(
+                    "No guest endpoint matched for %s: ip=%s tried=%s last_error=%s",
+                    keyword,
+                    printer.ip,
+                    tried,
+                    last_exc,
+                )
                 raise last_exc
+            LOGGER.warning("No guest endpoint matched for %s: ip=%s tried=%s", keyword, printer.ip, tried)
             raise RuntimeError(f"No valid guest endpoint for {keyword}: tried={tried}")
         finally:
             self._logout_after_collect(printer, source=f"read_{keyword}")
@@ -246,6 +307,26 @@ class RicohCollectorMixin(RicohServiceBase):
         tray_matches = re.finditer(r"Tray\s+(\d+).*?>(.*?)</td>", html, re.IGNORECASE | re.DOTALL)
         for m in tray_matches:
             results[f"tray_{m.group(1)}_status"] = RicohServiceBase._strip_html(m.group(2))
+
+        if not results:
+            plain = RicohServiceBase._strip_html(html)
+
+            system_match = re.search(r"System\s+Status\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
+            if system_match:
+                value = system_match.group(1).strip(" :-")
+                if value:
+                    results["system_status"] = value
+
+            toner_match = re.search(r"Toner(?:\s+Status)?\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE)
+            if toner_match:
+                value = toner_match.group(1).strip(" :-")
+                if value:
+                    results["toner_black"] = value
+
+            for tray_no, tray_value in re.findall(r"Tray\s+(\d+)\s*:?\s*([^\r\n]+)", plain, re.IGNORECASE):
+                normalized = str(tray_value).strip(" :-")
+                if normalized:
+                    results[f"tray_{tray_no}_status"] = normalized
         return results
 
     @staticmethod
