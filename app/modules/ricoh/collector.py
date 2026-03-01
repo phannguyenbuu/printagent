@@ -546,37 +546,84 @@ class RicohCollectorMixin(RicohServiceBase):
     @staticmethod
     def parse_counter(html: str) -> dict[str, str]:
         results = {}
-        patterns = {
-            "copier_bw": r"Copier:.*?B & W\)?.*?>(.*?)</td>",
-            "printer_bw": r"Printer:.*?B & W\)?.*?>(.*?)</td>",
-            "fax_bw": r"Fax:.*?Total.*?>(.*?)</td>",
-            "scanner_send_bw": r"Scanner:.*?B & W\)?.*?>(.*?)</td>",
-            "scanner_send_color": r"Scanner:.*?Full Color.*?>(.*?)</td>",
-        }
-        for key, pattern in patterns.items():
-            match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
-            if match:
-                val = RicohServiceBase._strip_html(match.group(1)).replace(",", "")
-                if val.isdigit():
-                    results[key] = val
+        plain = RicohServiceBase._strip_html(html)
 
-        # Older Web Image Monitor pages render values as plain text blocks.
-        if not results:
-            plain = RicohServiceBase._strip_html(html)
-            fallback_patterns = {
-                "copier_bw": r"Copier\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
-                "printer_bw": r"Printer\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
-                "fax_bw": r"Fax\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
-                "scanner_send_bw": r"Send/TX\s+Total\s+Black\s*&\s*White\s*:\s*([0-9,]+)",
-                "scanner_send_color": r"Send/TX\s+Total\s+Color\s*:\s*([0-9,]+)",
-            }
-            for key, pattern in fallback_patterns.items():
-                match = re.search(pattern, plain, re.IGNORECASE)
-                if not match:
-                    continue
-                val = match.group(1).replace(",", "").strip()
-                if val.isdigit():
-                    results[key] = val
+        def _find_number(pattern: str, text: str) -> str:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if not match:
+                return ""
+            value = str(match.group(1) or "").replace(",", "").strip()
+            return value if value.isdigit() else ""
+
+        def _section(text: str, start_marker: str, end_marker: str) -> str:
+            start = re.search(start_marker, text, re.IGNORECASE)
+            if not start:
+                return ""
+            remainder = text[start.start():]
+            end = re.search(end_marker, remainder, re.IGNORECASE)
+            if not end:
+                return remainder
+            return remainder[:end.start()]
+
+        # Global counters
+        total = _find_number(r"\bTotal\s*:\s*([0-9,]+)", plain)
+        if total:
+            results["total"] = total
+        copier_bw = _find_number(r"Copier\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
+        if copier_bw:
+            results["copier_bw"] = copier_bw
+        printer_bw = _find_number(r"Printer\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
+        if printer_bw:
+            results["printer_bw"] = printer_bw
+        fax_bw = _find_number(r"Fax\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
+        if fax_bw:
+            results["fax_bw"] = fax_bw
+
+        # Send/TX Total block
+        send_tx_block = _section(plain, r"Send/TX\s+Total", r"Fax\s+Transmission")
+        if send_tx_block:
+            send_bw = _find_number(r"Black\s*&\s*White\s*:\s*([0-9,]+)", send_tx_block)
+            send_color = _find_number(r"Color\s*:\s*([0-9,]+)", send_tx_block)
+            if send_bw:
+                results["send_tx_total_bw"] = send_bw
+            if send_color:
+                results["send_tx_total_color"] = send_color
+
+        fax_tx_total = _find_number(r"Fax\s+Transmission\s+Total\s*:\s*([0-9,]+)", plain)
+        if fax_tx_total:
+            results["fax_transmission_total"] = fax_tx_total
+
+        # Scanner Send block
+        scanner_block = _section(plain, r"Scanner\s+Send", r"Coverage")
+        if scanner_block:
+            scanner_bw = _find_number(r"Black\s*&\s*White\s*:\s*([0-9,]+)", scanner_block)
+            scanner_color = _find_number(r"Color\s*:\s*([0-9,]+)", scanner_block)
+            if scanner_bw:
+                results["scanner_send_bw"] = scanner_bw
+            if scanner_color:
+                results["scanner_send_color"] = scanner_color
+
+        # Coverage block
+        coverage_block = _section(plain, r"Coverage", r"Other\s+Function\(s\)")
+        if coverage_block:
+            copier_cov = _find_number(r"Copier\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
+            printer_cov = _find_number(r"Printer\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
+            fax_cov = _find_number(r"Fax\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
+            if copier_cov:
+                results["coverage_copier_bw"] = copier_cov
+            if printer_cov:
+                results["coverage_printer_bw"] = printer_cov
+            if fax_cov:
+                results["coverage_fax_bw"] = fax_cov
+
+        # Other Function(s)
+        a3_dlt = _find_number(r"A3\/DLT\s*:\s*([0-9,]+)", plain)
+        duplex = _find_number(r"Duplex\s*:\s*([0-9,]+)", plain)
+        if a3_dlt:
+            results["a3_dlt"] = a3_dlt
+        if duplex:
+            results["duplex"] = duplex
+
         return results
 
     def _prepare_csv_row(self, timestamp: str, printer: Printer, status_data: dict[str, str]) -> list[str]:
