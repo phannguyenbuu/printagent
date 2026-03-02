@@ -960,7 +960,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             "ftp_name": ftp_name,
             "ftp_root": str(ftp_root),
             "result": result,
-            "hint": "Run agent as Administrator and ensure IIS FTP feature is installed if creation fails.",
+            "hint": "FTP runs inside agent process. If creation fails, install dependency: pip install pyftpdlib.",
         }
         LOGGER.info(
             "FTP create result: target=%s ip=%s ftp_name=%s ok=%s error=%s",
