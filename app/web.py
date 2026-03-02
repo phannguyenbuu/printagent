@@ -932,14 +932,17 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         ftp_name_raw = str(body.get("ftp_name", "")).strip()
         ftp_name = re.sub(r"[^A-Za-z0-9_-]", "", ftp_name_raw.replace(" ", "_"))[:48]
         if not computer_id:
-            return jsonify({"ok": False, "error": "Missing computer_id"}), 400
-        if not ftp_name:
-            return jsonify({"ok": False, "error": "Missing ftp_name"}), 400
+            return jsonify({"ok": False, "error": "Missing computer_id"})
 
         candidates = _ftp_pc_candidates()
         selected = next((x for x in candidates if str(x.get("id")) == computer_id), None)
         if not selected:
-            return jsonify({"ok": False, "error": "Computer not found"}), 404
+            return jsonify({"ok": False, "error": "Computer not found"})
+        if not ftp_name:
+            default_name = f"ftp_{str(selected.get('name') or 'site')}"
+            ftp_name = re.sub(r"[^A-Za-z0-9_-]", "", default_name.replace(" ", "_"))[:48]
+        if not ftp_name:
+            return jsonify({"ok": False, "error": "Missing ftp_name"})
         if not bool(selected.get("is_local")):
             return jsonify(
                 {
@@ -947,23 +950,27 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     "error": "Remote PC FTP creation is not supported in this agent. Select Local Agent PC.",
                     "target": selected,
                 }
-            ), 400
+            )
 
         ftp_root = Path("storage/ftp") / ftp_name
         result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root)
-        status_code = 200 if bool(result.get("ok")) else 400
-        return (
-            jsonify(
-                {
-                    "ok": bool(result.get("ok")),
-                    "target": selected,
-                    "ftp_name": ftp_name,
-                    "ftp_root": str(ftp_root),
-                    "result": result,
-                }
-            ),
-            status_code,
+        response = {
+            "ok": bool(result.get("ok")),
+            "target": selected,
+            "ftp_name": ftp_name,
+            "ftp_root": str(ftp_root),
+            "result": result,
+            "hint": "Run agent as Administrator and ensure IIS FTP feature is installed if creation fails.",
+        }
+        LOGGER.info(
+            "FTP create result: target=%s ip=%s ftp_name=%s ok=%s error=%s",
+            selected.get("name", ""),
+            selected.get("ip", ""),
+            ftp_name,
+            bool(result.get("ok")),
+            str(result.get("error", "") or ""),
         )
+        return jsonify(response)
 
     @app.get("/devices")
     def devices() -> Any:
