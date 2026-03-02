@@ -1,0 +1,260 @@
+# Kế hoạch Triển khai: Quản lý Sửa chữa Máy móc
+
+## Tổng quan
+
+Triển khai ứng dụng mobile React.js (TypeScript) quản lý sửa chữa máy móc đa địa điểm với giao diện AI Neuralink. Sử dụng Vite, Zustand, Framer Motion, fast-check, Vitest và React Router v6.
+
+## Tasks
+
+- [x] 1. Khởi tạo dự án và cấu trúc cơ bản
+  - [x] 1.1 Khởi tạo dự án React + TypeScript với Vite, cài đặt dependencies (react-router-dom, zustand, framer-motion, @tsparticles/react, recharts, vitest, @testing-library/react, fast-check)
+    - Tạo file `vite.config.ts`, `tsconfig.json`
+    - Cấu hình Vitest trong `vite.config.ts`
+    - _Requirements: Tất cả_
+  - [x] 1.2 Tạo cấu trúc thư mục và định nghĩa types/interfaces
+    - Tạo `src/types/auth.ts`, `src/types/repair.ts`, `src/types/material.ts`, `src/types/location.ts`, `src/types/history.ts`
+    - Định nghĩa tất cả interfaces theo design document (User, RepairRequest, Material, Location, etc.)
+    - Định nghĩa `RepairStatus`, `Priority` enums và `validTransitions` map
+    - _Requirements: 1.1-1.5, 2.1, 3.1-3.4, 4.1, 7.1, 8.1_
+  - [x] 1.3 Tạo Neuralink theme và CSS variables
+    - Tạo `src/theme/neuralink.ts` với bảng màu và animation config theo design
+    - Tạo `src/styles/global.css` với CSS variables cho dark theme, font, và base styles
+    - _Requirements: 6.1_
+
+- [x] 2. Implement logic nghiệp vụ cốt lõi (services + validation)
+  - [x] 2.1 Implement validation functions
+    - Tạo `src/services/validation.ts`
+    - Implement `validateRepairRequest()`: kiểm tra tên máy, địa điểm, mô tả, ưu tiên không rỗng
+    - Implement `validateMaterial()`: kiểm tra name không rỗng, quantity > 0, unitPrice > 0, là số hợp lệ
+    - Implement `validateProgressNote()`: kiểm tra ghi chú không rỗng/whitespace
+    - _Requirements: 2.1, 2.2, 3.5, 7.3_
+  - [x] 2.2 Property tests cho validation
+    - Tạo `src/services/__tests__/validation.property.test.ts` sử dụng fast-check
+    - **Property 5: Yêu cầu sửa chữa thiếu thông tin bị từ chối** — `fc.assert(fc.property(fc.record({...}), data => validateRepairRequest(data).valid === false))` với mọi input thiếu ít nhất một trường bắt buộc
+    - **Validates: Requirements 2.2**
+    - **Property 9: Cập nhật tiến độ thiếu ghi chú bị từ chối** — `fc.assert(fc.property(fc.stringMatching(/^\s*$/), note => validateProgressNote(note).valid === false))` với mọi chuỗi chỉ chứa whitespace
+    - **Validates: Requirements 3.5**
+    - **Property 14: Giá trị vật tư không hợp lệ bị từ chối** — `fc.assert(fc.property(fc.oneof(fc.integer({max: 0}), fc.constant(NaN)), val => validateMaterial({quantity: val}).valid === false))` với mọi giá trị không hợp lệ
+    - **Validates: Requirements 7.3**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+  - [x] 2.3 Implement state transition logic
+    - Tạo `src/services/repairStateMachine.ts`
+    - Implement `isValidTransition(from, to)` theo state machine trong design
+    - Implement `transitionStatus(request, newStatus, data)` trả về updated request hoặc error
+    - _Requirements: 3.2, 3.3, 3.4_
+  - [x] 2.4 Property test cho state transitions
+    - Tạo `src/services/__tests__/repairStateMachine.property.test.ts` sử dụng fast-check
+    - **Property 8: Chuyển đổi trạng thái hợp lệ** — `fc.assert(fc.property(fc.constantFrom(...statuses), fc.constantFrom(...statuses), (from, to) => isValidTransition(from, to) === validTransitions[from].includes(to)))` với mọi cặp trạng thái
+    - **Validates: Requirements 3.2, 3.3, 3.4**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property 8: Chuyển đổi trạng thái hợp lệ`
+  - [x] 2.5 Implement material cost calculation
+    - Tạo `src/services/materialService.ts`
+    - Implement `calculateTotalMaterialCost(materials)`: tổng = sum(quantity × unitPrice)
+    - Implement `addMaterial()`, `updateMaterial()`, `removeMaterial()` với recalculation
+    - _Requirements: 7.1, 7.2, 7.5_
+  - [x] 2.6 Property test cho material cost
+    - Tạo `src/services/__tests__/materialService.property.test.ts` sử dụng fast-check
+    - **Property 13: Bất biến tổng chi phí vật tư** — `fc.assert(fc.property(fc.array(materialArb), materials => calculateTotalMaterialCost(materials) === materials.reduce((sum, m) => sum + m.quantity * m.unitPrice, 0)))` với mọi danh sách vật tư sau bất kỳ thao tác thêm/sửa/xóa nào
+    - **Validates: Requirements 7.1, 7.2, 7.5**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property 13: Bất biến tổng chi phí vật tư`
+  - [x] 2.7 Implement sorting và filtering functions
+    - Tạo `src/services/filterService.ts`
+    - Implement `sortByCreatedDate(requests)`: sắp xếp giảm dần theo createdAt
+    - Implement `sortByPriority(requests)`: sắp xếp theo critical > high > medium > low
+    - Implement `filterRequests(requests, filters)`: lọc theo status, locationId
+    - Implement `getRecentRequests(requests, limit)`: lấy tối đa N yêu cầu mới nhất
+    - _Requirements: 2.4, 3.1, 4.2, 5.2_
+  - [x] 2.8 Property tests cho sorting và filtering
+    - Tạo `src/services/__tests__/filterService.property.test.ts` sử dụng fast-check
+    - **Property 6: Lọc và sắp xếp danh sách yêu cầu sửa chữa** — `fc.assert(fc.property(fc.array(requestArb), filtersArb, (requests, filters) => filterRequests(requests, filters).every(r => matchesFilters(r, filters)) && isSortedByDateDesc(filterRequests(requests, filters))))` với mọi danh sách và bộ filter
+    - **Validates: Requirements 2.4, 4.2**
+    - **Property 7: Danh sách kỹ thuật viên sắp xếp theo ưu tiên** — `fc.assert(fc.property(fc.array(requestArb), requests => isSortedByPriorityDesc(sortByPriority(requests))))` với mọi danh sách yêu cầu
+    - **Validates: Requirements 3.1**
+    - **Property 12: Danh sách gần đây giới hạn 10** — `fc.assert(fc.property(fc.array(requestArb, {minLength: 11}), requests => getRecentRequests(requests, 10).length <= 10 && isSortedByDateDesc(getRecentRequests(requests, 10))))` với mọi danh sách có hơn 10 phần tử
+    - **Validates: Requirements 5.2**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+
+- [x] 3. Checkpoint - Đảm bảo tất cả tests pass
+  - Chạy tất cả tests, hỏi user nếu có vấn đề phát sinh.
+
+- [x] 4. Implement Auth và Mock API layer
+  - [x] 4.1 Implement mock data và API layer
+    - Tạo `src/api/mockData.ts` với dữ liệu mẫu (users, locations, repair requests, materials)
+    - Tạo `src/api/mockApi.ts` với các hàm async giả lập API calls (login, getRequests, createRequest, updateStatus, etc.)
+    - _Requirements: 1.1, 2.1, 3.2, 4.1_
+  - [x] 4.2 Implement Auth store và service
+    - Tạo `src/stores/authStore.ts` (Zustand) với state: user, token, isAuthenticated
+    - Implement login(), logout(), checkSession()
+    - Lưu token vào localStorage, kiểm tra session expiry
+    - _Requirements: 1.1, 1.2, 1.5_
+  - [x] 4.3 Property tests cho Auth
+    - Tạo `src/stores/__tests__/authStore.property.test.ts` sử dụng fast-check
+    - **Property 2: Đăng nhập hợp lệ trả về đúng user** — `fc.assert(fc.property(validCredentialsArb, async ({username, password}) => { const result = await login(username, password); return result.success && result.user.username === username; }))` với mọi credentials hợp lệ trong hệ thống
+    - **Validates: Requirements 1.1**
+    - **Property 3: Đăng nhập không hợp lệ bị từ chối** — `fc.assert(fc.property(invalidCredentialsArb, async ({username, password}) => { const result = await login(username, password); return !result.success && typeof result.error === 'string'; }))` với mọi credentials không tồn tại
+    - **Validates: Requirements 1.2**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+  - [x] 4.4 Implement role-based access control
+    - Tạo `src/services/accessControl.ts`
+    - Implement `getPermittedFeatures(role)` trả về danh sách chức năng theo role
+    - Implement `getAccessibleLocations(user, allLocations)` lọc locations theo user.locationIds
+    - _Requirements: 1.3, 1.4, 4.1_
+  - [x] 4.5 Property tests cho access control
+    - Tạo `src/services/__tests__/accessControl.property.test.ts` sử dụng fast-check
+    - **Property 1: Phân quyền theo vai trò** — `fc.assert(fc.property(userArb, user => { const features = getPermittedFeatures(user.role); return user.role === 'supplier' ? features.every(f => supplierFeatures.includes(f)) : features.every(f => technicianFeatures.includes(f)); }))` với mọi user
+    - **Validates: Requirements 1.3, 1.4**
+    - **Property 10: Quyền truy cập địa điểm khớp với user** — `fc.assert(fc.property(userArb, fc.array(locationArb), (user, allLocations) => { const accessible = getAccessibleLocations(user, allLocations); return accessible.every(l => user.locationIds.includes(l.id)) && user.locationIds.filter(id => allLocations.find(l => l.id === id)).length === accessible.length; }))` với mọi user và danh sách địa điểm
+    - **Validates: Requirements 4.1**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+
+- [x] 5. Implement Repair Request và Location stores
+  - [x] 5.1 Implement Repair Request store
+    - Tạo `src/stores/repairStore.ts` (Zustand)
+    - State: requests, filters, loading
+    - Actions: fetchRequests, createRequest, updateStatus, addProgressNote, completeRequest
+    - Tích hợp validation và state machine từ services
+    - _Requirements: 2.1, 2.2, 2.4, 2.5, 3.1-3.5_
+  - [x] 5.2 Implement Location store
+    - Tạo `src/stores/locationStore.ts` (Zustand)
+    - State: locations, selectedLocationId, stats
+    - Actions: fetchLocations, selectLocation, fetchStats
+    - _Requirements: 4.1, 4.2, 4.3_
+  - [x] 5.3 Implement Material store
+    - Tạo `src/stores/materialStore.ts` (Zustand)
+    - State: materials (per request), totalCost
+    - Actions: addMaterial, updateMaterial, removeMaterial
+    - Tích hợp validation và cost calculation từ services
+    - _Requirements: 7.1, 7.2, 7.3, 7.5_
+  - [x] 5.4 Implement Dashboard statistics logic
+    - Tạo `src/services/statsService.ts`
+    - Implement `calculateStatusStats(requests, userLocationIds)`: đếm theo status
+    - Implement `calculateCumulativeCost(requests, machineName)`: tổng chi phí tích lũy
+    - _Requirements: 4.3, 5.1, 8.4_
+  - [x] 5.5 Property tests cho statistics
+    - Tạo `src/services/__tests__/statsService.property.test.ts` sử dụng fast-check
+    - **Property 11: Thống kê Dashboard chính xác** — `fc.assert(fc.property(fc.array(requestArb), locationIdsArb, (requests, locationIds) => { const stats = calculateStatusStats(requests, locationIds); const filtered = requests.filter(r => locationIds.includes(r.locationId)); return Object.entries(stats).every(([status, count]) => count === filtered.filter(r => r.status === status).length); }))` với mọi tập dữ liệu
+    - **Validates: Requirements 4.3, 5.1**
+    - **Property 17: Tổng chi phí tích lũy chính xác** — `fc.assert(fc.property(fc.array(completedRequestArb), machineName => { const history = getRepairHistory(requests, machineName); const expected = history.reduce((sum, e) => sum + e.totalMaterialCost, 0); return calculateCumulativeCost(requests, machineName) === expected; }))` với mọi tập yêu cầu đã hoàn thành
+    - **Validates: Requirements 8.4**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+
+- [x] 6. Implement History module
+  - [x] 6.1 Implement repair history service
+    - Tạo `src/services/historyService.ts`
+    - Implement `getRepairHistory(requests, machineName)`: lọc completed, sắp xếp theo thời gian
+    - Implement `filterHistory(history, filters)`: lọc theo dateRange, locationId, machineName
+    - _Requirements: 8.1, 8.3_
+  - [x] 6.2 Property tests cho history
+    - Tạo `src/services/__tests__/historyService.property.test.ts` sử dụng fast-check
+    - **Property 15: Lịch sử sửa chữa chỉ chứa yêu cầu hoàn thành** — `fc.assert(fc.property(fc.array(requestArb), machineName => getRepairHistory(requests, machineName).every(e => e.repairRequest.status === 'completed') && isSortedByDateDesc(getRepairHistory(requests, machineName).map(e => e.repairRequest.completedAt))))` với mọi danh sách yêu cầu hỗn hợp
+    - **Validates: Requirements 8.1**
+    - **Property 16: Lọc lịch sử sửa chữa chính xác** — `fc.assert(fc.property(fc.array(completedRequestArb), historyFiltersArb, (requests, filters) => filterHistory(requests, filters).every(e => matchesHistoryFilters(e, filters))))` với mọi bộ filter lịch sử
+    - **Validates: Requirements 8.3**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property {N}: {title}`
+
+- [x] 7. Checkpoint - Đảm bảo tất cả logic nghiệp vụ và tests pass
+  - Chạy tất cả tests, hỏi user nếu có vấn đề phát sinh.
+
+- [x] 8. Implement UI Components cơ bản (Neuralink theme)
+  - [x] 8.1 Implement base animated components
+    - Tạo `src/components/ui/GlowCard.tsx`: Card với glow border effect (Framer Motion)
+    - Tạo `src/components/ui/AnimatedButton.tsx`: Button với ripple + glow (Framer Motion)
+    - Tạo `src/components/ui/AnimatedList.tsx`: List với stagger fade-in animation
+    - Tạo `src/components/ui/LoadingSpinner.tsx`: Neural-style loading animation
+    - _Requirements: 6.2, 6.4_
+  - [x] 8.2 Implement NeuralParticles background
+    - Tạo `src/components/ui/NeuralParticles.tsx` sử dụng @tsparticles/react
+    - Cấu hình particles mô phỏng neural network (connected dots, glow lines)
+    - _Requirements: 6.3_
+  - [x] 8.3 Implement layout components
+    - Tạo `src/components/layout/BottomNav.tsx`: Bottom navigation bar với 4 tabs (Dashboard, Yêu cầu, Địa điểm, Tài khoản)
+    - Tạo `src/components/layout/AppLayout.tsx`: Layout wrapper với BottomNav
+    - Tạo `src/components/layout/PullToRefresh.tsx`: Pull-to-refresh với neural loading
+    - _Requirements: 9.3, 9.4_
+  - [x] 8.4 Implement SwipeableCard component
+    - Tạo `src/components/ui/SwipeableCard.tsx`: Card hỗ trợ swipe left/right gestures
+    - Swipe trái: xem chi tiết, swipe phải: cập nhật trạng thái
+    - _Requirements: 9.2_
+
+- [x] 9. Implement Pages (Routes)
+  - [x] 9.1 Implement Login page
+    - Tạo `src/pages/LoginPage.tsx`
+    - Form đăng nhập với animation, error handling
+    - Kết nối với authStore.login()
+    - Redirect theo role sau đăng nhập thành công
+    - _Requirements: 1.1, 1.2_
+  - [x] 9.2 Implement Dashboard page
+    - Tạo `src/pages/DashboardPage.tsx`
+    - Hiển thị NeuralParticles background
+    - Biểu đồ thống kê (Recharts) với draw animation
+    - Danh sách 10 yêu cầu gần đây
+    - Kết nối với repairStore và locationStore
+    - _Requirements: 5.1, 5.2, 5.4, 6.3, 6.6_
+  - [x] 9.3 Implement Request List page
+    - Tạo `src/pages/RequestListPage.tsx`
+    - Danh sách yêu cầu với SwipeableCard
+    - Bộ lọc theo trạng thái, địa điểm
+    - Pull-to-refresh
+    - Nút tạo yêu cầu mới (chỉ hiện cho supplier)
+    - _Requirements: 2.4, 3.1, 1.3, 1.4_
+  - [x] 9.4 Implement Create Request page
+    - Tạo `src/pages/CreateRequestPage.tsx`
+    - Form tạo yêu cầu: tên máy, địa điểm (dropdown), mô tả, ưu tiên, đính kèm file
+    - Validation inline với error messages
+    - _Requirements: 2.1, 2.2, 2.3_
+  - [x] 9.5 Implement Request Detail page
+    - Tạo `src/pages/RequestDetailPage.tsx`
+    - Hiển thị chi tiết yêu cầu, timeline trạng thái
+    - Nút tiếp nhận/cập nhật tiến độ/hoàn thành (theo role và trạng thái hiện tại)
+    - Form thêm ghi chú tiến độ
+    - Form thêm vật tư (tên, số lượng, đơn giá) với danh sách vật tư và tổng chi phí
+    - Form báo cáo hoàn thành
+    - _Requirements: 3.2, 3.3, 3.4, 3.5, 7.1, 7.2, 7.3, 7.4, 7.5_
+  - [x] 9.6 Implement Location pages
+    - Tạo `src/pages/LocationListPage.tsx`: danh sách địa điểm
+    - Tạo `src/pages/LocationDetailPage.tsx`: chi tiết địa điểm + danh sách máy
+    - _Requirements: 4.1, 4.2_
+  - [x] 9.7 Implement History page
+    - Tạo `src/pages/RepairHistoryPage.tsx`
+    - Danh sách lịch sử sửa chữa theo máy
+    - Bộ lọc theo thời gian, địa điểm, tên máy
+    - Hiển thị tổng chi phí tích lũy
+    - _Requirements: 8.1, 8.2, 8.3, 8.4_
+  - [x] 9.8 Implement Account page
+    - Tạo `src/pages/AccountPage.tsx`
+    - Hiển thị thông tin user, role
+    - Nút đăng xuất
+    - _Requirements: 1.5_
+
+- [x] 10. Wiring - Router, Protected Routes và tích hợp
+  - [x] 10.1 Cấu hình React Router với lazy loading
+    - Tạo `src/router/index.tsx` với tất cả routes
+    - Implement `ProtectedRoute` component kiểm tra auth và role
+    - Implement redirect logic: chưa đăng nhập → Login, session hết hạn → Login
+    - _Requirements: 1.1, 1.3, 1.4, 1.5_
+  - [x] 10.2 Tích hợp notification khi trạng thái thay đổi
+    - Tạo `src/services/notificationService.ts`
+    - Implement toast notification khi status thay đổi
+    - Kết nối với repairStore
+    - _Requirements: 2.5_
+  - [x] 10.3 Cập nhật App.tsx entry point
+    - Tạo `src/App.tsx` với Router, theme provider, global styles
+    - Đảm bảo tất cả components được wire together
+    - _Requirements: Tất cả_
+  - [x] 10.4 Property test cho tạo yêu cầu hợp lệ (integration)
+    - Tạo `src/stores/__tests__/repairStore.property.test.ts` sử dụng fast-check
+    - **Property 4: Tạo yêu cầu sửa chữa hợp lệ** — `fc.assert(fc.property(validRepairRequestArb, async data => { const request = await createRequest(data); return request.status === 'new' && request.id !== undefined && request.machineName === data.machineName; }))` với mọi bộ thông tin đầy đủ hợp lệ
+    - **Validates: Requirements 2.1**
+    - Mỗi test chạy tối thiểu 100 iterations; tag: `Feature: machine-repair-management, Property 4: Tạo yêu cầu sửa chữa hợp lệ`
+
+- [x] 11. Final checkpoint - Đảm bảo tất cả tests pass
+  - Chạy tất cả tests, hỏi user nếu có vấn đề phát sinh.
+
+## Ghi chú
+
+- Tasks đánh dấu `*` là optional, có thể bỏ qua để ra MVP nhanh hơn
+- Mỗi task tham chiếu đến requirements cụ thể để đảm bảo traceability
+- Checkpoints đảm bảo kiểm tra tăng dần
+- Property tests kiểm chứng tính đúng đắn tổng quát (Properties 1–17 từ design document)
+- Unit tests kiểm tra các trường hợp cụ thể và edge cases
+- Mỗi property test phải chạy tối thiểu 100 iterations và dùng tag format: `Feature: machine-repair-management, Property {N}: {title}`

@@ -28,6 +28,20 @@ body { margin: 0; font-family: Arial, sans-serif; background: #eef3f9; }
 .filter-btn { padding: 8px 14px; border-radius: 10px; border: 1px solid #91b3de; background: #e8f1ff; color: #20456e; cursor: pointer; font-weight: 700; }
 .filter-btn.ghost { background: #fff; border-color: #d0ddec; color: #547190; }
 .panel { background: #fff; border: 1px solid #d8e0ea; border-radius: 10px; padding: 12px; }
+.api-docs-panel { min-height: calc(100vh - 170px); }
+.api-docs-pre {
+  margin: 10px 0 0;
+  padding: 14px;
+  border: 1px solid #d8e4f3;
+  border-radius: 10px;
+  background: #f7fbff;
+  color: #1f3550;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
 .panel-neon-analytics {
   background: linear-gradient(180deg, #0c1330 0%, #090f28 100%);
   border-color: #2b4e9d;
@@ -207,6 +221,7 @@ body[data-page="status"] .timelapse-panel .counter-grid {
 .counter-card.loading { display: flex; align-items: center; justify-content: center; color: #64758a; font-size: 13px; }
 .counter-card-head { background: linear-gradient(135deg, #0f6fdc, #1f8fff); color: #fff; padding: 10px 114px 10px 12px; }
 .counter-card.latest .counter-card-head { background: linear-gradient(135deg, #0f9f44, #36c26b); }
+.counter-card.stale .counter-card-head { background: linear-gradient(135deg, #6f7a87, #8e99a8); }
 .counter-card-head { position: relative; }
 .card-delete-btn { position: absolute; top: 6px; right: 8px; width: 34px; height: 34px; border: 0; background: transparent; color: #fff; cursor: pointer; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .card-delete-btn svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 2.4; fill: none; opacity: .95; }

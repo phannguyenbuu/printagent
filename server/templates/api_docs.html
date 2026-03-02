@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel api-docs-panel">
+  <h3>Public API Documentation</h3>
+  <div class="meta-line">Source: <code>server/PUBLIC_API.md</code></div>
+  <pre class="api-docs-pre">{{ api_markdown }}</pre>
+</section>
+{% endblock %}

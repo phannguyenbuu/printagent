@@ -12,6 +12,7 @@
         <h2>GoPrinx</h2>
         <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="link-ico">&bull;</span><span>Dashboard</span></a>
         <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>
+        <a class="link {% if active_tab == 'api_docs' %}active{% endif %}" href="{{ url_for('api_docs_page') }}"><span class="link-ico">&bull;</span><span>API</span></a>
         <a class="link {% if active_tab == 'lan_sites' %}active{% endif %}" href="{{ url_for('lan_sites_page') }}"><span class="link-ico">&bull;</span><span>Lan Network</span></a>
         <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}"><span class="link-ico">&bull;</span><span>Heatmap</span></a>
         <a class="link {% if active_tab == 'configs' %}active{% endif %}" href="{{ url_for('configs_page') }}"><span class="link-ico">&bull;</span><span>Configs</span></a>
@@ -34,7 +35,7 @@
             <button id="refresh-btn">Refresh</button>
           </div>
         </header>
-        {% if active_tab != 'configs' and active_tab != 'infor' %}
+        {% if active_tab != 'configs' and active_tab != 'infor' and active_tab != 'api_docs' %}
           <section class="floating-filter">
             <div class="floating-filter-row">
               <div class="filter-pill-group">

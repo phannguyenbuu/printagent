@@ -167,6 +167,25 @@ class DeviceInfor(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
 
+class DeviceInforHistory(Base):
+    __tablename__ = "DeviceInforHistory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    machine_uid: Mapped[str] = mapped_column(String(128), index=True, default="")
+    mac_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
+    printer_name: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), index=True, default="")
+    counter_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    last_counter_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
 class PrinterEnableLog(Base):
     __tablename__ = "PrinterEnableLog"
 

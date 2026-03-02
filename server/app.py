@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import re
 from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from models import (
     CounterBaseline,
     CounterInfor,
     DeviceInfor,
+    DeviceInforHistory,
     LanSite,
     Printer,
     PrinterControlCommand,
@@ -33,6 +35,7 @@ UI_TZ = timezone(timedelta(hours=7))
 ONLINE_STALE_SECONDS = 300
 SCAN_UPLOAD_ROOT = Path("storage/uploads/scans")
 LAST_DATA_FILE = Path("storage/data/last_data.json")
+PUBLIC_API_FILE = Path("PUBLIC_API.md")
 COUNTER_KEYS = [
     "total",
     "copier_bw",
@@ -49,6 +52,7 @@ COUNTER_KEYS = [
     "a3_dlt",
     "duplex",
 ]
+MAC_PATTERN = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
 
 
 def _to_int(value: Any) -> int | None:
@@ -93,6 +97,15 @@ def _normalize_status_payload(payload: dict[str, Any]) -> dict[str, str]:
             continue
         out[k] = _to_text(value)
     return out
+
+
+def _normalize_mac(value: Any) -> str:
+    text = _to_text(value).replace("-", ":").upper()
+    if not text:
+        return ""
+    if MAC_PATTERN.fullmatch(text):
+        return text
+    return ""
 
 
 def _safe_path_token(value: str) -> str:
@@ -497,6 +510,31 @@ def _upsert_printer_from_polling(
     return row
 
 
+def _resolve_public_mac(
+    *,
+    session: Any,
+    lead: str,
+    lan_uid: str,
+    ip: str,
+    incoming_mac: Any,
+) -> str:
+    normalized = _normalize_mac(incoming_mac)
+    if normalized:
+        return normalized
+    ip_text = _to_text(ip)
+    if not ip_text:
+        return ""
+    printer = session.execute(
+        select(Printer)
+        .where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == ip_text)
+        .order_by(Printer.updated_at.desc(), Printer.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if printer is None:
+        return ""
+    return _normalize_mac(printer.mac_address)
+
+
 def _set_printer_online_state(session: Any, printer: Printer, is_online: bool, changed_at: datetime) -> None:
     next_state = bool(is_online)
     if bool(printer.is_online) == next_state:
@@ -622,6 +660,20 @@ def create_app() -> Flask:
     @app.get("/infor")
     def infor_page() -> Any:
         return render_template("devices.html", active_tab="infor", page_title="Infor")
+
+    @app.get("/api-docs")
+    def api_docs_page() -> Any:
+        markdown_text = ""
+        try:
+            markdown_text = PUBLIC_API_FILE.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Cannot read PUBLIC_API.md: %s", exc)
+        return render_template(
+            "api_docs.html",
+            active_tab="api_docs",
+            page_title="Public API",
+            api_markdown=markdown_text,
+        )
 
     @app.get("/lan-sites")
     def lan_sites_page() -> Any:
@@ -1922,8 +1974,9 @@ def create_app() -> Flask:
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
         collector_ok = bool(body.get("collector_ok", True))
         skip_data_update = bool(body.get("skip_data_update", False))
-        mac_id = _to_text(body.get("mac_id")) or _to_text(body.get("mac_address"))
-        device_mac_address = mac_id or _to_text((status_data.get("other_info") or "")[:64])
+        incoming_mac_id = _to_text(body.get("mac_id")) or _to_text(body.get("mac_address"))
+        mac_id = _normalize_mac(incoming_mac_id)
+        device_mac_address = mac_id
         LOGGER.info(
             "polling request: lead=%s lan=%s agent=%s printer=%s ip=%s ts=%s counter_keys=%s status_keys=%s",
             lead,
@@ -1983,8 +2036,14 @@ def create_app() -> Flask:
             if not device_enabled:
                 skipped_disabled = 1
 
-            # Server-side dedupe is based on the latest unified root row (DeviceInfor).
-            root_mac_id = _to_text(mac_id) or (f"IP:{ip}" if ip else "UNKNOWN")
+            public_mac_id = _resolve_public_mac(
+                session=session,
+                lead=lead,
+                lan_uid=lan_uid,
+                ip=ip,
+                incoming_mac=mac_id,
+            )
+            root_mac_id = public_mac_id or (f"IP:{ip}" if ip else "UNKNOWN")
             infor = session.execute(
                 select(DeviceInfor).where(
                     DeviceInfor.lead == lead,
@@ -2000,6 +2059,9 @@ def create_app() -> Flask:
             normalized_prev_status = _normalize_status_payload(prev_status_data) if prev_status_data else {}
             duplicate_counter_by_infor = bool(counter_data) and normalized_counter == normalized_prev_counter
             duplicate_status_by_infor = bool(status_data) and normalized_status == normalized_prev_status
+            changed_counter = bool(counter_data) and not duplicate_counter_by_infor
+            changed_status = bool(status_data) and not duplicate_status_by_infor
+            changed_any = changed_counter or changed_status
 
             if counter_data and device_enabled:
                 if duplicate_counter_by_infor:
@@ -2052,7 +2114,7 @@ def create_app() -> Flask:
                             CounterInfor.lan_uid == lan_uid,
                             CounterInfor.agent_uid == agent_uid,
                             CounterInfor.ip == ip,
-                            CounterInfor.mac_id == mac_id,
+                            CounterInfor.mac_id == public_mac_id,
                             CounterInfor.raw_payload == delta_counter,
                         )
                         .order_by(CounterInfor.updated_at.desc(), CounterInfor.id.desc())
@@ -2069,7 +2131,7 @@ def create_app() -> Flask:
                             timestamp=timestamp,
                             printer_name=printer_name or "Unknown Printer",
                             ip=ip,
-                            mac_id=mac_id,
+                            mac_id=public_mac_id,
                             begin_record_id=begin_record_id_for_counter,
                             total=delta_counter.get("total"),
                             copier_bw=delta_counter.get("copier_bw"),
@@ -2114,7 +2176,7 @@ def create_app() -> Flask:
                             StatusInfor.lan_uid == lan_uid,
                             StatusInfor.agent_uid == agent_uid,
                             StatusInfor.ip == ip,
-                            StatusInfor.mac_id == mac_id,
+                            StatusInfor.mac_id == public_mac_id,
                             StatusInfor.raw_payload == status_data,
                         )
                         .order_by(StatusInfor.updated_at.desc(), StatusInfor.id.desc())
@@ -2131,7 +2193,7 @@ def create_app() -> Flask:
                             timestamp=timestamp,
                             printer_name=_to_text_max(printer_name or "Unknown Printer", 255),
                             ip=_to_text_max(ip, 64),
-                            mac_id=_to_text_max(mac_id, 64),
+                            mac_id=_to_text_max(public_mac_id, 64),
                             begin_record_id=begin_record_id_for_status,
                             system_status=_to_json_value(status_data.get("system_status")),
                             printer_status=_to_json_value(status_data.get("printer_status")),
@@ -2194,6 +2256,26 @@ def create_app() -> Flask:
                     infor.status_data = status_data
                     infor.last_status_at = timestamp
                 infor.updated_at = datetime.now(timezone.utc)
+
+            if can_update_infor_data and changed_any:
+                snapshot_counter = counter_data if changed_counter else prev_counter_data
+                snapshot_status = status_data if changed_status else prev_status_data
+                history = DeviceInforHistory(
+                    lead=lead,
+                    lan_uid=lan_uid,
+                    machine_uid=root_mac_id,
+                    mac_id=public_mac_id,
+                    agent_uid=agent_uid,
+                    printer_name=printer_name or (infor.printer_name if infor is not None else "Unknown Printer"),
+                    ip=ip or (infor.ip if infor is not None else ""),
+                    counter_data=snapshot_counter if isinstance(snapshot_counter, dict) else {},
+                    status_data=snapshot_status if isinstance(snapshot_status, dict) else {},
+                    last_counter_at=timestamp if changed_counter else (infor.last_counter_at if infor is not None else None),
+                    last_status_at=timestamp if changed_status else (infor.last_status_at if infor is not None else None),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                session.add(history)
             session.commit()
         LOGGER.info(
             "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s)",
@@ -2305,76 +2387,364 @@ def create_app() -> Flask:
         with session_factory() as session:
             _refresh_stale_offline(session=session, lead=lead)
             session.commit()
-            printer_stmt = select(Printer).where(Printer.is_online.is_(True)).order_by(
-                Printer.lan_uid.asc(), Printer.printer_name.asc(), Printer.ip.asc()
+            history_stmt = select(DeviceInforHistory).order_by(
+                DeviceInforHistory.updated_at.desc(), DeviceInforHistory.id.desc()
             )
             if lead:
-                printer_stmt = printer_stmt.where(Printer.lead == lead)
-            printers = session.execute(printer_stmt).scalars().all()
+                history_stmt = history_stmt.where(DeviceInforHistory.lead == lead)
+            history_rows = session.execute(history_stmt).scalars().all()
+
             rows: list[dict[str, Any]] = []
+            if history_rows:
+                latest_by_machine: set[tuple[str, str, str]] = set()
+                for h in history_rows:
+                    counter_data = h.counter_data if isinstance(h.counter_data, dict) else {}
+                    status_data = h.status_data if isinstance(h.status_data, dict) else {}
+                    if not counter_data and not status_data:
+                        continue
+                    machine_uid = _to_text(h.machine_uid) or _to_text(h.mac_id) or (f"IP:{_to_text(h.ip)}" if _to_text(h.ip) else "")
+                    latest_key = (_to_text(h.lead), _to_text(h.lan_uid), machine_uid)
+                    is_latest = latest_key not in latest_by_machine
+                    if is_latest:
+                        latest_by_machine.add(latest_key)
+                    resolved_mac = _normalize_mac(h.mac_id)
+                    if not resolved_mac and _to_text(h.ip):
+                        resolved_mac = _resolve_public_mac(
+                            session=session,
+                            lead=_to_text(h.lead),
+                            lan_uid=_to_text(h.lan_uid),
+                            ip=_to_text(h.ip),
+                            incoming_mac="",
+                        )
+                    rows.append(
+                        {
+                            "id": int(h.id),
+                            "lead": h.lead,
+                            "lan_uid": h.lan_uid,
+                            "agent_uid": h.agent_uid,
+                            "printer_name": h.printer_name,
+                            "ip": h.ip,
+                            "mac_id": resolved_mac or "unknown",
+                            "machine_uid": machine_uid or "unknown",
+                            "is_latest": is_latest,
+                            "counter": counter_data,
+                            "status": status_data,
+                            "counter_data": counter_data,
+                            "status_data": status_data,
+                            "counter_total": _to_int(counter_data.get("total")) or 0,
+                            "status_system": _to_text(status_data.get("system_status")) or _to_text(status_data.get("printer_status")),
+                            "created_at": h.created_at.isoformat() if h.created_at else "",
+                            "createAt": h.created_at.isoformat() if h.created_at else "",
+                            "last_counter_at": h.last_counter_at.isoformat() if h.last_counter_at else "",
+                            "last_status_at": h.last_status_at.isoformat() if h.last_status_at else "",
+                            "updated_at": h.updated_at.isoformat() if h.updated_at else "",
+                        }
+                    )
+            else:
+                # Backward compatibility for environments without history rows yet.
+                base_stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                if lead:
+                    base_stmt = base_stmt.where(DeviceInfor.lead == lead)
+                for d in session.execute(base_stmt).scalars().all():
+                    counter_data = d.counter_data if isinstance(d.counter_data, dict) else {}
+                    status_data = d.status_data if isinstance(d.status_data, dict) else {}
+                    if not counter_data and not status_data:
+                        continue
+                    resolved_mac = _normalize_mac(d.mac_id)
+                    if not resolved_mac and _to_text(d.ip):
+                        resolved_mac = _resolve_public_mac(
+                            session=session,
+                            lead=_to_text(d.lead),
+                            lan_uid=_to_text(d.lan_uid),
+                            ip=_to_text(d.ip),
+                            incoming_mac="",
+                        )
+                    rows.append(
+                        {
+                            "id": int(d.id),
+                            "lead": d.lead,
+                            "lan_uid": d.lan_uid,
+                            "agent_uid": d.agent_uid,
+                            "printer_name": d.printer_name,
+                            "ip": d.ip,
+                            "mac_id": resolved_mac or "unknown",
+                            "machine_uid": _to_text(d.mac_id) or (f"IP:{_to_text(d.ip)}" if _to_text(d.ip) else "unknown"),
+                            "is_latest": True,
+                            "counter": counter_data,
+                            "status": status_data,
+                            "counter_data": counter_data,
+                            "status_data": status_data,
+                            "counter_total": _to_int(counter_data.get("total")) or 0,
+                            "status_system": _to_text(status_data.get("system_status")) or _to_text(status_data.get("printer_status")),
+                            "created_at": d.created_at.isoformat() if d.created_at else "",
+                            "createAt": d.created_at.isoformat() if d.created_at else "",
+                            "last_counter_at": d.last_counter_at.isoformat() if d.last_counter_at else "",
+                            "last_status_at": d.last_status_at.isoformat() if d.last_status_at else "",
+                            "updated_at": d.updated_at.isoformat() if d.updated_at else "",
+                        }
+                    )
+            return jsonify({"rows": rows})
+
+    @app.get("/machinelist/")
+    def public_machine_list() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        with session_factory() as session:
+            stmt = select(DeviceInfor).where(DeviceInfor.lan_uid != "").order_by(
+                DeviceInfor.updated_at.desc(), DeviceInfor.id.desc()
+            )
+            if lead:
+                stmt = stmt.where(DeviceInfor.lead == lead)
+            if lan_uid:
+                stmt = stmt.where(DeviceInfor.lan_uid == lan_uid)
+            records = session.execute(stmt).scalars().all()
             seen: set[tuple[str, str, str]] = set()
-            for p in printers:
-                mac_id = _to_text(p.mac_address).replace("-", ":").upper()
-                dedupe_token = mac_id or f"IP:{_to_text(p.ip)}"
-                dedupe_key = (_to_text(p.lead), _to_text(p.lan_uid), dedupe_token)
+            machines: list[dict[str, Any]] = []
+            for row in records:
+                mac_id = _to_text(row.mac_id).replace("-", ":").upper()
+                dedupe_token = mac_id or f"IP:{_to_text(row.ip)}"
+                dedupe_key = (_to_text(row.lead), _to_text(row.lan_uid), dedupe_token)
                 if dedupe_key in seen:
                     continue
                 seen.add(dedupe_key)
-                d = None
-                if mac_id:
-                    d = session.execute(
-                        select(DeviceInfor)
-                        .where(
-                            DeviceInfor.lead == p.lead,
-                            DeviceInfor.lan_uid == p.lan_uid,
-                            DeviceInfor.mac_id == mac_id,
-                        )
-                        .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
-                        .limit(1)
-                    ).scalar_one_or_none()
-                if d is None and _to_text(p.ip):
-                    d = session.execute(
-                        select(DeviceInfor)
-                        .where(
-                            DeviceInfor.lead == p.lead,
-                            DeviceInfor.lan_uid == p.lan_uid,
-                            DeviceInfor.ip == p.ip,
-                        )
-                        .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
-                        .limit(1)
-                    ).scalar_one_or_none()
-                if d is None:
+                counter_data = row.counter_data if isinstance(row.counter_data, dict) else {}
+                status_data = row.status_data if isinstance(row.status_data, dict) else {}
+                machines.append(
+                    {
+                        "lead": row.lead,
+                        "lan_uid": row.lan_uid,
+                        "mac_id": mac_id,
+                        "agent_uid": row.agent_uid,
+                        "printer_name": row.printer_name,
+                        "ip": row.ip,
+                        "counter_total": _to_int(counter_data.get("total")) or 0,
+                        "system_status": _to_text(status_data.get("system_status")),
+                        "toner_black": status_data.get("toner_black"),
+                        "created_at": row.created_at.isoformat() if row.created_at else "",
+                        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                        "last_counter_at": row.last_counter_at.isoformat() if row.last_counter_at else "",
+                        "last_status_at": row.last_status_at.isoformat() if row.last_status_at else "",
+                    }
+                )
+            machines.sort(key=lambda x: (_to_text(x.get("lead")), _to_text(x.get("lan_uid")), _to_text(x.get("mac_id"))))
+            return jsonify(
+                {
+                    "ok": True,
+                    "count": len(machines),
+                    "machines": machines,
+                }
+            )
+
+    @app.get("/networklist/")
+    def public_network_list() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        with session_factory() as session:
+            stmt = (
+                select(
+                    DeviceInfor.lead,
+                    DeviceInfor.lan_uid,
+                    func.count(DeviceInfor.id),
+                    func.max(DeviceInfor.updated_at),
+                )
+                .where(DeviceInfor.lan_uid != "")
+                .group_by(DeviceInfor.lead, DeviceInfor.lan_uid)
+                .order_by(DeviceInfor.lead.asc(), DeviceInfor.lan_uid.asc())
+            )
+            if lead:
+                stmt = stmt.where(DeviceInfor.lead == lead)
+            rows = session.execute(stmt).all()
+            networks: list[dict[str, Any]] = []
+            for lead_value, lan_uid_value, machine_count, last_seen in rows:
+                networks.append(
+                    {
+                        "lead": _to_text(lead_value),
+                        "lan_uid": _to_text(lan_uid_value),
+                        "machine_count": int(machine_count or 0),
+                        "last_seen_at": last_seen.isoformat() if last_seen else "",
+                    }
+                )
+            return jsonify(
+                {
+                    "ok": True,
+                    "count": len(networks),
+                    "networks": networks,
+                }
+            )
+
+    @app.get("/all/")
+    def public_all_data() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        with session_factory() as session:
+            stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+            if lead:
+                stmt = stmt.where(DeviceInfor.lead == lead)
+            if lan_uid:
+                stmt = stmt.where(DeviceInfor.lan_uid == lan_uid)
+            records = session.execute(stmt).scalars().all()
+            seen: set[tuple[str, str, str]] = set()
+            rows: list[dict[str, Any]] = []
+            for row in records:
+                mac_id = _to_text(row.mac_id).replace("-", ":").upper()
+                machine_uid = mac_id or f"IP:{_to_text(row.ip)}"
+                dedupe_key = (_to_text(row.lead), _to_text(row.lan_uid), machine_uid)
+                if dedupe_key in seen:
                     continue
-                counter_data = d.counter_data if isinstance(d.counter_data, dict) else {}
-                status_data = d.status_data if isinstance(d.status_data, dict) else {}
-                if not counter_data and not status_data:
-                    continue
+                seen.add(dedupe_key)
+                counter_data = row.counter_data if isinstance(row.counter_data, dict) else {}
+                status_data = row.status_data if isinstance(row.status_data, dict) else {}
                 rows.append(
                     {
-                        "id": int(p.id),
-                        "lead": p.lead,
-                        "lan_uid": p.lan_uid,
-                        "agent_uid": p.agent_uid,
-                        "printer_name": p.printer_name or d.printer_name,
-                        "ip": p.ip or d.ip,
-                        "mac_id": mac_id or _to_text(d.mac_id),
+                        "lead": row.lead,
+                        "lan_uid": row.lan_uid,
+                        "machine_uid": machine_uid,
+                        "mac_id": mac_id or _to_text(row.mac_id),
+                        "agent_uid": row.agent_uid,
+                        "printer_name": row.printer_name,
+                        "ip": row.ip,
                         "counter": counter_data,
                         "status": status_data,
                         "counter_data": counter_data,
                         "status_data": status_data,
-                        "counter_total": _to_int(counter_data.get("total")) or 0,
-                        "status_system": _to_text(status_data.get("system_status")) or _to_text(status_data.get("printer_status")),
-                        "created_at": d.created_at.isoformat() if d.created_at else "",
-                        "createAt": d.created_at.isoformat() if d.created_at else "",
-                        "last_counter_at": d.last_counter_at.isoformat() if d.last_counter_at else "",
-                        "last_status_at": d.last_status_at.isoformat() if d.last_status_at else "",
-                        "updated_at": d.updated_at.isoformat() if d.updated_at else "",
+                        "last_counter_at": row.last_counter_at.isoformat() if row.last_counter_at else "",
+                        "last_status_at": row.last_status_at.isoformat() if row.last_status_at else "",
+                        "created_at": row.created_at.isoformat() if row.created_at else "",
+                        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
                     }
                 )
-            rows.sort(key=lambda x: (_to_text(x.get("lan_uid")), _to_text(x.get("mac_id"))))
+            rows.sort(key=lambda x: (_to_text(x.get("lead")), _to_text(x.get("lan_uid")), _to_text(x.get("machine_uid"))))
             return jsonify(
                 {
-                    "rows": rows
+                    "ok": True,
+                    "count": len(rows),
+                    "rows": rows,
+                }
+            )
+
+    @app.get("/api/public/device/by-mac")
+    def public_device_by_mac() -> Any:
+        mac_input = _to_text(request.args.get("mac_id") or request.args.get("mac"))
+        if not mac_input:
+            return jsonify({"ok": False, "error": "Missing parameter: mac_id"}), 400
+
+        normalized_mac = mac_input.replace("-", ":").upper()
+
+        with session_factory() as session:
+            row = session.execute(
+                select(DeviceInfor)
+                .where(func.upper(DeviceInfor.mac_id) == normalized_mac)
+                .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if row is None:
+                printer = session.execute(
+                    select(Printer)
+                    .where(func.upper(Printer.mac_address) == normalized_mac)
+                    .order_by(Printer.updated_at.desc(), Printer.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if printer is not None:
+                    row = session.execute(
+                        select(DeviceInfor)
+                        .where(
+                            DeviceInfor.lead == printer.lead,
+                            DeviceInfor.lan_uid == printer.lan_uid,
+                            DeviceInfor.ip == printer.ip,
+                        )
+                        .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if row is None and _to_text(printer.ip):
+                        row = session.execute(
+                            select(DeviceInfor)
+                            .where(
+                                DeviceInfor.lead == printer.lead,
+                                DeviceInfor.ip == printer.ip,
+                            )
+                            .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                            .limit(1)
+                        ).scalar_one_or_none()
+
+            if row is None:
+                return jsonify({"ok": False, "error": "Device not found for mac_id"}), 404
+
+            counter_data = row.counter_data if isinstance(row.counter_data, dict) else {}
+            status_data = row.status_data if isinstance(row.status_data, dict) else {}
+            return jsonify(
+                {
+                    "ok": True,
+                    "mac_id": normalized_mac,
+                    "lead": row.lead,
+                    "lan_uid": row.lan_uid,
+                    "agent_uid": row.agent_uid,
+                    "printer_name": row.printer_name,
+                    "ip": row.ip,
+                    "counter": counter_data,
+                    "status": status_data,
+                    "counter_data": counter_data,
+                    "status_data": status_data,
+                    "last_counter_at": row.last_counter_at.isoformat() if row.last_counter_at else "",
+                    "last_status_at": row.last_status_at.isoformat() if row.last_status_at else "",
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                }
+            )
+
+    @app.get("/api/public/network/by-lan")
+    def public_network_by_lan() -> Any:
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        lead = _to_text(request.args.get("lead"))
+        if not lan_uid:
+            return jsonify({"ok": False, "error": "Missing parameter: lan_uid"}), 400
+
+        with session_factory() as session:
+            stmt = (
+                select(DeviceInfor)
+                .where(DeviceInfor.lan_uid == lan_uid)
+                .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+            )
+            if lead:
+                stmt = stmt.where(DeviceInfor.lead == lead)
+            records = session.execute(stmt).scalars().all()
+            if not records:
+                return jsonify({"ok": False, "error": "No device found for lan_uid"}), 404
+
+            seen: set[tuple[str, str, str]] = set()
+            rows: list[dict[str, Any]] = []
+            for row in records:
+                mac_id = _to_text(row.mac_id).replace("-", ":").upper()
+                dedupe_token = mac_id or f"IP:{_to_text(row.ip)}"
+                dedupe_key = (_to_text(row.lead), _to_text(row.lan_uid), dedupe_token)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                counter_data = row.counter_data if isinstance(row.counter_data, dict) else {}
+                status_data = row.status_data if isinstance(row.status_data, dict) else {}
+                rows.append(
+                    {
+                        "lead": row.lead,
+                        "lan_uid": row.lan_uid,
+                        "mac_id": mac_id or _to_text(row.mac_id),
+                        "agent_uid": row.agent_uid,
+                        "printer_name": row.printer_name,
+                        "ip": row.ip,
+                        "counter": counter_data,
+                        "status": status_data,
+                        "counter_data": counter_data,
+                        "status_data": status_data,
+                        "last_counter_at": row.last_counter_at.isoformat() if row.last_counter_at else "",
+                        "last_status_at": row.last_status_at.isoformat() if row.last_status_at else "",
+                        "created_at": row.created_at.isoformat() if row.created_at else "",
+                        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                    }
+                )
+            rows.sort(key=lambda x: (_to_text(x.get("lead")), _to_text(x.get("printer_name")), _to_text(x.get("ip"))))
+            return jsonify(
+                {
+                    "ok": True,
+                    "lan_uid": lan_uid,
+                    "count": len(rows),
+                    "rows": rows,
                 }
             )
 

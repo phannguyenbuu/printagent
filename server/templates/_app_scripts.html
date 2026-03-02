@@ -499,7 +499,8 @@ function renderDevicesGrid() {
       const createAt = String(r.createAt || r.created_at || "");
       const counterPreview = JSON.stringify(counter || {}, null, 2);
       const statusPreview = JSON.stringify(status || {}, null, 2);
-      return `<article class="counter-card latest infor-card" data-kind="infor-card" data-id="${rowId}">
+      const cardStateClass = r.is_latest ? "latest" : "stale";
+      return `<article class="counter-card ${cardStateClass} infor-card" data-kind="infor-card" data-id="${rowId}">
         <header class="counter-card-head">
           <div class="counter-card-index">#${rowId}</div>
           <div class="counter-card-time">${escapeHtml(r.printer_name || "unknown")} ${escapeHtml(r.ip ? `(${r.ip})` : "")}</div>

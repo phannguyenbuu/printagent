@@ -87,6 +87,74 @@ class PollingBridge:
         except Exception:  # noqa: BLE001
             return ""
 
+    @staticmethod
+    def _normalize_mac(value: str) -> str:
+        text = str(value or "").strip().replace("-", ":").upper()
+        if not text:
+            return ""
+        if not re.fullmatch(r"[0-9A-F:]{17}", text):
+            return ""
+        parts = text.split(":")
+        if len(parts) != 6 or any(len(part) != 2 for part in parts):
+            return ""
+        if text == "00:00:00:00:00:00":
+            return ""
+        return text
+
+    def _load_neighbor_mac_map(self) -> dict[str, str]:
+        script = r"""
+$ErrorActionPreference='Stop'
+Get-NetNeighbor -AddressFamily IPv4 |
+  Select-Object IPAddress,LinkLayerAddress,State |
+  ConvertTo-Json -Depth 4
+"""
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=True,
+            )
+            payload = json.loads(result.stdout or "[]")
+            if isinstance(payload, dict):
+                payload = [payload]
+            if isinstance(payload, list):
+                mapping: dict[str, str] = {}
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    ip = str(item.get("IPAddress", "") or "").strip()
+                    mac = self._normalize_mac(str(item.get("LinkLayerAddress", "") or ""))
+                    if ip and mac:
+                        mapping[ip] = mac
+                if mapping:
+                    return mapping
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            result = subprocess.run(
+                ["arp", "-a"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=True,
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+
+        mapping: dict[str, str] = {}
+        for line in result.stdout.splitlines():
+            match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9a-fA-F:-]{17})\s+\w+", line)
+            if not match:
+                continue
+            ip = match.group(1)
+            mac = self._normalize_mac(match.group(2))
+            if mac:
+                mapping[ip] = mac
+        return mapping
+
     def interval_seconds(self) -> int:
         raw = self._config.get_string("polling.interval_seconds", "300").strip()
         try:
@@ -209,6 +277,7 @@ class PollingBridge:
         try:
             scanner = SubnetScanner(max_workers=100)
             scan_rows = scanner.scan_subnet()
+            neighbor_mac_map = self._load_neighbor_mac_map()
             printers: list[Printer] = []
             seen: set[str] = set()
             for row in scan_rows:
@@ -221,7 +290,11 @@ class PollingBridge:
                 is_ricoh = bool(row.get("is_ricoh"))
                 if not is_ricoh:
                     continue
-                mac = str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip()
+                mac = self._normalize_mac(str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip())
+                if not mac:
+                    mac = self._normalize_mac(str(row.get("mac_id", "") or row.get("mac_address", "") or ""))
+                if not mac:
+                    mac = self._normalize_mac(neighbor_mac_map.get(ip, ""))
                 name = ip
                 try:
                     temp = Printer(name="Discovery", ip=ip, user="", password="", printer_type="ricoh", mac_address=mac)
@@ -248,6 +321,8 @@ class PollingBridge:
                         mac_address=mac,
                     )
                 )
+                if not mac:
+                    LOGGER.warning("Polling MAC unresolved for ip=%s (UI may still resolve from separate scan path)", ip)
             LOGGER.info("Polling bridge printers source=local_scan count=%s", len(printers))
             return printers
         except Exception as exc:  # noqa: BLE001

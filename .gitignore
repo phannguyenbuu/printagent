@@ -7,3 +7,4 @@ __pycache__/
 storage/data/*.csv
 storage/data/*.db
 ref/
+app-gox/node_modules/
