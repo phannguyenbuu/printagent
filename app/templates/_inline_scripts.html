@@ -494,11 +494,11 @@
 
   function getSelectedScanProtocol() {
     const checked = document.querySelector('input[name="result-modal-scan-protocol"]:checked');
-    return String(checked?.value || "").trim();
+    return String(checked?.value || "FTP").trim();
   }
 
   function setSelectedScanProtocol(value) {
-    const protocol = String(value || "").trim();
+    const protocol = String(value || "FTP").trim();
     document.querySelectorAll('input[name="result-modal-scan-protocol"]').forEach((node) => {
       node.checked = String(node.value || "") === protocol;
     });
@@ -513,6 +513,32 @@
     const target = mode === "html" && htmlEnabled ? "html" : "list";
     listWrap.hidden = target !== "list";
     htmlFrame.hidden = target !== "html";
+  }
+
+  function appendScanLog(message, detail = null, level = "info") {
+    const out = document.getElementById("result-modal-scan-output");
+    const ts = new Date().toISOString();
+    const prefix = `[${ts}] [${String(level || "info").toUpperCase()}]`;
+    let line = `${prefix} ${String(message || "").trim()}`;
+    if (detail !== null && detail !== undefined) {
+      try {
+        const raw = typeof detail === "string" ? detail : jsonString(detail);
+        line += `\n${raw}`;
+      } catch (_err) {
+        line += `\n${String(detail)}`;
+      }
+    }
+    if (out) {
+      const prev = String(out.textContent || "").trim();
+      out.textContent = prev ? `${prev}\n${line}` : line;
+    }
+    if (level === "error") {
+      console.error(line);
+    } else if (level === "warn") {
+      console.warn(line);
+    } else {
+      console.info(line);
+    }
   }
 
   function buildScanHtmlPreview(payload) {
@@ -543,13 +569,14 @@
       const query = new URLSearchParams({ ip }).toString();
       const data = await jsonFetch(`/api/scan/protocol?${query}`);
       const protocol = String(data?.protocol || "FTP").trim();
-      setSelectedScanProtocol(protocol);
-      resultModalState.protocol = protocol;
+      const forced = "FTP";
+      setSelectedScanProtocol(forced);
+      resultModalState.protocol = forced;
       if (hint) {
         const detected = String(data?.detected || "").trim();
         hint.textContent = detected
-          ? `Detected: ${detected} | Current: ${protocol}`
-          : `Current: ${protocol}`;
+          ? `Detected: ${detected} | Current: FTP`
+          : `Current: FTP`;
       }
     } catch (err) {
       if (hint) hint.textContent = String(err?.message || err);
@@ -571,10 +598,17 @@
       if (htmlFrame) htmlFrame.srcdoc = "";
       return;
     }
-    if (out) out.textContent = `Loading address list for ${ip}...`;
+    if (out) out.textContent = "";
+    appendScanLog(`Loading address list`, { ip });
     await ensureScanIsolationForModal();
     const payload = await fetchScanAddressListForIp(ip, true);
     const entries = payload.address_list || [];
+    appendScanLog("Address list loaded", {
+      ip,
+      total_entries: Array.isArray(entries) ? entries.length : 0,
+      trace_id: payload?.debug?.trace_id || "",
+      mode: payload?.debug?.mode || "",
+    });
     resultModalState.scanPayload = payload;
     resultModalState.scanLoadedIp = ip;
     renderResultModalScanRows(entries);
@@ -586,7 +620,7 @@
     if (htmlFrame) {
       htmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
     }
-    if (out) out.textContent = jsonString(payload);
+    appendScanLog("Address list payload (raw)", payload);
     await loadResultModalScanProtocol();
   }
 
@@ -596,9 +630,11 @@
       throw new Error("Missing printer IP");
     }
     if (forceRefreshDevices) {
+      appendScanLog("Refreshing devices before loading address list", { ip: targetIp });
       await jsonFetch("/api/devices/refresh", { method: "POST" });
     }
     const query = new URLSearchParams({ ip: targetIp, mode: "adrsListAll" }).toString();
+    appendScanLog("Calling address-list API", { query: `/api/scan/address-list?${query}` });
     const data = await jsonFetch(`/api/scan/address-list?${query}`);
     return data.payload || {};
   }
@@ -741,6 +777,10 @@
     const createEmail = document.getElementById("result-modal-create-email");
     const createFolder = document.getElementById("result-modal-create-folder");
     const createUserCode = document.getElementById("result-modal-create-user-code");
+    const scanCreateName = document.getElementById("result-modal-scan-create-name");
+    const scanCreateEmail = document.getElementById("result-modal-scan-create-email");
+    const scanCreateFolder = document.getElementById("result-modal-scan-create-folder");
+    const scanCreateUserCode = document.getElementById("result-modal-scan-create-user-code");
     if (scanHtmlBtn) {
       scanHtmlBtn.dataset.enabled = "0";
       scanHtmlBtn.disabled = true;
@@ -751,6 +791,10 @@
     if (createEmail) createEmail.value = "";
     if (createFolder) createFolder.value = "";
     if (createUserCode) createUserCode.value = "";
+    if (scanCreateName) scanCreateName.value = "";
+    if (scanCreateEmail) scanCreateEmail.value = "";
+    if (scanCreateFolder) scanCreateFolder.value = "";
+    if (scanCreateUserCode) scanCreateUserCode.value = "";
     setCreateAddressLoading(false);
     scanOut.textContent = "Open Scan tab to load Address List.";
     renderResultModalScanRows([]);
@@ -847,6 +891,7 @@
     const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
     const createTabBtn = document.getElementById("result-modal-tab-create-address");
     const scanReloadBtn = document.getElementById("result-modal-scan-reload");
+    const scanCreateSubmitBtn = document.getElementById("result-modal-scan-create-submit");
     const scanBody = document.getElementById("result-modal-scan-body");
     const createSubmitBtn = document.getElementById("result-modal-create-submit");
     const protocolInputs = document.querySelectorAll('input[name="result-modal-scan-protocol"]');
@@ -859,6 +904,7 @@
       !scanHtmlTopBtn ||
       !createTabBtn ||
       !scanReloadBtn ||
+      !scanCreateSubmitBtn ||
       !scanBody ||
       !createSubmitBtn ||
       closeBtn.dataset.bound
@@ -960,10 +1006,12 @@
     });
     scanReloadBtn.addEventListener("click", async () => {
       try {
+        appendScanLog("User clicked Load Address List");
         await loadResultModalScanAddressList();
       } catch (err) {
         const out = document.getElementById("result-modal-scan-output");
-        if (out) out.textContent = String(err?.message || err);
+        appendScanLog("Load address list failed", String(err?.message || err), "error");
+        if (out) out.textContent = `${out.textContent}\n${String(err?.message || err)}`;
       }
     });
     scanBody.addEventListener("click", async (event) => {
@@ -1070,6 +1118,56 @@
       node.addEventListener("change", () => {
         saveProtocol().catch(() => { });
       });
+    });
+    scanCreateSubmitBtn.addEventListener("click", async () => {
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const name = String(document.getElementById("result-modal-scan-create-name")?.value || "").trim();
+      const email = String(document.getElementById("result-modal-scan-create-email")?.value || "").trim();
+      const folder = String(document.getElementById("result-modal-scan-create-folder")?.value || "").trim();
+      const userCode = String(document.getElementById("result-modal-scan-create-user-code")?.value || "").trim() || "-";
+      if (!ip) {
+        appendScanLog("Create FTP Address blocked: missing printer IP", null, "warn");
+        if (out) out.textContent = `${out.textContent}\nMissing printer IP`;
+        return;
+      }
+      if (!name) {
+        appendScanLog("Create FTP Address blocked: missing name", null, "warn");
+        if (out) out.textContent = `${out.textContent}\nMissing name`;
+        return;
+      }
+      scanCreateSubmitBtn.disabled = true;
+      scanCreateSubmitBtn.textContent = "Creating...";
+      try {
+        appendScanLog("Create FTP Address started", {
+          ip,
+          name,
+          email_set: Boolean(email),
+          folder_set: Boolean(folder),
+          user_code_set: Boolean(userCode && userCode !== "-"),
+          protocol: "FTP",
+        });
+        const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip,
+            name,
+            email,
+            folder,
+            user_code: userCode,
+            protocol: "FTP",
+            fields: { entryTypeIn: "1" },
+          }),
+        });
+        appendScanLog("Create FTP Address success", data);
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        appendScanLog("Create FTP Address failed", String(err?.message || err), "error");
+      } finally {
+        scanCreateSubmitBtn.disabled = false;
+        scanCreateSubmitBtn.textContent = "Create FTP Address";
+      }
     });
     scanBody.addEventListener("input", (event) => {
       const row = event.target.closest("tr[data-registration-no]");

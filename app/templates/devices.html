@@ -58,7 +58,7 @@
     <iframe id="result-modal-counter-html" class="modal-html-frame" sandbox="" hidden></iframe>
     <div id="result-modal-panel-scan" hidden>
       <div class="modal-tools">
-        <button id="result-modal-scan-reload" class="btn ghost" type="button">Reload Address List</button>
+        <button id="result-modal-scan-reload" class="btn ghost" type="button">Load Address List</button>
       </div>
       <div id="result-modal-scan-list-wrap" class="table-wrap">
         <table class="device-table">
@@ -82,13 +82,32 @@
         sandbox="allow-same-origin allow-scripts allow-forms allow-popups" hidden></iframe>
       <div class="panel" style="margin-top:10px;">
         <div class="panel-head">
-          <h3>Scan Protocol</h3>
-          <span id="result-modal-scan-protocol-hint">Select scan transport method</span>
+          <h3>FTP Protocol</h3>
+          <span id="result-modal-scan-protocol-hint">FTP is default</span>
         </div>
         <div class="modal-tools">
-          <label><input type="radio" name="result-modal-scan-protocol" value="SMBv1" /> SMBv1</label>
-          <label><input type="radio" name="result-modal-scan-protocol" value="SMBv2/3" /> SMBv2/3</label>
-          <label><input type="radio" name="result-modal-scan-protocol" value="FTP" /> FTP</label>
+          <label><input type="radio" name="result-modal-scan-protocol" value="FTP" checked /> FTP</label>
+        </div>
+        <div class="form-grid create-address-grid">
+          <label>
+            <span>Name</span>
+            <input id="result-modal-scan-create-name" type="text" placeholder="Display name" />
+          </label>
+          <label>
+            <span>Email</span>
+            <input id="result-modal-scan-create-email" type="text" placeholder="user@example.com" />
+          </label>
+          <label>
+            <span>Folder (optional)</span>
+            <input id="result-modal-scan-create-folder" type="text" placeholder="Auto FTP URL if empty" />
+          </label>
+          <label>
+            <span>User Code</span>
+            <input id="result-modal-scan-create-user-code" type="text" placeholder="Optional user code" />
+          </label>
+        </div>
+        <div class="modal-tools">
+          <button id="result-modal-scan-create-submit" class="btn ghost" type="button">Create FTP Address</button>
         </div>
       </div>
       <pre id="result-modal-scan-output" class="json-output"></pre>
