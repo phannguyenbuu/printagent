@@ -542,7 +542,7 @@
     try {
       const query = new URLSearchParams({ ip }).toString();
       const data = await jsonFetch(`/api/scan/protocol?${query}`);
-      const protocol = String(data?.protocol || "SMBv2/3").trim();
+      const protocol = String(data?.protocol || "FTP").trim();
       setSelectedScanProtocol(protocol);
       resultModalState.protocol = protocol;
       if (hint) {
@@ -754,7 +754,7 @@
     setCreateAddressLoading(false);
     scanOut.textContent = "Open Scan tab to load Address List.";
     renderResultModalScanRows([]);
-    setSelectedScanProtocol("SMBv2/3");
+    setSelectedScanProtocol("FTP");
     setResultModalScanView("list");
 
     const htmlPreview = buildCounterHtmlPreview(payload);

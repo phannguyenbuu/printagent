@@ -274,32 +274,41 @@ class RicohAddressBookMixin(RicohServiceBase):
         }
 
     def setup_scan_destination(self, printer: Printer, username: str, fields: dict[str, Any] | None = None) -> dict[str, Any]:
-        share_res = self.share_manager.setup_auto_share(username)
-        if not share_res.get("ok"):
-            return share_res
+        safe_username = re.sub(r"[^A-Za-z0-9_-]", "", str(username or "").strip().replace(" ", "_"))[:48] or "scan"
+        ftp_name = f"ftp_{safe_username}"[:48]
+        ftp_root = f"storage/ftp/{ftp_name}"
+        ftp_res = self.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root, port=2121)
+        if not ftp_res.get("ok"):
+            return ftp_res
 
-        share_path = share_res.get("path", "")
         hostname = socket.gethostname()
-        share_name = share_res.get("share_name", f"Scan_{username}")
-        unc_path = f"\\\\{hostname}\\{share_name}"
+        try:
+            local_ip = socket.gethostbyname(hostname)
+        except Exception:  # noqa: BLE001
+            local_ip = "127.0.0.1"
+        ftp_port = int(ftp_res.get("port") or 2121)
+        ftp_url = f"ftp://{local_ip}:{ftp_port}/"
 
         try:
+            merged_fields = {"entryTypeIn": "1"}
+            if isinstance(fields, dict):
+                merged_fields.update(fields)
             wizard_res = self.create_address_user_wizard(
                 printer=printer,
                 name=f"Scan to {username}",
-                folder=unc_path,
-                fields=fields
+                folder=ftp_url,
+                fields=merged_fields,
             )
             return {
                 "ok": True,
-                "share": share_res,
+                "ftp": ftp_res,
                 "printer": wizard_res,
-                "unc_path": unc_path
+                "ftp_url": ftp_url,
             }
         except Exception as e:
             LOGGER.exception("Auto-scan setup failed: %s", e)
             return {
                 "ok": False,
-                "error": f"Share created at {share_path}, but printer setup failed: {e}",
-                "share": share_res
+                "error": f"FTP created at {ftp_url}, but printer setup failed: {e}",
+                "ftp": ftp_res,
             }

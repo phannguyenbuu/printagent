@@ -163,6 +163,12 @@ def _normalize_scan_protocol(value: str) -> str:
     return ""
 
 
+def _sanitize_ftp_name(value: str) -> str:
+    text = str(value or "").strip().replace(" ", "_")
+    text = re.sub(r"[^A-Za-z0-9_-]", "", text)
+    return text[:48]
+
+
 def _detect_scan_protocol_from_html(html: str) -> str:
     text = str(html or "").lower()
     has_smbv1 = any(token in text for token in ["smbv1", "smb v1", "smb1", "nt1"])
@@ -921,6 +927,24 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             )
         return candidates
 
+    def _create_local_ftp_for_address(address_name: str) -> dict[str, Any]:
+        local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
+        seed_name = _sanitize_ftp_name(address_name) or "scan"
+        ftp_name = _sanitize_ftp_name(f"ftp_{seed_name}") or "ftp_scan"
+        ftp_root = Path("storage/ftp") / ftp_name
+        result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root, port=2121)
+        ftp_ok = bool(result.get("ok"))
+        ftp_port = int(result.get("port") or 2121)
+        ftp_url = f"ftp://{local_ip}:{ftp_port}/"
+        return {
+            "ok": ftp_ok,
+            "ftp_name": ftp_name,
+            "ftp_root": str(ftp_root),
+            "ftp_url": ftp_url,
+            "local_ip": local_ip,
+            "result": result,
+        }
+
     @app.get("/api/ftp/pcs")
     def api_ftp_pcs() -> Any:
         return jsonify({"ok": True, "pcs": _ftp_pc_candidates()})
@@ -1232,6 +1256,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             LOGGER.warning("Scan address create rejected: trace_id=%s ip=%s reason=invalid_fields_type", trace_id, ip)
             return jsonify({"ok": False, "error": "fields must be object"}), 400
         try:
+            # Address-create flow is FTP-first by design.
+            selected_protocol = "FTP"
             effective_user = user or "admin"
             effective_password = password or "admin"
             LOGGER.info(
@@ -1248,6 +1274,42 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             target = _resolve_target_printer(ip=ip, user=effective_user, password=effective_password)
             target.user = effective_user
             target.password = effective_password
+            ftp_payload: dict[str, Any] | None = None
+            folder_final = folder
+            if selected_protocol == "FTP":
+                ftp_payload = _create_local_ftp_for_address(name)
+                LOGGER.info(
+                    "Scan address create FTP step: trace_id=%s ip=%s ftp_name=%s ftp_url=%s ftp_ok=%s",
+                    trace_id,
+                    ip,
+                    str(ftp_payload.get("ftp_name", "")).strip(),
+                    str(ftp_payload.get("ftp_url", "")).strip(),
+                    bool(ftp_payload.get("ok", False)),
+                )
+                if not bool(ftp_payload.get("ok", False)):
+                    LOGGER.warning(
+                        "Scan address create FTP setup failed: trace_id=%s ip=%s name=%s error=%s",
+                        trace_id,
+                        ip,
+                        name,
+                        str((ftp_payload.get("result") or {}).get("error", "")).strip(),
+                    )
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "FTP setup failed before address creation",
+                            "trace_id": trace_id,
+                            "protocol": selected_protocol,
+                            "ftp": ftp_payload,
+                        }
+                    ), 500
+                folder_final = str(ftp_payload.get("ftp_url", "")).strip() or folder_final
+                LOGGER.info(
+                    "Scan address create folder overridden by FTP: trace_id=%s ip=%s folder=%s",
+                    trace_id,
+                    ip,
+                    folder_final,
+                )
             merged_fields: dict[str, Any] = {"entryTypeIn": "1"}
             if isinstance(fields, dict):
                 merged_fields.update(fields)
@@ -1255,7 +1317,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 target,
                 name=name,
                 email=email,
-                folder=folder,
+                folder=folder_final,
                 user_code=user_code,
                 fields=merged_fields,
             )
@@ -1266,7 +1328,16 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 payload.get("http_status") if isinstance(payload, dict) else "-",
                 payload.get("verify_count") if isinstance(payload, dict) else "-",
             )
-            return jsonify({"ok": True, "payload": payload, "trace_id": trace_id})
+            return jsonify(
+                {
+                    "ok": True,
+                    "payload": payload,
+                    "trace_id": trace_id,
+                    "protocol": selected_protocol,
+                    "folder_used": folder_final,
+                    "ftp": ftp_payload,
+                }
+            )
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Scan address create failed: trace_id=%s ip=%s", trace_id, ip)
             return jsonify({"ok": False, "error": str(exc), "trace_id": trace_id}), 500
@@ -1409,7 +1480,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             detected = _normalize_scan_protocol(_detect_scan_protocol_from_html(html))
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Scan protocol detect failed: ip=%s error=%s", ip, exc)
-        protocol = detected or saved or "SMBv2/3"
+        protocol = detected or saved or "FTP"
         return jsonify(
             {
                 "ok": True,
@@ -1417,7 +1488,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 "protocol": protocol,
                 "detected": detected,
                 "saved": saved,
-                "options": ["SMBv1", "SMBv2/3", "FTP"],
+                "options": ["FTP", "SMBv2/3", "SMBv1"],
             }
         )
 

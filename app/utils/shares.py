@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app.utils.firewall import ensure_ftp_firewall_rules
+
 LOGGER = logging.getLogger(__name__)
 
 class ShareManager:
@@ -79,12 +81,14 @@ class ShareManager:
         path = Path(local_path).absolute()
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
+            LOGGER.info("FTP root created: path=%s", path)
 
         try:
             safe_site_name = "".join(ch for ch in str(site_name or "") if ch.isalnum() or ch in {"_", "-"}).strip()
             if not safe_site_name:
                 return {"ok": False, "error": "Invalid FTP site name."}
             safe_site_name = safe_site_name[:48]
+            LOGGER.info("FTP create requested: site=%s requested_port=%s path=%s", safe_site_name, port, path)
             try:
                 from pyftpdlib.authorizers import DummyAuthorizer
                 from pyftpdlib.handlers import FTPHandler
@@ -108,6 +112,14 @@ class ShareManager:
             with self._ftp_lock:
                 existing = self._ftp_sites.get(safe_site_name)
                 if existing:
+                    control_port = int(existing.get("port", 0) or 0)
+                    firewall_info = ensure_ftp_firewall_rules(control_port=control_port or preferred_port)
+                    LOGGER.info(
+                        "FTP reuse existing site: site=%s port=%s firewall_ok=%s",
+                        safe_site_name,
+                        control_port,
+                        bool(firewall_info.get("ok", False)),
+                    )
                     return {
                         "ok": True,
                         "existed": True,
@@ -115,15 +127,19 @@ class ShareManager:
                         "physical_path": str(path),
                         "port": int(existing.get("port", 0) or 0),
                         "ftp_url": str(existing.get("ftp_url", "")),
+                        "firewall": firewall_info,
                     }
 
                 use_port = _find_free_port(preferred_port)
+                LOGGER.info("FTP selected port: site=%s port=%s", safe_site_name, use_port)
+                firewall_info = ensure_ftp_firewall_rules(control_port=use_port)
                 authorizer = DummyAuthorizer()
                 authorizer.add_anonymous(str(path), perm="elradfmwMT")
 
                 handler = FTPHandler
                 handler.authorizer = authorizer
                 handler.banner = f"PrintAgent FTP [{safe_site_name}] ready."
+                handler.passive_ports = range(30000, 30050)
                 server = FTPServer(("0.0.0.0", use_port), handler)
 
                 def _serve() -> None:
@@ -136,6 +152,7 @@ class ShareManager:
                 thread.start()
                 time.sleep(0.15)
                 if not thread.is_alive():
+                    LOGGER.error("FTP thread not alive after start: site=%s port=%s", safe_site_name, use_port)
                     return {"ok": False, "error": "FTP thread exited unexpectedly."}
 
                 ftp_url = f"ftp://127.0.0.1:{use_port}/"
@@ -156,8 +173,11 @@ class ShareManager:
                     "port": use_port,
                     "ftp_url": ftp_url,
                     "runtime": "agent-process",
+                    "passive_ports": "30000-30049",
+                    "firewall": firewall_info,
                 }
         except Exception as e:
+            LOGGER.exception("FTP create failed: site_name=%s path=%s", site_name, path)
             return {"ok": False, "error": str(e)}
 
     def setup_auto_share(self, username: str) -> dict[str, Any]:
