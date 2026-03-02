@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -77,16 +76,73 @@ class ShareManager:
             path.mkdir(parents=True, exist_ok=True)
 
         try:
-            # This is a complex operation in IIS, usually done via appcmd.exe or WebAdministration module
-            # We'll start with a check if appcmd exists
-            appcmd = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "inetsrv" / "appcmd.exe"
-            if not appcmd.exists():
-                return {"ok": False, "error": "IIS (appcmd.exe) not found. FTP management requires IIS with FTP features."}
+            safe_site_name = "".join(ch for ch in str(site_name or "") if ch.isalnum() or ch in {"_", "-"}).strip()
+            if not safe_site_name:
+                return {"ok": False, "error": "Invalid FTP site name."}
+            safe_site_name = safe_site_name[:48]
 
-            # Draft command to create site
-            # appcmd add site /name:site_name /bindings:ftp://*:port /physicalPath:path
-            # For simplicity, we'll return a 'not implemented' or 'planned' for now as IIS config is delicate
-            return {"ok": False, "error": "IIS FTP management is not fully implemented yet. Please use SMB for now."}
+            script = f"""
+$ErrorActionPreference='Stop'
+Import-Module WebAdministration
+$siteName = "{safe_site_name}"
+$physicalPath = "{str(path)}"
+$preferredPort = {int(port)}
+$existing = Get-Website -Name $siteName -ErrorAction SilentlyContinue
+if ($existing) {{
+  $bindings = @($existing.bindings.Collection | ForEach-Object {{ $_.bindingInformation }})
+  [PSCustomObject]@{{
+    ok = $true
+    existed = $true
+    site_name = $siteName
+    physical_path = $physicalPath
+    bindings = $bindings
+  }} | ConvertTo-Json -Depth 5
+  exit 0
+}}
+
+function Find-FreePort([int]$start) {{
+  for ($p = $start; $p -le ($start + 200); $p++) {{
+    $busy = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
+    if (-not $busy) {{ return $p }}
+  }}
+  return $start
+}}
+
+$usePort = Find-FreePort -start $preferredPort
+if (-not (Test-Path -LiteralPath $physicalPath)) {{
+  New-Item -ItemType Directory -Path $physicalPath -Force | Out-Null
+}}
+New-WebFtpSite -Name $siteName -Port $usePort -PhysicalPath $physicalPath -Force | Out-Null
+Set-ItemProperty "IIS:\\Sites\\$siteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
+Set-ItemProperty "IIS:\\Sites\\$siteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $false
+
+[PSCustomObject]@{{
+  ok = $true
+  existed = $false
+  site_name = $siteName
+  physical_path = $physicalPath
+  port = $usePort
+}} | ConvertTo-Json -Depth 5
+"""
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or "").strip()
+                return {"ok": False, "error": err or "Failed to create FTP site."}
+            raw = (result.stdout or "").strip()
+            payload: dict[str, Any] = {}
+            try:
+                import json
+                parsed = json.loads(raw) if raw else {}
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {"raw": raw}
+            return {"ok": True, **payload}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

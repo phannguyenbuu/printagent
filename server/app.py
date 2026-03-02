@@ -1564,97 +1564,160 @@ def create_app() -> Flask:
             session.commit()
         return jsonify({"ok": True, "id": row_id, "is_favorite": is_favorite})
 
+    @app.delete("/api/infor/<int:row_id>")
+    def delete_infor_row(row_id: int) -> Any:
+        with session_factory() as session:
+            row = session.get(DeviceInforHistory, row_id)
+            if row is None:
+                return jsonify({"ok": False, "error": "Infor row not found"}), 404
+            lead = _to_text(row.lead)
+            lan_uid = _to_text(row.lan_uid)
+            machine_uid = _to_text(row.machine_uid)
+            mac_id = _to_text(row.mac_id)
+            ip = _to_text(row.ip)
+            session.delete(row)
+            session.flush()
+
+            remain_stmt = select(func.count()).select_from(DeviceInforHistory).where(
+                DeviceInforHistory.lead == lead,
+                DeviceInforHistory.lan_uid == lan_uid,
+                DeviceInforHistory.machine_uid == machine_uid,
+            )
+            remain = int(session.scalar(remain_stmt) or 0)
+            if remain == 0:
+                base_stmt = select(DeviceInfor).where(
+                    DeviceInfor.lead == lead,
+                    DeviceInfor.lan_uid == lan_uid,
+                )
+                if mac_id:
+                    base_stmt = base_stmt.where(DeviceInfor.mac_id == mac_id)
+                elif machine_uid:
+                    base_stmt = base_stmt.where(DeviceInfor.mac_id == machine_uid)
+                elif ip:
+                    base_stmt = base_stmt.where(DeviceInfor.ip == ip)
+                base_row = session.execute(base_stmt.limit(1)).scalar_one_or_none()
+                if base_row is not None:
+                    session.delete(base_row)
+
+            session.commit()
+        return jsonify({"ok": True, "id": row_id})
+
+    @app.get("/api/counter/trend")
     @app.get("/api/counter/heatmap")
-    def counter_heatmap() -> Any:
-        page = _to_page(request.args.get("page"), 1)
-        page_size = min(50, _to_page(request.args.get("page_size"), 15))
+    def counter_trend() -> Any:
         lead = _to_text(request.args.get("lead"))
-        day = _parse_date(request.args.get("date"))
-        start_local = datetime.combine(day, time.min, tzinfo=UI_TZ)
-        end_local = start_local + timedelta(days=1)
+        ip_filter = _to_text(request.args.get("ip"))
+        mode = _to_text(request.args.get("mode")).lower() or "day"
+        if mode not in {"day", "week", "month"}:
+            mode = "day"
+
+        today_local = datetime.now(UI_TZ).date()
+        if mode == "day":
+            default_from = today_local
+        elif mode == "week":
+            default_from = today_local - timedelta(days=6)
+        else:
+            default_from = today_local - timedelta(days=29)
+        date_from = _parse_date(request.args.get("date_from") or default_from.isoformat())
+        date_to = _parse_date(request.args.get("date_to") or today_local.isoformat())
+        if date_to < date_from:
+            date_from, date_to = date_to, date_from
+        if mode == "day":
+            # Daily mode always renders minute-level variation for one day.
+            date_to = date_from
+
+        start_local = datetime.combine(date_from, time.min, tzinfo=UI_TZ)
+        end_local = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=UI_TZ)
         start_dt = start_local.astimezone(timezone.utc)
         end_dt = end_local.astimezone(timezone.utc)
 
-        printers_stmt = select(CounterInfor.ip, CounterInfor.printer_name).where(
-            CounterInfor.timestamp >= start_dt, CounterInfor.timestamp < end_dt
-        )
-        printers_count_stmt = select(func.count(func.distinct(CounterInfor.ip))).where(
-            CounterInfor.timestamp >= start_dt, CounterInfor.timestamp < end_dt
-        )
-        if lead:
-            printers_stmt = printers_stmt.where(CounterInfor.lead == lead)
-            printers_count_stmt = printers_count_stmt.where(CounterInfor.lead == lead)
+        def bucket_label(dt_local: datetime) -> str:
+            if mode == "day":
+                return dt_local.strftime("%H:%M")
+            return dt_local.strftime("%Y-%m-%d")
+
+        labels: list[str] = []
+        seen_labels: set[str] = set()
+        cursor = start_local
+        while cursor < end_local:
+            label = bucket_label(cursor)
+            if label not in seen_labels:
+                labels.append(label)
+                seen_labels.add(label)
+            if mode == "day":
+                cursor += timedelta(minutes=1)
+            elif mode == "week":
+                cursor += timedelta(days=1)
+            else:
+                cursor += timedelta(days=1)
 
         with session_factory() as session:
-            total_printers = int(session.scalar(printers_count_stmt) or 0)
-            printer_rows = (
-                session.execute(printers_stmt.group_by(CounterInfor.ip, CounterInfor.printer_name).order_by(CounterInfor.printer_name.asc()))
-                .all()
-            )
-            start_idx = (page - 1) * page_size
-            end_idx = start_idx + page_size
-            page_printers = printer_rows[start_idx:end_idx]
-            ips = [str(r[0]) for r in page_printers]
-
-            rows_payload: list[dict[str, Any]] = []
-            if ips:
-                points_stmt = select(
+            stmt = (
+                select(
                     CounterInfor.ip,
                     CounterInfor.printer_name,
                     CounterInfor.timestamp,
                     CounterInfor.total,
-                ).where(CounterInfor.timestamp >= start_dt, CounterInfor.timestamp < end_dt, CounterInfor.ip.in_(ips))
-                if lead:
-                    points_stmt = points_stmt.where(CounterInfor.lead == lead)
-                points_stmt = points_stmt.order_by(CounterInfor.ip.asc(), CounterInfor.timestamp.asc())
-                points = session.execute(points_stmt).all()
+                )
+                .where(CounterInfor.timestamp >= start_dt, CounterInfor.timestamp < end_dt)
+                .order_by(CounterInfor.ip.asc(), CounterInfor.timestamp.asc(), CounterInfor.id.asc())
+            )
+            if lead:
+                stmt = stmt.where(CounterInfor.lead == lead)
+            if ip_filter:
+                stmt = stmt.where(CounterInfor.ip == ip_filter)
+            points = session.execute(stmt).all()
 
-                grouped: dict[str, dict[str, Any]] = {}
-                for ip_val, printer_name, ts, total in points:
-                    ip_key = str(ip_val or "")
-                    if ip_key not in grouped:
-                        grouped[ip_key] = {
-                            "ip": ip_key,
-                            "printer_name": str(printer_name or ip_key),
-                            "minutes": [0] * 1440,
-                            "first_total": total,
-                            "last_total": total,
-                            "samples": 0,
-                        }
-                    row = grouped[ip_key]
-                    if isinstance(ts, datetime):
-                        local_ts = ts.astimezone(UI_TZ)
-                        delta = local_ts - start_local
-                        minute_idx = int(delta.total_seconds() // 60)
-                        if 0 <= minute_idx < 1440:
-                            row["minutes"][minute_idx] = 1
-                    row["samples"] += 1
-                    row["last_total"] = total
+        bucket_map: dict[tuple[str, str], dict[str, dict[str, int]]] = {}
+        name_map: dict[tuple[str, str], str] = {}
+        for ip_val, printer_name, ts, total in points:
+            if not isinstance(ts, datetime):
+                continue
+            ip = _to_text(ip_val)
+            if not ip:
+                continue
+            local_ts = ts.astimezone(UI_TZ)
+            label = bucket_label(local_ts)
+            if label not in seen_labels:
+                continue
+            key = (ip, _to_text(printer_name) or ip)
+            name_map[key] = _to_text(printer_name) or ip
+            by_bucket = bucket_map.setdefault(key, {})
+            total_value = _to_int(total) or 0
+            slot = by_bucket.get(label)
+            if slot is None:
+                by_bucket[label] = {"first": total_value, "last": total_value}
+            else:
+                slot["last"] = total_value
 
-                by_ip = {str(r[0]): str(r[1] or r[0]) for r in page_printers}
-                for ip_key in ips:
-                    if ip_key in grouped:
-                        rows_payload.append(grouped[ip_key])
-                    else:
-                        rows_payload.append(
-                            {
-                                "ip": ip_key,
-                                "printer_name": by_ip.get(ip_key, ip_key),
-                                "minutes": [0] * 1440,
-                                "first_total": None,
-                                "last_total": None,
-                                "samples": 0,
-                            }
-                        )
+        series: list[dict[str, Any]] = []
+        for key in sorted(bucket_map.keys(), key=lambda x: (x[1].lower(), x[0])):
+            ip, _ = key
+            by_bucket = bucket_map[key]
+            values: list[int] = []
+            for label in labels:
+                slot = by_bucket.get(label)
+                if slot is None:
+                    values.append(0)
+                else:
+                    diff = int(slot.get("last", 0)) - int(slot.get("first", 0))
+                    values.append(diff if diff >= 0 else 0)
+            series.append(
+                {
+                    "ip": ip,
+                    "printer_name": name_map.get(key, ip),
+                    "values": values,
+                }
+            )
 
         return jsonify(
             {
-                "date": day.isoformat(),
-                "page": page,
-                "page_size": page_size,
-                "total": total_printers,
-                "total_pages": max(1, (total_printers + page_size - 1) // page_size),
-                "rows": rows_payload,
+                "mode": mode,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "labels": labels,
+                "printers": len(series),
+                "series": series,
             }
         )
 
@@ -2257,25 +2320,64 @@ def create_app() -> Flask:
                     infor.last_status_at = timestamp
                 infor.updated_at = datetime.now(timezone.utc)
 
-            if can_update_infor_data and changed_any:
-                snapshot_counter = counter_data if changed_counter else prev_counter_data
-                snapshot_status = status_data if changed_status else prev_status_data
-                history = DeviceInforHistory(
-                    lead=lead,
-                    lan_uid=lan_uid,
-                    machine_uid=root_mac_id,
-                    mac_id=public_mac_id,
-                    agent_uid=agent_uid,
-                    printer_name=printer_name or (infor.printer_name if infor is not None else "Unknown Printer"),
-                    ip=ip or (infor.ip if infor is not None else ""),
-                    counter_data=snapshot_counter if isinstance(snapshot_counter, dict) else {},
-                    status_data=snapshot_status if isinstance(snapshot_status, dict) else {},
-                    last_counter_at=timestamp if changed_counter else (infor.last_counter_at if infor is not None else None),
-                    last_status_at=timestamp if changed_status else (infor.last_status_at if infor is not None else None),
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
+            if can_update_infor_data:
+                snapshot_counter = counter_data if changed_counter else (
+                    infor.counter_data if (infor is not None and isinstance(infor.counter_data, dict)) else prev_counter_data
                 )
-                session.add(history)
+                snapshot_status = status_data if changed_status else (
+                    infor.status_data if (infor is not None and isinstance(infor.status_data, dict)) else prev_status_data
+                )
+                snapshot_counter = snapshot_counter if isinstance(snapshot_counter, dict) else {}
+                snapshot_status = snapshot_status if isinstance(snapshot_status, dict) else {}
+
+                latest_history = session.execute(
+                    select(DeviceInforHistory)
+                    .where(
+                        DeviceInforHistory.lead == lead,
+                        DeviceInforHistory.lan_uid == lan_uid,
+                        DeviceInforHistory.machine_uid == root_mac_id,
+                    )
+                    .order_by(DeviceInforHistory.updated_at.desc(), DeviceInforHistory.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+
+                same_counter = False
+                same_status = False
+                if latest_history is not None:
+                    hist_counter = latest_history.counter_data if isinstance(latest_history.counter_data, dict) else {}
+                    hist_status = latest_history.status_data if isinstance(latest_history.status_data, dict) else {}
+                    same_counter = _normalize_counter_payload(snapshot_counter) == _normalize_counter_payload(hist_counter)
+                    same_status = _normalize_status_payload(snapshot_status) == _normalize_status_payload(hist_status)
+
+                if latest_history is not None and same_counter and same_status:
+                    # Strict dedupe by lan_uid + machine_uid + (counter,status): touch old row only.
+                    latest_history.agent_uid = agent_uid or latest_history.agent_uid
+                    latest_history.printer_name = printer_name or latest_history.printer_name
+                    latest_history.ip = ip or latest_history.ip
+                    latest_history.mac_id = public_mac_id or latest_history.mac_id
+                    if counter_data:
+                        latest_history.last_counter_at = timestamp
+                    if status_data:
+                        latest_history.last_status_at = timestamp
+                    latest_history.updated_at = datetime.now(timezone.utc)
+                else:
+                    # Any change in lan_uid/counter/status creates a new history row, keeping old rows.
+                    history = DeviceInforHistory(
+                        lead=lead,
+                        lan_uid=lan_uid,
+                        machine_uid=root_mac_id,
+                        mac_id=public_mac_id,
+                        agent_uid=agent_uid,
+                        printer_name=printer_name or (infor.printer_name if infor is not None else "Unknown Printer"),
+                        ip=ip or (infor.ip if infor is not None else ""),
+                        counter_data=snapshot_counter,
+                        status_data=snapshot_status,
+                        last_counter_at=timestamp if counter_data else (infor.last_counter_at if infor is not None else None),
+                        last_status_at=timestamp if status_data else (infor.last_status_at if infor is not None else None),
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                    session.add(history)
             session.commit()
         LOGGER.info(
             "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s)",
@@ -2396,17 +2498,12 @@ def create_app() -> Flask:
 
             rows: list[dict[str, Any]] = []
             if history_rows:
-                latest_by_machine: set[tuple[str, str, str]] = set()
+                latest_by_lan_mac: set[tuple[str, str, str]] = set()
                 for h in history_rows:
                     counter_data = h.counter_data if isinstance(h.counter_data, dict) else {}
                     status_data = h.status_data if isinstance(h.status_data, dict) else {}
                     if not counter_data and not status_data:
                         continue
-                    machine_uid = _to_text(h.machine_uid) or _to_text(h.mac_id) or (f"IP:{_to_text(h.ip)}" if _to_text(h.ip) else "")
-                    latest_key = (_to_text(h.lead), _to_text(h.lan_uid), machine_uid)
-                    is_latest = latest_key not in latest_by_machine
-                    if is_latest:
-                        latest_by_machine.add(latest_key)
                     resolved_mac = _normalize_mac(h.mac_id)
                     if not resolved_mac and _to_text(h.ip):
                         resolved_mac = _resolve_public_mac(
@@ -2416,6 +2513,14 @@ def create_app() -> Flask:
                             ip=_to_text(h.ip),
                             incoming_mac="",
                         )
+                    machine_uid = _to_text(h.machine_uid) or resolved_mac or (f"IP:{_to_text(h.ip)}" if _to_text(h.ip) else "")
+                    # Strict latest highlight is based on LAN UID + MAC ID.
+                    is_latest = False
+                    if resolved_mac:
+                        latest_key = (_to_text(h.lead), _to_text(h.lan_uid), resolved_mac)
+                        if latest_key not in latest_by_lan_mac:
+                            latest_by_lan_mac.add(latest_key)
+                            is_latest = True
                     rows.append(
                         {
                             "id": int(h.id),
@@ -2469,7 +2574,7 @@ def create_app() -> Flask:
                             "ip": d.ip,
                             "mac_id": resolved_mac or "unknown",
                             "machine_uid": _to_text(d.mac_id) or (f"IP:{_to_text(d.ip)}" if _to_text(d.ip) else "unknown"),
-                            "is_latest": True,
+                            "is_latest": bool(resolved_mac),
                             "counter": counter_data,
                             "status": status_data,
                             "counter_data": counter_data,

@@ -3,6 +3,49 @@
 <section class="panel api-docs-panel">
   <h3>Public API Documentation</h3>
   <div class="meta-line">Source: <code>server/PUBLIC_API.md</code></div>
+  <div class="api-test-layout">
+    <div class="api-test-left">
+      <div class="api-test-tools">
+        <button id="api-test-all-btn" type="button">Test All APIs</button>
+        <span id="api-test-global-status" class="api-test-status idle">Ready</span>
+      </div>
+      <div class="api-test-list">
+        <div class="api-test-row">
+          <label>/machinelist/</label>
+          <button type="button" class="api-test-btn" data-api-key="machinelist">Test</button>
+          <span class="api-test-status idle" id="api-test-status-machinelist">-</span>
+        </div>
+        <div class="api-test-row">
+          <label>/networklist/</label>
+          <button type="button" class="api-test-btn" data-api-key="networklist">Test</button>
+          <span class="api-test-status idle" id="api-test-status-networklist">-</span>
+        </div>
+        <div class="api-test-row">
+          <label>/api/infor/list</label>
+          <button type="button" class="api-test-btn" data-api-key="infor">Test</button>
+          <span class="api-test-status idle" id="api-test-status-infor">-</span>
+        </div>
+        <div class="api-test-row">
+          <label>/api/public/device/by-mac</label>
+          <button type="button" class="api-test-btn" data-api-key="by-mac">Test</button>
+          <span class="api-test-status idle" id="api-test-status-by-mac">-</span>
+        </div>
+        <div class="api-test-row">
+          <label>/api/public/network/by-lan</label>
+          <button type="button" class="api-test-btn" data-api-key="by-lan">Test</button>
+          <span class="api-test-status idle" id="api-test-status-by-lan">-</span>
+        </div>
+        <div class="api-test-row">
+          <label>/all/</label>
+          <button type="button" class="api-test-btn" data-api-key="all">Test</button>
+          <span class="api-test-status idle" id="api-test-status-all">-</span>
+        </div>
+      </div>
+    </div>
+    <div class="api-test-right">
+      <pre id="api-test-output" class="api-test-output">Click Test to run API check...</pre>
+    </div>
+  </div>
   <pre class="api-docs-pre">{{ api_markdown }}</pre>
 </section>
 {% endblock %}

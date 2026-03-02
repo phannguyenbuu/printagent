@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-head-title">
+      <span>PC list</span>
+      <button id="ftp-refresh-btn" class="btn ghost" type="button">Reload PCs</button>
+      <button id="ftp-create-btn" class="btn action" type="button">Create FTP</button>
+    </div>
+    <span>Select one PC then create FTP</span>
+  </div>
+  <div class="table-wrap">
+    <table class="device-table">
+      <thead>
+        <tr>
+          <th style="width: 80px;">Select</th>
+          <th>Name</th>
+          <th>IP</th>
+          <th>Department</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody id="ftp-pc-body">
+        <tr><td colspan="5">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Result</h3>
+  </div>
+  <pre id="ftp-output" class="json-output">Select PC and click "Create FTP".</pre>
+</section>
+
+<div id="ftp-create-modal" class="modal-backdrop" hidden>
+  <div class="modal-card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ftp-create-modal-title">
+    <div class="modal-head">
+      <h4 id="ftp-create-modal-title">Create FTP</h4>
+    </div>
+    <div class="confirm-body">
+      <label class="form-inline">
+        <span>Name</span>
+        <input id="ftp-create-name" type="text" placeholder="ftp_name" />
+      </label>
+    </div>
+    <div class="modal-tools confirm-actions">
+      <button id="ftp-create-cancel" class="btn ghost" type="button">Cancel</button>
+      <button id="ftp-create-ok" class="btn action" type="button">OK</button>
+    </div>
+  </div>
+</div>
+{% endblock %}

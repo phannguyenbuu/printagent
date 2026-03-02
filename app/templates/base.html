@@ -23,6 +23,7 @@
         <nav class="side-nav">
           <a class="side-link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a class="side-link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="side-link {% if active_tab == 'ftp' %}active{% endif %}" href="{{ url_for('ftp_page') }}">Ftp</a>
         </nav>
       </aside>
 
@@ -41,6 +42,7 @@
         <div class="nav-tabs">
           <a class="tab {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Config</a>
           <a id="nav-tab-devices" class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="tab {% if active_tab == 'ftp' %}active{% endif %}" href="{{ url_for('ftp_page') }}">Ftp</a>
         </div>
 
         {% block content %}{% endblock %}

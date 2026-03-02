@@ -887,6 +887,84 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         total = store.replace_links(links)
         return jsonify({"ok": True, "total_links": total})
 
+    def _ftp_pc_candidates() -> list[dict[str, Any]]:
+        store: ConfigStore = app.config["CONFIG_STORE"]
+        payload = store.get_dashboard_payload()
+        candidates: list[dict[str, Any]] = []
+        local_host = str(socket.gethostname() or "").strip() or "localhost"
+        local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
+        candidates.append(
+            {
+                "id": "local",
+                "name": local_host,
+                "ip": local_ip,
+                "department": "Local Agent",
+                "source": "local",
+                "is_local": True,
+            }
+        )
+        for row in payload.computers:
+            cid = str(row.get("id", "")).strip()
+            if not cid:
+                continue
+            ip = _normalize_ipv4(str(row.get("ip", "")).strip())
+            is_local = bool(ip and ip == local_ip)
+            candidates.append(
+                {
+                    "id": cid,
+                    "name": str(row.get("name", "")).strip() or f"PC-{cid}",
+                    "ip": ip,
+                    "department": str(row.get("department", "")).strip(),
+                    "source": "dashboard",
+                    "is_local": is_local,
+                }
+            )
+        return candidates
+
+    @app.get("/api/ftp/pcs")
+    def api_ftp_pcs() -> Any:
+        return jsonify({"ok": True, "pcs": _ftp_pc_candidates()})
+
+    @app.post("/api/ftp/create")
+    def api_ftp_create() -> Any:
+        body = request.get_json(silent=True) or {}
+        computer_id = str(body.get("computer_id", "")).strip()
+        ftp_name_raw = str(body.get("ftp_name", "")).strip()
+        ftp_name = re.sub(r"[^A-Za-z0-9_-]", "", ftp_name_raw.replace(" ", "_"))[:48]
+        if not computer_id:
+            return jsonify({"ok": False, "error": "Missing computer_id"}), 400
+        if not ftp_name:
+            return jsonify({"ok": False, "error": "Missing ftp_name"}), 400
+
+        candidates = _ftp_pc_candidates()
+        selected = next((x for x in candidates if str(x.get("id")) == computer_id), None)
+        if not selected:
+            return jsonify({"ok": False, "error": "Computer not found"}), 404
+        if not bool(selected.get("is_local")):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Remote PC FTP creation is not supported in this agent. Select Local Agent PC.",
+                    "target": selected,
+                }
+            ), 400
+
+        ftp_root = Path("storage/ftp") / ftp_name
+        result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root)
+        status_code = 200 if bool(result.get("ok")) else 400
+        return (
+            jsonify(
+                {
+                    "ok": bool(result.get("ok")),
+                    "target": selected,
+                    "ftp_name": ftp_name,
+                    "ftp_root": str(ftp_root),
+                    "result": result,
+                }
+            ),
+            status_code,
+        )
+
     @app.get("/devices")
     def devices() -> Any:
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
@@ -898,6 +976,10 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.get("/scan")
     def scan() -> Any:
         return render_template("scan.html", active_tab="scan", page_title="Scan")
+
+    @app.get("/ftp")
+    def ftp_page() -> Any:
+        return render_template("ftp.html", active_tab="ftp", page_title="FTP")
 
     @app.get("/analytics")
     def analytics() -> Any:

@@ -1490,6 +1490,163 @@
     await loadDevices();
   }
 
+  const ftpState = {
+    pcs: [],
+    selectedId: "",
+  };
+
+  function normalizeFtpName(value) {
+    const cleaned = String(value || "")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^A-Za-z0-9_-]/g, "");
+    return cleaned.slice(0, 48);
+  }
+
+  function renderFtpPcList() {
+    const body = document.getElementById("ftp-pc-body");
+    if (!body) return;
+    const rows = Array.isArray(ftpState.pcs) ? ftpState.pcs : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5">No PCs found.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((pc) => {
+        const id = String(pc.id || "");
+        const selected = id === String(ftpState.selectedId || "");
+        return `
+        <tr class="${selected ? "selected" : ""}">
+          <td><input type="radio" name="ftp-selected-pc" value="${id}" ${selected ? "checked" : ""} /></td>
+          <td>${pc.name || "-"}</td>
+          <td>${pc.ip || "-"}</td>
+          <td>${pc.department || "-"}</td>
+          <td>${pc.source || "-"}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  async function loadFtpPcs() {
+    const body = document.getElementById("ftp-pc-body");
+    if (!body) return;
+    body.innerHTML = `<tr><td colspan="5">Loading...</td></tr>`;
+    const data = await jsonFetch("/api/ftp/pcs");
+    ftpState.pcs = Array.isArray(data?.pcs) ? data.pcs : [];
+    const exists = ftpState.pcs.some((x) => String(x.id || "") === String(ftpState.selectedId || ""));
+    if (!exists) ftpState.selectedId = String(ftpState.pcs[0]?.id || "");
+    renderFtpPcList();
+  }
+
+  function openFtpCreateModal(defaultName = "") {
+    const modal = document.getElementById("ftp-create-modal");
+    const input = document.getElementById("ftp-create-name");
+    if (!modal || !input) return;
+    modal.hidden = false;
+    input.value = normalizeFtpName(defaultName || "");
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  }
+
+  function closeFtpCreateModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    if (!modal) return;
+    modal.hidden = true;
+  }
+
+  function bindFtpModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    const okBtn = document.getElementById("ftp-create-ok");
+    const cancelBtn = document.getElementById("ftp-create-cancel");
+    const input = document.getElementById("ftp-create-name");
+    const output = document.getElementById("ftp-output");
+    if (!modal || !okBtn || !cancelBtn || !input) return;
+    if (modal.dataset.bound) return;
+    modal.dataset.bound = "1";
+
+    cancelBtn.addEventListener("click", () => closeFtpCreateModal());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeFtpCreateModal();
+    });
+    input.addEventListener("input", () => {
+      const next = normalizeFtpName(input.value);
+      if (next !== input.value) input.value = next;
+    });
+    okBtn.addEventListener("click", async () => {
+      const selectedId = String(ftpState.selectedId || "");
+      const ftpName = normalizeFtpName(input.value);
+      if (!selectedId) {
+        if (output) output.textContent = "Please select one PC first.";
+        closeFtpCreateModal();
+        return;
+      }
+      if (!ftpName) {
+        if (output) output.textContent = "FTP name is required.";
+        return;
+      }
+      okBtn.disabled = true;
+      try {
+        if (output) output.textContent = "Creating FTP...";
+        const payload = await jsonFetch("/api/ftp/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ computer_id: selectedId, ftp_name: ftpName }),
+        });
+        if (output) output.textContent = jsonString(payload);
+        closeFtpCreateModal();
+      } catch (err) {
+        if (output) output.textContent = `Create FTP failed: ${String(err?.message || err)}`;
+      } finally {
+        okBtn.disabled = false;
+      }
+    });
+  }
+
+  async function initFtpPage() {
+    bindFtpModal();
+    const refreshBtn = document.getElementById("ftp-refresh-btn");
+    const createBtn = document.getElementById("ftp-create-btn");
+    const body = document.getElementById("ftp-pc-body");
+    if (refreshBtn && !refreshBtn.dataset.bound) {
+      refreshBtn.dataset.bound = "1";
+      refreshBtn.addEventListener("click", () => {
+        loadFtpPcs().catch((err) => {
+          const output = document.getElementById("ftp-output");
+          if (output) output.textContent = `Load PCs failed: ${String(err?.message || err)}`;
+        });
+      });
+    }
+    if (body && !body.dataset.bound) {
+      body.dataset.bound = "1";
+      body.addEventListener("change", (event) => {
+        const node = event.target?.closest?.('input[name="ftp-selected-pc"]');
+        if (!node) return;
+        ftpState.selectedId = String(node.value || "");
+        renderFtpPcList();
+      });
+      body.addEventListener("click", (event) => {
+        const row = event.target?.closest?.("tr");
+        if (!row) return;
+        const radio = row.querySelector('input[name="ftp-selected-pc"]');
+        if (!radio) return;
+        radio.checked = true;
+        ftpState.selectedId = String(radio.value || "");
+        renderFtpPcList();
+      });
+    }
+    if (createBtn && !createBtn.dataset.bound) {
+      createBtn.dataset.bound = "1";
+      createBtn.addEventListener("click", () => {
+        const selected = ftpState.pcs.find((x) => String(x.id || "") === String(ftpState.selectedId || ""));
+        const defaultName = selected ? `ftp_${String(selected.name || "site")}` : "ftp_site";
+        openFtpCreateModal(defaultName);
+      });
+    }
+    await loadFtpPcs();
+  }
+
   function getScanTarget() {
     const selectedIp = (document.getElementById("scan-device-select")?.value || "").trim();
     const ipFromField = (document.getElementById("scan-ip")?.value || "").trim();
@@ -2216,6 +2373,9 @@
     if (page === "scan") {
       initScanPage().catch(() => { });
     }
+    if (page === "ftp") {
+      initFtpPage().catch(() => { });
+    }
     const refresh = document.getElementById("refresh-btn");
     if (refresh) {
       refresh.addEventListener("click", async () => {
@@ -2226,6 +2386,8 @@
           loadDevices(true).catch(() => { });
         } else if (page === "scan") {
           loadScanAddressList().catch(() => { });
+        } else if (page === "ftp") {
+          loadFtpPcs().catch(() => { });
         } else {
           loadOverview().catch(() => { });
         }
