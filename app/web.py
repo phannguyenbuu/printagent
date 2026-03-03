@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
+from openpyxl import Workbook, load_workbook
 
 from app.config import AppConfig
 from app.db import create_session_factory
@@ -28,6 +29,8 @@ LOGGER = logging.getLogger(__name__)
 HISTORY_FILE = Path("storage/data/live_overview_history.csv")
 COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
 STATUS_LOG_FILE = Path("storage/data/log_status.csv")
+COUNTER_LOG_XLSX_FILE = Path("storage/data/log_counter.xlsx")
+STATUS_LOG_XLSX_FILE = Path("storage/data/log_status.xlsx")
 DEVICES_CACHE_FILE = Path("storage/data/devices_cache.json")
 CACHE_TTL_SECONDS = 300
 SCAN_PROTOCOL_PREFS_FILE = Path("storage/data/scan_protocol_prefs.json")
@@ -649,39 +652,40 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
 def _counter_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
     _ensure_parent(COUNTER_LOG_FILE)
     new_file = not COUNTER_LOG_FILE.exists()
+    counter_header = [
+        "timestamp",
+        "printer_name",
+        "printer_ip",
+        "total",
+        "copier_bw",
+        "printer_bw",
+        "scanner_send_bw",
+        "scanner_send_color",
+    ]
     with COUNTER_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
         writer = csv.writer(fp)
         if new_file:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "printer_name",
-                    "printer_ip",
-                    "total",
-                    "copier_bw",
-                    "printer_bw",
-                    "scanner_send_bw",
-                    "scanner_send_color",
-                ]
-            )
+            writer.writerow(counter_header)
         while not stop_event.is_set():
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
                 parsed = service.parse_counter(service.read_counter(printer))
-                writer.writerow(
-                    [
-                        now,
-                        printer.name,
-                        printer.ip,
-                        parsed.get("total", ""),
-                        parsed.get("copier_bw", ""),
-                        parsed.get("printer_bw", ""),
-                        parsed.get("scanner_send_bw", ""),
-                        parsed.get("scanner_send_color", ""),
-                    ]
-                )
+                row = [
+                    now,
+                    printer.name,
+                    printer.ip,
+                    parsed.get("total", ""),
+                    parsed.get("copier_bw", ""),
+                    parsed.get("printer_bw", ""),
+                    parsed.get("scanner_send_bw", ""),
+                    parsed.get("scanner_send_color", ""),
+                ]
+                writer.writerow(row)
+                _append_xlsx_row(COUNTER_LOG_XLSX_FILE, counter_header, row)
             except Exception as exc:  # noqa: BLE001
-                writer.writerow([now, printer.name, printer.ip, "ERROR", str(exc), "", "", ""])
+                row = [now, printer.name, printer.ip, "ERROR", str(exc), "", "", ""]
+                writer.writerow(row)
+                _append_xlsx_row(COUNTER_LOG_XLSX_FILE, counter_header, row)
             fp.flush()
             stop_event.wait(60)
 
@@ -689,38 +693,70 @@ def _counter_worker(service: RicohService, printer: Printer, stop_event: threadi
 def _status_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
     _ensure_parent(STATUS_LOG_FILE)
     new_file = not STATUS_LOG_FILE.exists()
+    status_header = [
+        "timestamp",
+        "printer_name",
+        "printer_ip",
+        "system_status",
+        "printer_status",
+        "printer_alerts",
+        "copier_status",
+        "copier_alerts",
+        "scanner_status",
+        "scanner_alerts",
+        "toner_black",
+        "tray_1_status",
+        "tray_2_status",
+        "tray_3_status",
+        "bypass_tray_status",
+        "other_info",
+    ]
     with STATUS_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
         writer = csv.writer(fp)
         if new_file:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "printer_name",
-                    "printer_ip",
-                    "system_status",
-                    "printer_status",
-                    "printer_alerts",
-                    "copier_status",
-                    "copier_alerts",
-                    "scanner_status",
-                    "scanner_alerts",
-                    "toner_black",
-                    "tray_1_status",
-                    "tray_2_status",
-                    "tray_3_status",
-                    "bypass_tray_status",
-                    "other_info",
-                ]
-            )
+            writer.writerow(status_header)
         while not stop_event.is_set():
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
                 status_data = service.parse_status(service.read_status(printer))
-                writer.writerow(service._prepare_csv_row(now, printer, status_data))
+                row = service._prepare_csv_row(now, printer, status_data)
+                writer.writerow(row)
+                _append_xlsx_row(STATUS_LOG_XLSX_FILE, status_header, row)
             except Exception as exc:  # noqa: BLE001
-                writer.writerow([now, printer.name, printer.ip, "ERROR", str(exc), "", "", "", "", "", "", "", "", "", "", ""])
+                row = [now, printer.name, printer.ip, "ERROR", str(exc), "", "", "", "", "", "", "", "", "", "", ""]
+                writer.writerow(row)
+                _append_xlsx_row(STATUS_LOG_XLSX_FILE, status_header, row)
             fp.flush()
             stop_event.wait(30)
+
+
+def _append_xlsx_row(path: Path, header: list[str], row: list[Any]) -> None:
+    _ensure_parent(path)
+    if path.exists():
+        wb = load_workbook(path)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        ws.append(header)
+        ws.row_dimensions[1].height = 30
+        for col_idx in range(1, len(header) + 1):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            dim = ws.column_dimensions[col_letter]
+            current_width = float(dim.width) if dim.width else 8.43
+            # Keep existing font unchanged; only enlarge width to ~2x default.
+            dim.width = max(current_width, 16.86)
+
+    ws.append(row)
+    ws.row_dimensions[ws.max_row].height = 30
+    # Ensure all used columns are at least 2x default width.
+    for col_idx in range(1, len(header) + 1):
+        col_letter = ws.cell(row=1, column=col_idx).column_letter
+        dim = ws.column_dimensions[col_letter]
+        current_width = float(dim.width) if dim.width else 8.43
+        dim.width = max(current_width, 16.86)
+    wb.save(path)
 
 
 def _start_job(jobs: dict[str, dict[str, Any]], key: str, target: Any) -> tuple[bool, str]:

@@ -20,7 +20,6 @@ export interface WorkHistoryEntry {
   to?: string;    // ISO date, omit if currently active at this company
   isCurrent?: boolean; // explicit flag, fallback to !to
 }
-}
 
 export interface AuthState {
   user: User | null;
