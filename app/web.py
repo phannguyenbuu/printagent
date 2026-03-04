@@ -6,6 +6,7 @@ import logging
 import re
 import socket
 import subprocess
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -779,7 +780,14 @@ def _stop_job(jobs: dict[str, dict[str, Any]], key: str) -> tuple[bool, str]:
 
 
 def create_app(config_path: str = "config.yaml") -> Flask:
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    template_dir = bundle_root / "app" / "templates"
+    if not template_dir.exists():
+        template_dir = Path(__file__).resolve().parent / "templates"
+    static_dir = bundle_root / "app" / "static"
+    if not static_dir.exists():
+        static_dir = Path(__file__).resolve().parent / "static"
+    app = Flask(__name__, template_folder=str(template_dir), static_folder=str(static_dir))
     config = AppConfig.load(config_path)
     session_factory = create_session_factory(config.database_url)
     config_store = ConfigStore(session_factory)

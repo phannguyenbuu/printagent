@@ -1,4 +1,5 @@
 .venv/
+.build-venv/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -8,3 +9,6 @@ storage/data/*.csv
 storage/data/*.db
 ref/
 app-gox/node_modules/
+build/
+dist/
+*.spec

@@ -40,6 +40,25 @@ python -m app.main --mode service
 python -m app.main --mode test
 ```
 
+## Build EXE (Windows, no Python on target machine)
+
+```powershell
+cd d:\Dropbox\_Documents\_Vlance_2026\printagent
+powershell -ExecutionPolicy Bypass -File .\build_agent_exe.ps1 -Clean
+# if first time or want clean build env:
+powershell -ExecutionPolicy Bypass -File .\build_agent_exe.ps1 -Clean -RecreateVenv
+```
+
+Output:
+
+- `dist\printagent.exe`
+
+Run on target PC:
+
+1. Copy `printagent.exe` to target machine.
+2. Run `printagent.exe --mode web` (or `--mode service`).
+3. On first run, `config.yaml` is auto-created next to `.exe` if missing.
+
 ## WebSocket Connection To Main Server
 
 Preferred: configure in `.env`:

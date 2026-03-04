@@ -4,8 +4,10 @@ import argparse
 import logging
 import os
 import signal
+import shutil
 import sys
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -17,6 +19,34 @@ from app.web import create_app
 
 def setup_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+def _ensure_runtime_root() -> Path:
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        os.chdir(exe_dir)
+        return exe_dir
+    return Path.cwd()
+
+
+def _resolve_config_path(config_path: str, runtime_root: Path) -> str:
+    requested = Path(config_path)
+    if requested.is_absolute() and requested.exists():
+        return str(requested)
+    if requested.exists():
+        return str(requested)
+
+    fallback = runtime_root / requested
+    if fallback.exists():
+        return str(fallback)
+
+    bundle_root = getattr(sys, "_MEIPASS", "")
+    bundled = Path(bundle_root) / requested if bundle_root else None
+    if bundled and bundled.exists():
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled, fallback)
+        return str(fallback)
+    return str(requested)
 
 
 def load_test_printer(config: AppConfig) -> Printer:
@@ -119,6 +149,7 @@ def run_normal_mode(service: RicohService, config: AppConfig) -> None:
 def main() -> int:
     load_dotenv()
     setup_logging()
+    runtime_root = _ensure_runtime_root()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
@@ -145,13 +176,14 @@ def main() -> int:
     )
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     args = parser.parse_args()
+    resolved_config_path = _resolve_config_path(args.config, runtime_root)
 
     if args.mode == "web":
-        app = create_app(args.config)
+        app = create_app(resolved_config_path)
         app.run(host=args.host, port=args.port, debug=args.debug)
         return 0
 
-    config = AppConfig.load(args.config)
+    config = AppConfig.load(resolved_config_path)
     service = RicohService(APIClient(config))
     if args.mode == "test":
         run_test_mode(config, service)
