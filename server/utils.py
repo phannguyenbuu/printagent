@@ -308,15 +308,27 @@ def _apply_common_filters(
         stmt = stmt.where(func.lower(model.printer_name).like(f"%{printer_type}%"))
     from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
     to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
-    if from_dt:
-        stmt = stmt.where(model.timestamp >= from_dt)
-    if to_dt:
-        stmt = stmt.where(model.timestamp <= to_dt)
-    if not from_dt and not to_dt:
-        scope_start = _time_scope_start(time_scope)
-        if scope_start:
-            stmt = stmt.where(model.timestamp >= scope_start)
-    if favorite_only:
+    
+    # Detect time column
+    time_col = None
+    if hasattr(model, "timestamp"):
+        time_col = model.timestamp
+    elif hasattr(model, "updated_at"):
+        time_col = model.updated_at
+    elif hasattr(model, "created_at"):
+        time_col = model.created_at
+
+    if time_col is not None:
+        if from_dt:
+            stmt = stmt.where(time_col >= from_dt)
+        if to_dt:
+            stmt = stmt.where(time_col <= to_dt)
+        if not from_dt and not to_dt:
+            scope_start = _time_scope_start(time_scope)
+            if scope_start:
+                stmt = stmt.where(time_col >= scope_start)
+    
+    if favorite_only and hasattr(model, "is_favorite"):
         stmt = stmt.where(model.is_favorite.is_(True))
     return stmt
 
