@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>🖨️ Printer Drivers</h2>
+    <p>Select a brand and model to find driver download links.</p>
+  </div>
+
+  <div class="tab-container" style="margin-top: 20px;">
+    <div class="tab-header" style="display: flex; gap: 10px; border-bottom: 1px solid #eee; padding-bottom: 10px;">
+      <button class="tab-btn active" onclick="showTab('ricoh')">Ricoh</button>
+      <button class="tab-btn" onclick="showTab('toshiba')">Toshiba</button>
+      <button class="tab-btn" onclick="showTab('fujifilm')">Fujifilm</button>
+    </div>
+
+    <!-- RICOH TAB -->
+    <div id="tab-ricoh" class="tab-content" style="padding-top: 20px;">
+      <div style="margin-bottom: 15px;">
+        <input type="text" id="ricoh-search" placeholder="Search Ricoh models (e.g. MP 3054)..." 
+               style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;"
+               onkeyup="filterRicoh()">
+      </div>
+      
+      <div id="ricoh-listbox" style="max-height: 400px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px;">
+        <!-- Models will be injected here -->
+      </div>
+    </div>
+
+    <!-- TOSHIBA TAB -->
+    <div id="tab-toshiba" class="tab-content" style="padding-top: 20px; display: none;">
+      <p style="color: #666; font-style: italic;">Toshiba driver database integration pending...</p>
+      <a href="https://business.toshiba.com/support/" target="_blank" class="filter-btn ghost">Go to Toshiba Support</a>
+    </div>
+
+    <!-- FUJIFILM TAB -->
+    <div id="tab-fujifilm" class="tab-content" style="padding-top: 20px; display: none;">
+      <p style="color: #666; font-style: italic;">Fujifilm (ApeosPort) driver database integration pending...</p>
+      <a href="https://support-fb.fujifilm.com/" target="_blank" class="filter-btn ghost">Go to Fujifilm Support</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .tab-btn {
+    padding: 8px 20px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-weight: 600;
+    color: #666;
+    transition: all 0.2s;
+  }
+  .tab-btn.active {
+    color: var(--color-primary, #3b82f6);
+    border-bottom-color: var(--color-primary, #3b82f6);
+  }
+  .driver-item {
+    padding: 12px 15px;
+    border-bottom: 1px solid #f5f5f5;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background 0.2s;
+  }
+  .driver-item:hover {
+    background: #f9f9f9;
+  }
+  .driver-item:last-child {
+    border-bottom: none;
+  }
+  .model-name {
+    font-weight: 500;
+    color: #333;
+  }
+  .download-ico {
+    color: var(--color-primary, #3b82f6);
+    font-size: 0.9rem;
+  }
+</style>
+
+<script>
+const ricohModels = [
+  { name: "Ricoh IM 2500", slug: "im-2500" },
+  { name: "Ricoh IM 3000", slug: "im-3000" },
+  { name: "Ricoh IM 3500", slug: "im-3500" },
+  { name: "Ricoh IM 4000", slug: "im-4000" },
+  { name: "Ricoh IM 5000", slug: "im-5000" },
+  { name: "Ricoh IM 6000", slug: "im-6000" },
+  { name: "Ricoh IM 7000", slug: "im-7000" },
+  { name: "Ricoh IM 8000", slug: "im-8000" },
+  { name: "Ricoh IM 9000", slug: "im-9000" },
+  { name: "Ricoh IM C2000", slug: "im-c2000" },
+  { name: "Ricoh IM C2500", slug: "im-c2500" },
+  { name: "Ricoh IM C3000", slug: "im-c3000" },
+  { name: "Ricoh IM C3500", slug: "im-c3500" },
+  { name: "Ricoh IM C4500", slug: "im-c4500" },
+  { name: "Ricoh IM C5500", slug: "im-c5500" },
+  { name: "Ricoh IM C6000", slug: "im-c6000" },
+  { name: "Ricoh MP 2554", slug: "mp-2554" },
+  { name: "Ricoh MP 3054", slug: "mp-3054" },
+  { name: "Ricoh MP 3554", slug: "mp-3554" },
+  { name: "Ricoh MP 4054", slug: "mp-4054" },
+  { name: "Ricoh MP 5054", slug: "mp-5054" },
+  { name: "Ricoh MP 6054", slug: "mp-6054" },
+  { name: "Ricoh MP C2003", slug: "mp-c2003" },
+  { name: "Ricoh MP C2503", slug: "mp-c2503" },
+  { name: "Ricoh MP C3003", slug: "mp-c3003" },
+  { name: "Ricoh MP C3503", slug: "mp-c3503" },
+  { name: "Ricoh MP C4503", slug: "mp-c4503" },
+  { name: "Ricoh MP C5503", slug: "mp-c5503" },
+  { name: "Ricoh MP C6003", slug: "mp-c6003" },
+  { name: "Ricoh MP C3004", slug: "mp-c3004ex" },
+  { name: "Ricoh MP C3504", slug: "mp-c3504ex" },
+  { name: "Ricoh MP C4504", slug: "mp-c4504ex" },
+  { name: "Ricoh MP C6004", slug: "mp-c6004ex" }
+];
+
+function renderRicoh(models) {
+  const container = document.getElementById('ricoh-listbox');
+  if (models.length === 0) {
+    container.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">No models found</div>';
+    return;
+  }
+  container.innerHTML = models.map(m => `
+    <div class="driver-item" onclick="window.open('https://download.ricoh-europe.com/en-GB/product/${m.slug}', '_blank')">
+      <span class="model-name">${m.name}</span>
+      <span class="download-ico">Download ➔</span>
+    </div>
+  `).join('');
+}
+
+function filterRicoh() {
+  const q = document.getElementById('ricoh-search').value.toLowerCase();
+  const filtered = ricohModels.filter(m => m.name.toLowerCase().includes(q));
+  renderRicoh(filtered);
+}
+
+function showTab(tabId) {
+  // Update buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.innerText.toLowerCase() === tabId) btn.classList.add('active');
+  });
+  // Update content
+  document.querySelectorAll('.tab-content').forEach(content => {
+    content.style.display = 'none';
+  });
+  document.getElementById('tab-' + tabId).style.display = 'block';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderRicoh(ricohModels);
+});
+</script>
+{% endblock %}

@@ -11,6 +11,7 @@
       <aside class="sidebar">
         <h2>GoPrinx</h2>
         <a class="link {% if active_tab == 'downloads' %}active{% endif %}" href="{{ url_for('downloads_page_ui') }}"><span class="link-ico">&bull;</span><span>Agent</span></a>
+        <a class="link {% if active_tab == 'drivers' %}active{% endif %}" href="{{ url_for('drivers_page_ui') }}"><span class="link-ico">&bull;</span><span>Drivers</span></a>
         <div class="sidebar-sep"></div>
         <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="link-ico">&bull;</span><span>Dashboard</span></a>
         <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>

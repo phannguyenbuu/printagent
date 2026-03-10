@@ -55,6 +55,13 @@ from serializers import (
     _serialize_repair_model,
     _serialize_material_model,
     _serialize_lead_model,
+    _resolve_day_window,
+    _upsert_lan_and_agent,
+    _upsert_printer_from_polling,
+    _resolve_public_mac,
+    _set_printer_online_state,
+    _apply_printer_enabled_state,
+    _refresh_stale_offline,
 )
 from models import (
     AgentNode,
@@ -3307,86 +3314,6 @@ def create_app() -> Flask:
             session.commit()
         return jsonify({"ok": True, "id": mat_id})
 
-    def _apply_date_filters(stmt: Any, model: Any, date_from: str | None, date_to: str | None) -> Any:
-        if date_from:
-            try:
-                dt_from = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
-                stmt = stmt.where(model.created_at >= dt_from)
-            except ValueError:
-                pass
-        if date_to:
-            try:
-                dt_to = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc)
-                # Set to end of day if only date is provided
-                if len(date_to) == 10:
-                    dt_to = dt_to.replace(hour=23, minute=59, second=59)
-                stmt = stmt.where(model.created_at <= dt_to)
-            except ValueError:
-                pass
-        return stmt
-
-    def _serialize_workspace_model(ws: Workspace) -> dict[str, Any]:
-        return {
-            "id": ws.id,
-            "name": ws.name,
-            "logo": ws.logo,
-            "color": ws.color,
-            "address": ws.address,
-            "created_at": _format_date(ws.created_at),
-        }
-
-    def _serialize_location_model(loc: Location) -> dict[str, Any]:
-        return {
-            "id": loc.id,
-            "name": loc.name,
-            "address": loc.address,
-            "phone": loc.phone,
-            "machine_count": loc.machine_count,
-            "workspace_id": loc.workspace_id,
-            "created_at": _format_date(loc.created_at),
-        }
-
-    def _serialize_repair_model(rep: RepairRequest) -> dict[str, Any]:
-        return {
-            "id": rep.id,
-            "machine_name": rep.machine_name,
-            "location_id": rep.location_id,
-            "workspace_id": rep.workspace_id,
-            "description": rep.description,
-            "priority": rep.priority,
-            "status": rep.status,
-            "created_by": rep.created_by,
-            "assigned_to": rep.assigned_to,
-            "labor_cost": rep.labor_cost,
-            "note": rep.note,
-            "contact_phone": rep.contact_phone,
-            "created_at": _format_date(rep.created_at),
-            "updated_at": _format_datetime(rep.updated_at),
-            "accepted_at": _format_datetime(rep.accepted_at),
-            "completed_at": _format_datetime(rep.completed_at),
-        }
-
-    def _serialize_material_model(mat: Material) -> dict[str, Any]:
-        return {
-            "id": mat.id,
-            "repair_request_id": mat.repair_request_id,
-            "name": mat.name,
-            "quantity": mat.quantity,
-            "unit_price": mat.unit_price,
-            "total_price": mat.total_price,
-            "created_at": _format_date(mat.created_at),
-        }
-
-    def _serialize_lead_model(lead: Lead) -> dict[str, Any]:
-        return {
-            "id": lead.id,
-            "name": lead.name,
-            "email": lead.email,
-            "phone": lead.phone,
-            "notes": lead.notes,
-            "created_at": _format_date(lead.created_at),
-        }
-
     @app.get("/users")
     def users_page() -> Any:
         return render_template("users.html", active_tab="users", page_title="User Accounts")
@@ -3534,6 +3461,10 @@ def create_app() -> Flask:
     @app.get("/downloads")
     def downloads_page_ui() -> Any:
         return render_template("downloads.html", active_tab="downloads", page_title="Agent Downloads")
+
+    @app.get("/drivers")
+    def drivers_page_ui() -> Any:
+        return render_template("drivers.html", active_tab="drivers", page_title="Printer Drivers")
 
     return app
 
