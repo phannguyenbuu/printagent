@@ -1,34 +1,34 @@
 # GoPrinx Agent Documentation
 
-Tài liệu chi tiết về thành phần Agent chạy tại mạng LAN nội bộ.
+Detailed documentation for the Agent component running within the local LAN.
 
-## 🛠 Chức năng chính
-Agent là một service chạy ngầm (hoặc có giao diện) trên Windows, thực hiện:
-1. **Auto-Discovery:** Quét mạng LAN để tìm máy in Ricoh (qua SNMP/HTTP).
-2. **Data Polling:** Định kỳ truy cập Web UI của máy in để "cào" (scrape) dữ liệu:
+## 🛠 Main Functions
+The Agent is a background service (with an optional UI) on Windows that performs:
+1. **Auto-Discovery:** Scans the LAN to find Ricoh printers (via SNMP/HTTP).
+2. **Data Polling:** Periodically accesses the printer's Web UI to "scrape" data:
     - Counters (Total, Copier, Printer, Scan).
     - Status (Online/Offline, Alerts, Toner levels).
-3. **Remote Control:** Nhận lệnh từ Server để:
-    - **Lock:** Vô hiệu hóa chức năng copy/print trên máy in.
-    - **Unlock:** Kích hoạt lại máy in.
-4. **Data Sync:** Gửi dữ liệu về Server trung tâm qua REST API.
+3. **Remote Control:** Receives commands from the Server to:
+    - **Lock:** Disable copy/print functions on the printer.
+    - **Unlock:** Re-enable the printer.
+4. **Data Sync:** Sends data to the central Server via REST API.
 
-## 📂 Cấu trúc thư mục `agent/`
-- `main.py`: Khởi chạy Agent (chế độ CLI hoặc Service).
-- `web.py`: Cung cấp giao diện cấu hình cục bộ (http://localhost:5000).
-- `models.py`: Cấu trúc database SQLite lưu trữ cấu hình tại chỗ.
+## 📂 `agent/` Directory Structure
+- `main.py`: Launches the Agent (CLI or Service mode).
+- `web.py`: Provides a local configuration interface (http://localhost:5000).
+- `models.py`: SQLite database structure for storing local configurations.
 - `modules/ricoh/`:
-    - `service.py`: Logic cốt lõi điều khiển máy in.
-    - `collector.py`: Thu thập chỉ số counter.
-    - `control.py`: Thực hiện lệnh Lock/Unlock.
+    - `service.py`: Core logic for printer control.
+    - `collector.py`: Counter index collection.
+    - `control.py`: Execution of Lock/Unlock commands.
 - `services/`:
-    - `api_client.py`: Giao tiếp HTTP với Server VPS.
-    - `ws_client.py`: Duy trì kết nối WebSocket để nhận lệnh thời gian thực.
-    - `polling_bridge.py`: Cầu nối điều phối giữa quét máy và gửi dữ liệu.
+    - `api_client.py`: HTTP communication with the VPS Server.
+    - `ws_client.py`: Maintains a WebSocket connection for real-time commands.
+    - `polling_bridge.py`: Coordination bridge between scanning and data submission.
 
-## ⚙️ Cấu hình
-File cấu hình `config.yaml` chứa:
-- `server_url`: Địa chỉ của VPS Backend.
-- `lead_id`: Định danh khách hàng.
-- `agent_id`: Định danh duy nhất cho máy trạm này.
-- `polling_interval`: Tần suất gửi dữ liệu (mặc định 300 giây).
+## ⚙️ Configuration
+The `config.yaml` configuration file contains:
+- `server_url`: Address of the Backend VPS.
+- `lead_id`: Customer identifier.
+- `agent_id`: Unique identifier for this workstation.
+- `polling_interval`: Data submission frequency (default 300 seconds).

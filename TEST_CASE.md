@@ -1,26 +1,26 @@
-# Kế hoạch Kiểm thử (Test Case)
+# Test Plan (Test Cases)
 
-Hệ thống GoPrinx Printer Management.
+GoPrinx Printer Management System.
 
-## 1. Kiểm thử Agent (Local)
-- **TC-AG-01:** Khởi động Agent lần đầu, kiểm tra việc tạo file DB local và kết nối Server.
-- **TC-AG-02:** Quét mạng (Scan LAN) tìm thấy máy in Ricoh đúng dải IP.
-- **TC-AG-03:** Lấy dữ liệu Counter thành công từ máy in mẫu.
-- **TC-AG-04:** Gửi dữ liệu Polling về Server (Backend) qua API.
-- **TC-AG-05:** Thực hiện lệnh Lock/Unlock từ giao diện local.
+## 1. Agent Testing (Local)
+- **TC-AG-01:** First-time Agent startup, verify local DB file creation and Server connection.
+- **TC-AG-02:** Network Scan (Scan LAN) successfully finds Ricoh printers in the correct IP range.
+- **TC-AG-03:** Successfully retrieve Counter data from a sample printer.
+- **TC-AG-04:** Send Polling data to the Server (Backend) via API.
+- **TC-AG-05:** Execute Lock/Unlock commands from the local interface.
 
-## 2. Kiểm thử Server Backend (VPS)
-- **TC-SV-01:** Nhận dữ liệu Ingestion từ Agent và lưu vào database PostgreSQL.
-- **TC-SV-02:** Tính toán Counter Baseline khi máy in bị reset counter vật lý.
-- **TC-SV-03:** Gửi lệnh điều khiển xuống Agent qua WebSocket/Polling.
-- **TC-SV-04:** API cho CRM bên thứ 3 trả về đúng cấu trúc JSON.
+## 2. Server Backend Testing (VPS)
+- **TC-SV-01:** Receive Ingestion data from Agent and store it in the PostgreSQL database.
+- **TC-SV-02:** Calculate Counter Baseline when a printer's physical counter is reset.
+- **TC-SV-03:** Send control commands to the Agent via WebSocket/Polling.
+- **TC-SV-04:** API for 3rd-party CRM returns the correct JSON structure.
 
-## 3. Kiểm thử Frontend (User UI)
-- **TC-FE-01:** Đăng nhập với các vai trò khác nhau (Admin, Kỹ thuật).
-- **TC-FE-02:** Hiển thị danh sách Agent và trạng thái Online/Offline thực tế.
-- **TC-FE-03:** Thêm/Sửa/Xóa (CRUD) Địa điểm thành công.
-- **TC-FE-04:** Tải file `GoPrinxAgent.exe` từ trang Downloads thành công.
-- **TC-FE-05:** Xem biểu đồ xu hướng (Heatmap) counter theo thời gian.
+## 3. Frontend Testing (User UI)
+- **TC-FE-01:** Login with different roles (Admin, Technician).
+- **TC-FE-02:** Display Agent list and actual Online/Offline status.
+- **TC-FE-03:** Add/Edit/Delete (CRUD) Locations successfully.
+- **TC-FE-04:** Download `GoPrinxAgent.exe` from the Downloads page successfully.
+- **TC-FE-05:** View counter trend charts (Heatmap) over time.
 
-## 4. Kiểm thử Tích hợp (End-to-End)
-- **TC-E2E-01:** Khóa máy photocopy từ Frontend -> Server -> Agent -> Máy in thực tế -> Trạng thái cập nhật lại trên Frontend.
+## 4. Integration Testing (End-to-End)
+- **TC-E2E-01:** Lock a photocopier from Frontend -> Server -> Agent -> Actual Printer -> Status updated back on the Frontend.
