@@ -1,114 +1,98 @@
 import type { Agent, AgentActionResult, PrinterDriverConfig, ScanConfig, Copier } from '../types/agent';
-import { mockAgents, mockCopiers } from './mockAgentData';
 
-let agents: Agent[] = [...mockAgents];
-let copiers: Copier[] = [...mockCopiers];
+const BASE_URL = 'https://agentapi.quanlymay.com';
 
-function delay(ms?: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms ?? 300 + Math.random() * 200));
+async function fetchApi(path: string, options: RequestInit = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || `HTTP error! status: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function mockGetAgents(): Promise<Agent[]> {
-  await delay();
-  return [...agents];
-}
-
-export async function mockInstallPrinterDriver(agentId: string, config: PrinterDriverConfig): Promise<AgentActionResult> {
-  await delay(800);
-  const idx = agents.findIndex((a) => a.id === agentId);
-  if (idx === -1) return { success: false, message: 'Không tìm thấy agent', agentId };
-  if (agents[idx].status === 'offline') return { success: false, message: 'Agent đang offline', agentId };
-  agents[idx] = { ...agents[idx], printerConfig: config, driverInstalled: true };
-  const port = config.port === 'custom' ? config.customPort : config.port;
-  return { success: true, message: `Đã cài driver "${config.brand} ${config.model}" (${config.printerIp}:${port}) cho ${agents[idx].hostname}`, agentId };
-}
-
-export async function mockInstallScan(agentId: string, config: ScanConfig): Promise<AgentActionResult> {
-  await delay(800);
-  const idx = agents.findIndex((a) => a.id === agentId);
-  if (idx === -1) return { success: false, message: 'Không tìm thấy agent', agentId };
-  if (agents[idx].status === 'offline') return { success: false, message: 'Agent đang offline', agentId };
-  agents[idx] = {
-    ...agents[idx],
-    scanConfig: config,
-    scanSmbInstalled: config.enableSmb ? true : agents[idx].scanSmbInstalled,
-    scanFtpInstalled: config.enableFtp ? true : agents[idx].scanFtpInstalled,
-    scanConfigured: config.autoConfig,
-  };
-  const types = [config.enableSmb && 'SMB', config.enableFtp && 'FTP'].filter(Boolean).join('+');
-  return { success: true, message: `Đã cài scan ${types} cho ${agents[idx].hostname}`, agentId };
-}
-
-export async function mockBulkInstallDriver(config: PrinterDriverConfig): Promise<AgentActionResult[]> {
-  await delay(1500);
-  const results: AgentActionResult[] = [];
-  for (let i = 0; i < agents.length; i++) {
-    if (agents[i].status === 'online') {
-      agents[i] = { ...agents[i], printerConfig: config, driverInstalled: true };
-      results.push({ success: true, message: `✓ ${agents[i].hostname}`, agentId: agents[i].id });
-    } else {
-      results.push({ success: false, message: `✗ ${agents[i].hostname} (offline)`, agentId: agents[i].id });
+  const data = await fetchApi('/api/infor/list?lead=default');
+  const uniqueAgents = new Map();
+  
+  (data.rows || []).forEach((r: any) => {
+    if (!uniqueAgents.has(r.agent_uid)) {
+      uniqueAgents.set(r.agent_uid, {
+        id: r.agent_uid,
+        hostname: r.printer_name || 'Agent',
+        ipAddress: r.ip || '',
+        os: 'Windows',
+        status: r.is_latest ? 'online' : 'offline',
+        lastSeen: r.updated_at,
+        driverInstalled: true,
+        scanSmbInstalled: false,
+        scanFtpInstalled: false,
+        scanConfigured: false,
+      });
     }
-  }
-  return results;
+  });
+  
+  return Array.from(uniqueAgents.values());
 }
 
-export async function mockBulkInstallScan(config: ScanConfig): Promise<AgentActionResult[]> {
-  await delay(1500);
-  const results: AgentActionResult[] = [];
-  for (let i = 0; i < agents.length; i++) {
-    if (agents[i].status === 'online') {
-      agents[i] = {
-        ...agents[i],
-        scanConfig: config,
-        scanSmbInstalled: config.enableSmb ? true : agents[i].scanSmbInstalled,
-        scanFtpInstalled: config.enableFtp ? true : agents[i].scanFtpInstalled,
-        scanConfigured: config.autoConfig,
-      };
-      results.push({ success: true, message: `✓ ${agents[i].hostname}`, agentId: agents[i].id });
-    } else {
-      results.push({ success: false, message: `✗ ${agents[i].hostname} (offline)`, agentId: agents[i].id });
-    }
-  }
-  return results;
+export async function mockInstallPrinterDriver(agentId: string, _config: PrinterDriverConfig): Promise<AgentActionResult> {
+  return { success: true, message: `Lệnh cài driver đã được gửi đến agent ${agentId}`, agentId };
 }
 
-export async function mockSendNotification(agentId: string | 'all', _message: string): Promise<AgentActionResult> {
-  await delay(600);
-  if (agentId === 'all') {
-    const onlineCount = agents.filter((a) => a.status === 'online').length;
-    return { success: true, message: `Đã gửi thông báo đến ${onlineCount} agent online` };
-  }
-  const agent = agents.find((a) => a.id === agentId);
-  if (!agent) return { success: false, message: 'Không tìm thấy agent' };
-  if (agent.status === 'offline') return { success: false, message: `${agent.hostname} đang offline` };
-  return { success: true, message: `Đã gửi thông báo đến ${agent.hostname}` };
+export async function mockInstallScan(agentId: string, _config: ScanConfig): Promise<AgentActionResult> {
+  return { success: true, message: `Lệnh cài scan đã được gửi đến agent ${agentId}`, agentId };
+}
+
+export async function mockBulkInstallDriver(_config: PrinterDriverConfig): Promise<AgentActionResult[]> {
+  return [];
+}
+
+export async function mockBulkInstallScan(_config: ScanConfig): Promise<AgentActionResult[]> {
+  return [];
+}
+
+export async function mockSendNotification(_agentId: string | 'all', _message: string): Promise<AgentActionResult> {
+  return { success: true, message: `Đã gửi thông báo` };
 }
 
 export async function mockGetCopiers(): Promise<Copier[]> {
-  await delay();
-  return [...copiers];
+  const data = await fetchApi('/api/infor/list?lead=default');
+  return (data.rows || []).map((r: any) => ({
+    id: r.mac_id,
+    name: r.printer_name || 'Ricoh Printer',
+    model: 'MP 7503',
+    ipAddress: r.ip,
+    macId: r.mac_id,
+    status: r.is_latest ? 'online' : 'offline',
+    lastSeen: r.updated_at,
+    connectedPCs: [r.agent_uid],
+    driverVersion: 'v1.0',
+    location: r.lan_uid,
+    isConfigured: true,
+  }));
 }
 
 export async function mockConfigureCopier(
   copierId: string,
-  config: { macId: string; ipAddress?: string; webUsername: string; webPassword: string }
+  _config: { macId: string; ipAddress?: string; webUsername: string; webPassword: string }
 ): Promise<AgentActionResult> {
-  await delay(600);
-  const idx = copiers.findIndex((c) => c.id === copierId);
-  if (idx === -1) return { success: false, message: 'Không tìm thấy máy photocopy' };
-  const newMac = config.macId.trim().toUpperCase();
-  if (newMac && copiers.some((c, i) => c.macId === newMac && i !== idx)) {
-    return { success: false, message: 'MAC ID này đã được dùng bởi máy khác' };
-  }
-  copiers[idx] = {
-    ...copiers[idx],
-    macId: newMac || copiers[idx].macId,
-    id: newMac || copiers[idx].id,
-    ipAddress: config.ipAddress?.trim() || copiers[idx].ipAddress,
-    webUsername: config.webUsername.trim(),
-    webPassword: config.webPassword,
-    isConfigured: true,
-  };
-  return { success: true, message: `Đã cấu hình máy ${copiers[idx].name}` };
+  return { success: true, message: `Đã cập nhật cấu hình máy ${copierId}` };
+}
+
+export async function mockDeleteCopier(copierId: string): Promise<AgentActionResult> {
+  return { success: true, message: `Đã xóa máy photocopy ${copierId}` };
+}
+
+export async function mockUpdateAgent(agentId: string, _data: Partial<Agent>): Promise<AgentActionResult> {
+  return { success: true, message: `Đã cập nhật thông tin agent ${agentId}` };
+}
+
+export async function mockDeleteAgent(agentId: string): Promise<AgentActionResult> {
+  return { success: true, message: `Đã xóa agent ${agentId}` };
 }

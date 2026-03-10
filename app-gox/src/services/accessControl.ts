@@ -33,6 +33,8 @@ const TECHNICIAN_FEATURES: Feature[] = [
 const featuresByRole: Record<User['role'], Feature[]> = {
   supplier: SUPPLIER_FEATURES,
   technician: TECHNICIAN_FEATURES,
+  admin: Array.from(new Set([...SUPPLIER_FEATURES, ...TECHNICIAN_FEATURES])),
+  user: SUPPLIER_FEATURES,
 };
 
 export function getPermittedFeatures(role: User['role']): Feature[] {

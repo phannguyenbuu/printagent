@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>Materials</h3>
+    <div>
+      <button id="material-create-btn" class="filter-btn">Create Material</button>
+      <button id="refresh-btn" class="filter-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="filter-board">
+    <div class="filter-group">
+      <label>Lead</label>
+      <select id="filter-lead">
+        <option value="">All Leads</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Name</label>
+      <input type="text" id="filter-name" placeholder="Search by name...">
+    </div>
+    <div class="filter-group">
+      <label>Repair ID</label>
+      <input type="text" id="filter-repair" placeholder="Repair ID...">
+    </div>
+    <div class="filter-group">
+      <label>Date From</label>
+      <input type="date" id="filter-date-from">
+    </div>
+    <div class="filter-group">
+      <label>Date To</label>
+      <input type="date" id="filter-date-to">
+    </div>
+    <button id="apply-filters" class="filter-btn">Apply</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Lead</th>
+          <th>Repair ID</th>
+          <th>Name</th>
+          <th>Quantity</th>
+          <th>Unit Price</th>
+          <th>Total Price</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="materials-tbody">
+        <tr><td colspan="9" class="loading">Loading materials...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const loadLeads = () => {
+        fetch('/api/leads').then(res => res.json()).then(data => {
+            const sel = qs('filter-lead');
+            if (data.leads) {
+                data.leads.forEach(l => {
+                    const opt = document.createElement('option');
+                    opt.value = l;
+                    opt.textContent = l;
+                    sel.appendChild(opt);
+                });
+            }
+        });
+    };
+
+    const loadMaterials = () => {
+        const params = new URLSearchParams({
+            lead: qs('filter-lead').value,
+            name: qs('filter-name').value,
+            repair_id: qs('filter-repair').value,
+            date_from: qs('filter-date-from').value,
+            date_to: qs('filter-date-to').value
+        });
+        fetch(`/api/materials?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                const tbody = document.getElementById('materials-tbody');
+                if (data.ok && data.rows) {
+                    tbody.innerHTML = data.rows.map(row => `
+                        <tr>
+                            <td>${row.id}</td>
+                            <td>${escapeHtml(row.lead)}</td>
+                            <td>${row.repair_request_id || ''}</td>
+                            <td>${row.name}</td>
+                            <td>${row.quantity}</td>
+                            <td>${row.unit_price.toLocaleString()}</td>
+                            <td>${row.total_price.toLocaleString()}</td>
+                            <td>${row.created_at}</td>
+                            <td class="action-cell">
+                                <button class="icon-btn edit" data-id="${row.id}" title="Edit">${iconPencilSvg()}</button>
+                                <button class="icon-btn delete" data-id="${row.id}" title="Delete">${iconTrashSvg()}</button>
+                            </td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="9">No data found</td></tr>';
+
+                    tbody.querySelectorAll('.edit').forEach(btn => {
+                        btn.onclick = () => {
+                            const row = data.rows.find(x => x.id === btn.dataset.id);
+                            handleUpsertMaterial(row);
+                        };
+                    });
+                    tbody.querySelectorAll('.delete').forEach(btn => {
+                        btn.onclick = () => {
+                            if (confirm('Delete this material?')) {
+                                fetch(`/api/materials/${btn.dataset.id}`, { method: 'DELETE' })
+                                    .then(res => res.json()).then(() => loadMaterials());
+                            }
+                        };
+                    });
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="8">No data found</td></tr>';
+                }
+            });
+    };
+
+    loadLeads();
+    loadMaterials();
+    document.getElementById('refresh-btn').onclick = loadMaterials;
+    document.getElementById('apply-filters').onclick = loadMaterials;
+    document.getElementById('material-create-btn').onclick = () => handleUpsertMaterial();
+});
+</script>
+{% endblock %}

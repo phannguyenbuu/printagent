@@ -48,18 +48,6 @@ function formatDate(iso: string): string {
   });
 }
 
-function formatSeniority(joinedAt: string): string {
-  const joined = new Date(joinedAt);
-  const now = new Date();
-  const totalMonths =
-    (now.getFullYear() - joined.getFullYear()) * 12 + (now.getMonth() - joined.getMonth());
-  const years = Math.floor(totalMonths / 12);
-  const months = totalMonths % 12;
-  if (years === 0) return `${months} tháng`;
-  if (months === 0) return `${years} năm`;
-  return `${years} năm ${months} tháng`;
-}
-
 function StarRating({ rating }: { rating: number | null }) {
   if (rating == null) return <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}>Chưa có đánh giá</span>;
   return (

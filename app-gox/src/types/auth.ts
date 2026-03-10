@@ -3,11 +3,11 @@ export interface User {
   username: string;
   email: string;
   fullName: string;
-  role: 'supplier' | 'technician';
+  role: 'supplier' | 'technician' | 'admin' | 'user';
   locationIds: string[];
   phone?: string;
-  companyId: string;
-  companyName: string;
+  companyId?: string;
+  companyName?: string;
   workspaceIds: string[];
   joinedAt?: string; // ISO date string, e.g. "2021-03-15"
   workHistory?: WorkHistoryEntry[];

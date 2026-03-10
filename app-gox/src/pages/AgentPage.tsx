@@ -13,12 +13,15 @@ import {
   mockBulkInstallScan,
   mockSendNotification,
   mockConfigureCopier,
+  mockUpdateAgent,
+  mockDeleteAgent,
+  mockDeleteCopier,
 } from '../api/mockAgentApi';
 import type { Agent, AgentActionResult, PrinterBrand, PrinterModel, Copier } from '../types/agent';
 import { PRINTER_MODELS, PRINTER_BRANDS } from '../types/agent';
 
-type ModalType = 'driver' | 'scan' | 'bulk_driver' | 'bulk_scan' | 'bulk_all' | 'notify' | 'settings' | 'connect_lan' | 'copier_scan' | 'copier_add' | 'copier_config' | null;
-type LanTab = 'agents' | 'copiers';
+type ModalType = 'driver' | 'scan' | 'bulk_driver' | 'bulk_scan' | 'bulk_all' | 'notify' | 'settings' | 'connect_lan' | 'copier_scan' | 'copier_add' | 'copier_config' | 'copier_delete' | 'agent_edit' | 'agent_delete' | null;
+type LanTab = 'agents' | 'copiers' | 'downloads';
 
 const PORT_OPTIONS = [
   { label: '9100 (RAW)', value: 9100 },
@@ -50,6 +53,12 @@ export function AgentPage() {
   const [addCopierError, setAddCopierError] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Agent edit state
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [editAgentHostname, setEditAgentHostname] = useState('');
+  const [editAgentIp, setEditAgentIp] = useState('');
+  const [editAgentError, setEditAgentError] = useState('');
+
   // Copier config state
   const [configCopier, setConfigCopier] = useState<Copier | null>(null);
   const [configIp, setConfigIp] = useState('');
@@ -62,6 +71,7 @@ export function AgentPage() {
   const [configError, setConfigError] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [modal, setModal] = useState<ModalType>(null);
+  const [settingsTab, setSettingsTab] = useState<'config' | 'download'>('config');
   const [results, setResults] = useState<AgentActionResult[]>([]);
 
   // Driver fields
@@ -270,6 +280,56 @@ export function AgentPage() {
     setActionLoading(false);
   }, [notifyTarget, notifyMessage]);
 
+  const handleUpdateAgent = async () => {
+    if (!editingAgent || !editAgentHostname.trim()) return;
+    setActionLoading(true);
+    const r = await mockUpdateAgent(editingAgent.id, {
+      hostname: editAgentHostname.trim(),
+      ipAddress: editAgentIp.trim(),
+    });
+    setActionLoading(false);
+    if (r.success) {
+      await fetchAgents();
+      closeModal();
+    } else {
+      setEditAgentError(r.message);
+    }
+  };
+
+  const handleDeleteAgent = async () => {
+    if (!selectedAgent) return;
+    setActionLoading(true);
+    const r = await mockDeleteAgent(selectedAgent.id);
+    setActionLoading(false);
+    if (r.success) {
+      await fetchAgents();
+      closeModal();
+    }
+  };
+
+  const handleDeleteCopier = async (copierId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa máy photocopy này?')) return;
+    setActionLoading(true);
+    const r = await mockDeleteCopier(copierId);
+    setActionLoading(false);
+    if (r.success) {
+      await fetchAgents();
+    }
+  };
+
+  const openAgentEdit = (agent: Agent) => {
+    setEditingAgent(agent);
+    setEditAgentHostname(agent.hostname);
+    setEditAgentIp(agent.ipAddress);
+    setEditAgentError('');
+    setModal('agent_edit');
+  };
+
+  const openAgentDelete = (agent: Agent) => {
+    setSelectedAgent(agent);
+    setModal('agent_delete');
+  };
+
   const handleExecute = () => {
     if (modal === 'driver') handleInstallDriver();
     else if (modal === 'scan') handleInstallScan();
@@ -368,7 +428,7 @@ export function AgentPage() {
 
       {/* Tab switcher */}
       <div style={styles.tabBar}>
-        {([['agents', '🖥️ Máy tính'], ['copiers', '🖨️ Photocopy']] as [LanTab, string][]).map(([tab, label]) => (
+        {([['agents', '🖥️ Máy tính'], ['copiers', '🖨️ Photocopy'], ['downloads', '📥 Tải Agent']] as [LanTab, string][]).map(([tab, label]) => (
           <button
             key={tab}
             style={{
@@ -441,6 +501,10 @@ export function AgentPage() {
                       }}>
                         {agent.status === 'online' ? '🟢 Online' : '🔴 Offline'}
                       </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{ ...styles.smallBtn, padding: '4px 6px' }} onClick={() => openAgentEdit(agent)} title="Chỉnh sửa">✏️</button>
+                      <button style={{ ...styles.smallBtn, padding: '4px 6px', color: 'var(--color-error)' }} onClick={() => openAgentDelete(agent)} title="Xóa">🗑️</button>
                     </div>
                   </div>
                   <div style={styles.agentMeta}>
@@ -525,7 +589,7 @@ export function AgentPage() {
               ))}
             </AnimatedList>
           </motion.div>
-        ) : (
+        ) : lanTab === 'copiers' ? (
           <motion.div key="copiers" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.2 }}
             style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -591,7 +655,13 @@ export function AgentPage() {
                     </div>
 
                     {/* Config button */}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                      <button
+                        style={{ ...styles.smallBtn, color: 'var(--color-error)' }}
+                        onClick={() => handleDeleteCopier(copier.id)}
+                      >
+                        🗑️ Xóa
+                      </button>
                       <button
                         style={{ ...styles.smallBtn, borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
                         onClick={() => openCopierConfig(copier)}
@@ -650,6 +720,51 @@ export function AgentPage() {
               })}
             </AnimatedList>
           </motion.div>
+        ) : (
+          <motion.div key="downloads" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.05 }} transition={{ duration: 0.2 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <GlowCard>
+              <h2 style={styles.sectionTitle}>📥 Tải Agent cho VPS/Server</h2>
+              <p style={styles.subtitle}>Sử dụng các phiên bản này để cài đặt PrintAgent lên máy chủ hoặc máy trạm đích.</p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+                <div style={styles.configDetail}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <span style={styles.configLabel}>PrintAgent v1.2.0 (Ổn định)</span>
+                      <span style={styles.configSub}>Phát hành: 10/03/2026 · 12.5 MB</span>
+                    </div>
+                    <a href="https://github.com/nguyenbuu/printagent/releases/download/v1.2.0/PrintAgent_Setup.exe"
+                       style={{ ...styles.bulkSecondary, flex: 'none', background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none', textAlign: 'center' }}>
+                      Tải về .exe
+                    </a>
+                  </div>
+                </div>
+
+                <div style={styles.configDetail}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <span style={styles.configLabel}>PrintAgent v1.3.0-beta (Thử nghiệm)</span>
+                      <span style={styles.configSub}>Phát hành: 05/03/2026 · 14.1 MB</span>
+                    </div>
+                    <a href="#" style={{ ...styles.bulkSecondary, flex: 'none', textDecoration: 'none', textAlign: 'center' }}>
+                      Tải về .exe
+                    </a>
+                  </div>
+                </div>
+
+                <div style={{ ...styles.scanBlock, background: 'rgba(var(--rgb-primary, 59, 130, 246), 0.05)', borderColor: 'rgba(var(--rgb-primary, 59, 130, 246), 0.2)' }}>
+                  <span style={styles.scanBlockTitle}>💡 Hướng dẫn cài đặt</span>
+                  <ul style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', paddingLeft: '20px', margin: '4px 0' }}>
+                    <li>Tải file .exe về máy tính cần giám sát.</li>
+                    <li>Chạy file cài đặt với quyền Administrator.</li>
+                    <li>Nhập mã định danh (Agent ID) khi được yêu cầu.</li>
+                    <li>Máy tính sẽ tự động xuất hiện trong danh sách "Máy tính" sau khi khởi chạy.</li>
+                  </ul>
+                </div>
+              </div>
+            </GlowCard>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -664,12 +779,114 @@ export function AgentPage() {
               {modal === 'bulk_driver' && '🖨️ Cài driver toàn bộ agent'}
               {modal === 'bulk_scan' && '📠 Cài scan toàn bộ agent'}
               {modal === 'bulk_all' && '⚡ Cài driver + scan toàn bộ'}
-              {modal === 'settings' && '⚙️ Thiết lập chung (Driver + Scan)'}
+              {modal === 'settings' && '⚙️ Thiết lập & Tải về'}
               {modal === 'notify' && '📢 Gửi thông báo'}
               {modal === 'copier_scan' && '🔍 Quét máy Photocopy trong mạng'}
               {modal === 'copier_add' && '➕ Thêm máy Photocopy thủ công'}
               {modal === 'copier_config' && `⚙️ Cấu hình - ${configCopier?.name}`}
+              {modal === 'agent_edit' && `✏️ Chỉnh sửa Agent - ${editingAgent?.hostname}`}
+              {modal === 'agent_delete' && `🗑️ Xóa Agent - ${selectedAgent?.hostname}`}
             </h3>
+
+            {/* Inner Tabs for Settings Modal */}
+            {modal === 'settings' && (
+              <div style={{ display: 'flex', borderBottom: '1px solid var(--color-surface-light)', marginBottom: '12px' }}>
+                <button
+                  onClick={() => setSettingsTab('config')}
+                  style={{
+                    flex: 1, padding: '10px', background: 'none', border: 'none',
+                    borderBottom: settingsTab === 'config' ? '2px solid var(--color-primary)' : '2px solid transparent',
+                    color: settingsTab === 'config' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                    fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  ⚙️ Cấu hình
+                </button>
+                <button
+                  onClick={() => setSettingsTab('download')}
+                  style={{
+                    flex: 1, padding: '10px', background: 'none', border: 'none',
+                    borderBottom: settingsTab === 'download' ? '2px solid var(--color-primary)' : '2px solid transparent',
+                    color: settingsTab === 'download' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                    fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  📥 Tải Agent
+                </button>
+              </div>
+            )}
+
+            {/* ── SETTINGS DOWNLOAD TAB ── */}
+            {modal === 'settings' && settingsTab === 'download' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <p style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)', margin: 0 }}>
+                  Tải bộ cài đặt PrintAgent để cài lên các máy tính khác trong mạng.
+                </p>
+                <div style={styles.configDetail}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={styles.configLabel}>PrintAgent v1.2.0 (Ổn định)</span>
+                    <a href="https://github.com/nguyenbuu/printagent/releases/download/v1.2.0/PrintAgent_Setup.exe"
+                       style={{ ...styles.smallBtn, background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none' }}>
+                      Tải .exe
+                    </a>
+                  </div>
+                </div>
+                <div style={{ padding: '10px', background: 'rgba(var(--rgb-primary, 59, 130, 246), 0.05)', borderRadius: '8px', fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
+                  💡 Sau khi tải về, hãy copy file vào VPS hoặc máy tính cần giám sát và chạy file cài đặt.
+                </div>
+              </div>
+            )}
+
+            {/* ── AGENT EDIT ── */}
+            {modal === 'agent_edit' && editingAgent && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={styles.formField}>
+                  <label style={styles.label}>Hostname *</label>
+                  <input type="text" value={editAgentHostname} onChange={(e) => setEditAgentHostname(e.target.value)}
+                    placeholder="VD: DESKTOP-PC1" style={styles.input} />
+                </div>
+                <div style={styles.formField}>
+                  <label style={styles.label}>IP Address</label>
+                  <input type="text" value={editAgentIp} onChange={(e) => setEditAgentIp(e.target.value)}
+                    placeholder="192.168.1.10" style={styles.input} />
+                </div>
+                {editAgentError && (
+                  <div style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '0.82rem', background: 'color-mix(in srgb, var(--color-error) 10%, var(--color-surface))', color: 'var(--color-error)', border: '1px solid var(--color-error)' }}>
+                    {editAgentError}
+                  </div>
+                )}
+                <div style={styles.modalActions}>
+                  {actionLoading ? <LoadingSpinner size="sm" /> : (
+                    <>
+                      <AnimatedButton onClick={handleUpdateAgent}>Cập nhật</AnimatedButton>
+                      <AnimatedButton onClick={closeModal} variant="secondary">Hủy</AnimatedButton>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── AGENT DELETE ── */}
+            {modal === 'agent_delete' && selectedAgent && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <p style={{ fontSize: '0.9rem', color: 'var(--color-text)', margin: 0 }}>
+                  Bạn có chắc chắn muốn xóa agent <strong>{selectedAgent.hostname}</strong>?
+                </p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', margin: 0 }}>
+                  Hành động này sẽ gỡ bỏ agent khỏi hệ thống. Agent sẽ tự động xuất hiện lại nếu vẫn còn đang chạy trên máy tính đó.
+                </p>
+                <div style={styles.modalActions}>
+                  {actionLoading ? <LoadingSpinner size="sm" /> : (
+                    <>
+                      <AnimatedButton onClick={handleDeleteAgent} variant="danger">
+                        Xác nhận xóa
+                      </AnimatedButton>
+                      <AnimatedButton onClick={closeModal} variant="secondary">Hủy</AnimatedButton>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* ── COPIER CONFIG ── */}
             {modal === 'copier_config' && configCopier && (
@@ -1299,7 +1516,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modal: {
     background: 'var(--color-surface)', border: '1px solid var(--color-surface-light)',
-    borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '420px',
+    borderRadius: '12px', padding: '20px', width: '100%', maxWidth: 'min(500px, 90vw)',
     maxHeight: '88vh', overflowY: 'auto' as const,
     display: 'flex', flexDirection: 'column' as const, gap: '10px',
     boxShadow: '0 8px 32px rgba(0,0,0,0.18)',

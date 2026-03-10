@@ -9,6 +9,18 @@ storage/data/*.csv
 storage/data/*.db
 ref/
 app-gox/node_modules/
+nginx/
+tests/
 build/
 dist/
 *.spec
+
+# Root directory files
+/*.py
+/*.ps1
+/*.yaml
+/*.toml
+/GEMINI.md
+/*.png
+/*.html
+/*.har

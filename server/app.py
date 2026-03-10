@@ -3,31 +3,84 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import os
 import re
+import time as time_module
 from bisect import bisect_right
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 from sqlalchemy import func, select, text
+from logging.handlers import RotatingFileHandler
 
 from config import ServerConfig
 from db import create_session_factory
+from utils import (
+    COUNTER_KEYS,
+    UI_TZ,
+    _apply_baseline,
+    _compute_delta_payload,
+    _is_same_utc_minute,
+    _normalize_counter_payload,
+    _normalize_ipv4,
+    _normalize_mac,
+    _normalize_status_payload,
+    _parse_query_datetime,
+    _parse_timestamp,
+    _resolve_lan_info_from_body,
+    _resolve_lan_uid_from_body,
+    _safe_path_token,
+    _time_scope_start,
+    _to_int,
+    _to_json_value,
+    _to_page,
+    _to_text,
+    _to_text_max,
+    _write_last_data,
+    _format_date,
+    _format_datetime,
+)
+from serializers import (
+    _serialize_task_model,
+    _serialize_user_model,
+    _serialize_network_model,
+    _serialize_workspace_model,
+    _serialize_location_model,
+    _serialize_repair_model,
+    _serialize_material_model,
+    _serialize_lead_model,
+)
 from models import (
     AgentNode,
+    AlertStatus,
     Base,
     CounterBaseline,
     CounterInfor,
+    DeviceFeatureFlag,
     DeviceInfor,
     DeviceInforHistory,
+    DeviceLockHistory,
     LanSite,
+    MachineAlert,
+    NetworkInfo,
     Printer,
     PrinterControlCommand,
     PrinterEnableLog,
     PrinterOnlineLog,
     StatusInfor,
+    Task,
+    TaskPriority,
+    TaskStatus,
+    UserAccount,
+    Lead,
+    Workspace,
+    Location,
+    RepairRequest,
+    Material,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -53,551 +106,60 @@ COUNTER_KEYS = [
     "duplex",
 ]
 MAC_PATTERN = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
+_LOGGING_READY = False
+TASK_STATUS_VALUES = {status.value for status in TaskStatus}
+TASK_PRIORITY_VALUES = {priority.value for priority in TaskPriority}
 
 
-def _to_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return int(text)
-    except Exception:  # noqa: BLE001
-        return None
+def _configure_server_logging() -> None:
+    global _LOGGING_READY
+    if _LOGGING_READY:
+        return
+    log_dir = Path(os.getenv("SERVER_LOG_DIR", "storage/logs/server"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    level_name = os.getenv("SERVER_LOG_LEVEL", "INFO").upper().strip() or "INFO"
+    level = getattr(logging, level_name, logging.INFO)
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(level)
+        stream_handler.setFormatter(formatter)
+        root_logger.addHandler(stream_handler)
+
+    api_log_path = log_dir / "api.log"
+    err_log_path = log_dir / "error.log"
+
+    if not any(getattr(h, "baseFilename", "") == str(api_log_path.resolve()) for h in root_logger.handlers):
+        api_handler = RotatingFileHandler(api_log_path, maxBytes=10 * 1024 * 1024, backupCount=10, encoding="utf-8")
+        api_handler.setLevel(level)
+        api_handler.setFormatter(formatter)
+        root_logger.addHandler(api_handler)
+
+    if not any(getattr(h, "baseFilename", "") == str(err_log_path.resolve()) for h in root_logger.handlers):
+        err_handler = RotatingFileHandler(err_log_path, maxBytes=10 * 1024 * 1024, backupCount=10, encoding="utf-8")
+        err_handler.setLevel(logging.WARNING)
+        err_handler.setFormatter(formatter)
+        root_logger.addHandler(err_handler)
+
+    _LOGGING_READY = True
 
 
-def _to_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _to_text_max(value: Any, max_len: int) -> str:
-    text = _to_text(value)
-    if max_len <= 0:
-        return ""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len]
-
-
-def _to_json_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (dict, list, bool, int, float)):
-        return value
-    text = _to_text(value)
-    return text if text else None
-
-
-def _normalize_status_payload(payload: dict[str, Any]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key, value in payload.items():
-        k = _to_text(key)
-        if not k:
-            continue
-        out[k] = _to_text(value)
-    return out
-
-
-def _normalize_mac(value: Any) -> str:
-    text = _to_text(value).replace("-", ":").upper()
-    if not text:
-        return ""
-    if MAC_PATTERN.fullmatch(text):
-        return text
-    return ""
-
-
-def _safe_path_token(value: str) -> str:
-    text = _to_text(value)
-    if not text:
-        return "unknown"
-    cleaned = secure_filename(text)
-    return cleaned or "unknown"
-
-
-def _normalize_ipv4(value: str) -> str:
-    text = _to_text(value)
-    parts = text.split(".")
-    if len(parts) != 4:
-        return ""
-    try:
-        nums = [int(p) for p in parts]
-    except Exception:  # noqa: BLE001
-        return ""
-    if any(n < 0 or n > 255 for n in nums):
-        return ""
-    return ".".join(str(n) for n in nums)
-
-
-def _parse_timestamp(value: Any) -> datetime:
-    text = _to_text(value)
-    if not text:
-        return datetime.now(timezone.utc)
-    normalized = text.replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(normalized)
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:  # noqa: BLE001
-        return datetime.now(timezone.utc)
-
-
-def _write_last_data(payload: dict[str, Any]) -> None:
-    try:
-        LAST_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_DATA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("last_data write failed: %s", exc)
-
-
-def _parse_query_datetime(value: Any, end_of_minute: bool = False) -> datetime | None:
-    text = _to_text(value)
-    if not text:
-        return None
-    normalized = text.replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except Exception:  # noqa: BLE001
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UI_TZ)
-    if end_of_minute and len(text) <= 16:
-        dt = dt.replace(second=59, microsecond=999999)
-    return dt.astimezone(timezone.utc)
-
-
-def _resolve_lan_info_from_body(body: dict[str, Any]) -> tuple[str, str]:
-    """
-    Returns (lan_uid, fingerprint_signature)
-    """
-    raw_lan_uid = _to_text(body.get("lan_uid"))
-    fingerprint = _to_text(body.get("fingerprint_signature") or body.get("fingerprint"))
-
-    lead = _to_text(body.get("lead"))
-    local_ip = _normalize_ipv4(_to_text(body.get("local_ip")))
-    gateway_ip = _normalize_ipv4(_to_text(body.get("gateway_ip")))
-    gateway_mac = _to_text(body.get("gateway_mac")).replace("-", ":").upper()
-    agent_uid = _to_text(body.get("agent_uid"))
-    hostname = _to_text(body.get("hostname"))
-    subnet = ".".join(local_ip.split(".")[:3]) + ".0/24" if local_ip else ""
-
-    # Signature is the physical identifier
-    signature = "|".join(
-        [
-            f"lead={lead}",
-            f"subnet={subnet}",
-            f"gateway_ip={gateway_ip}",
-            f"gateway_mac={gateway_mac}",
-        ]
-    )
-    
-    if not fingerprint:
-        fingerprint = signature
-
-    if raw_lan_uid and raw_lan_uid.lower() not in {"lan-default", "legacy-lan", "default", "lan_default"}:
-        return raw_lan_uid, fingerprint
-
-    # Default fallback lan_uid generation if not provided
-    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:16]
-    generated_uid = f"lanf-{digest}"
-    return generated_uid, fingerprint
-    normalized = text.replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(normalized)
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:  # noqa: BLE001
-        return datetime.now(timezone.utc)
-
-
-def _resolve_lan_uid_from_body(body: dict[str, Any]) -> str:
-    uid, _ = _resolve_lan_info_from_body(body)
-    return uid
-
-
-def _to_page(value: Any, default: int) -> int:
-    try:
-        return max(1, int(str(value)))
-    except Exception:  # noqa: BLE001
-        return default
-
-
-def _time_scope_start(scope: str) -> datetime | None:
-    now = datetime.now(timezone.utc)
-    key = (scope or "").strip().lower()
-    if key in {"hour", "1h"}:
-        return now - timedelta(hours=1)
-    if key in {"day", "1d"}:
-        return now - timedelta(days=1)
-    if key in {"7d", "7days", "week"}:
-        return now - timedelta(days=7)
-    if key in {"month", "1m"}:
-        return now - timedelta(days=30)
-    if key in {"3months", "3m"}:
-        return now - timedelta(days=90)
-    if key in {"6months", "6m"}:
-        return now - timedelta(days=180)
-    if key in {"year", "1y"}:
-        return now - timedelta(days=365)
-    if key in {"all", ""}:
-        return None
-    return None
-
-
-def _is_same_utc_minute(left: datetime | None, right: datetime | None) -> bool:
-    if left is None or right is None:
-        return False
-    l = left.astimezone(timezone.utc).replace(second=0, microsecond=0)
-    r = right.astimezone(timezone.utc).replace(second=0, microsecond=0)
-    return l == r
-
-
-def _normalize_counter_payload(counter_data: dict[str, Any]) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for key in COUNTER_KEYS:
-        value = _to_int(counter_data.get(key))
-        if value is not None:
-            result[key] = value
-    return result
-
-
-def _compute_delta_payload(current: dict[str, int], baseline: dict[str, int]) -> tuple[dict[str, int], bool]:
-    delta: dict[str, int] = {}
-    has_reset = False
-    for key in COUNTER_KEYS:
-        cur = current.get(key)
-        base = baseline.get(key)
-        if cur is None:
-            continue
-        if base is None:
-            delta[key] = cur
-            continue
-        diff = cur - base
-        if diff < 0:
-            has_reset = True
-            delta[key] = 0
-            continue
-        delta[key] = diff
-    return delta, has_reset
-
-
-def _apply_baseline(delta_value: int | None, baseline_payload: dict[str, Any], key: str) -> int | None:
-    if delta_value is None:
-        return None
-    base = _to_int(baseline_payload.get(key))
-    if base is None:
-        base = 0
-    return base + delta_value
-
-
-def _apply_common_filters(
-    stmt: Any,
-    model: Any,
-    lead: str,
-    ip: str,
-    printer_name: str,
-    printer_type: str,
-    time_scope: str,
-    favorite_only: bool = False,
-    datetime_from: str = "",
-    datetime_to: str = "",
-) -> Any:
-    if lead:
-        stmt = stmt.where(model.lead == lead)
-    if ip:
-        stmt = stmt.where(model.ip == ip)
-    if printer_name:
-        stmt = stmt.where(model.printer_name == printer_name)
-    if printer_type in {"ricoh", "toshiba", "epson"}:
-        stmt = stmt.where(func.lower(model.printer_name).like(f"%{printer_type}%"))
-    from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
-    to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
-    if from_dt:
-        stmt = stmt.where(model.timestamp >= from_dt)
-    if to_dt:
-        stmt = stmt.where(model.timestamp <= to_dt)
-    if not from_dt and not to_dt:
-        scope_start = _time_scope_start(time_scope)
-        if scope_start:
-            stmt = stmt.where(model.timestamp >= scope_start)
-    if favorite_only:
-        stmt = stmt.where(model.is_favorite.is_(True))
-    return stmt
-
-
-def _resolve_day_window(page: int) -> tuple[datetime, datetime, datetime]:
-    now_local = datetime.now(UI_TZ)
-    today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_start_local = today_start_local - timedelta(days=max(0, page - 1))
-    day_end_local = day_start_local + timedelta(days=1)
-    return (
-        day_start_local.astimezone(timezone.utc),
-        day_end_local.astimezone(timezone.utc),
-        today_start_local,
-    )
-
-
-def _upsert_lan_and_agent(
-    session: Any,
-    lead: str,
-    lan_uid: str,
-    agent_uid: str,
-    lan_name: str,
-    subnet_cidr: str,
-    gateway_ip: str,
-    gateway_mac: str,
-    hostname: str,
-    local_ip: str,
-    local_mac: str,
-    fingerprint_signature: str = "",
-) -> str:
-    """
-    Returns the resolved lan_uid.
-    """
-    lan = None
-    if fingerprint_signature:
-        lan = session.execute(
-            select(LanSite).where(LanSite.lead == lead, LanSite.fingerprint_signature == fingerprint_signature)
-        ).scalar_one_or_none()
-
-    if lan is None:
-        lan = session.execute(select(LanSite).where(LanSite.lead == lead, LanSite.lan_uid == lan_uid)).scalar_one_or_none()
-
-    if lan is None:
-        lan = LanSite(
-            lead=lead,
-            lan_uid=lan_uid,
-            lan_name=lan_name,
-            subnet_cidr=subnet_cidr,
-            gateway_ip=gateway_ip,
-            gateway_mac=gateway_mac,
-            fingerprint_signature=fingerprint_signature,
-        )
-        session.add(lan)
-    else:
-        # If found by fingerprint but lan_uid differs, we tell the agent to use the existing one
-        lan_uid = lan.lan_uid
-        lan.lan_name = lan_name or lan.lan_name
-        lan.subnet_cidr = subnet_cidr or lan.subnet_cidr
-        lan.gateway_ip = gateway_ip or lan.gateway_ip
-        lan.gateway_mac = gateway_mac or lan.gateway_mac
-        if fingerprint_signature:
-            lan.fingerprint_signature = fingerprint_signature
-
-    agent = session.execute(
-        select(AgentNode).where(AgentNode.lead == lead, AgentNode.lan_uid == lan_uid, AgentNode.agent_uid == agent_uid)
-    ).scalar_one_or_none()
-    if agent is None:
-        session.add(
-            AgentNode(
-                lead=lead,
-                lan_uid=lan_uid,
-                agent_uid=agent_uid,
-                hostname=hostname,
-                local_ip=local_ip,
-                local_mac=local_mac,
-            )
-        )
-    else:
-        agent.hostname = hostname or agent.hostname
-        agent.local_ip = local_ip or agent.local_ip
-        agent.local_mac = local_mac or agent.local_mac
-        agent.last_seen_at = datetime.now(timezone.utc)
-
-    return lan_uid
-
-
-def _upsert_printer_from_polling(
-    session: Any,
-    lead: str,
-    lan_uid: str,
-    agent_uid: str,
-    printer_name: str,
-    ip: str,
-    event_time: datetime,
-    touch_seen: bool = True,
-    mark_online_on_create: bool = True,
-    mac_address: str = "",
-    auth_user: str = "",
-    auth_password: str = "",
-) -> Printer:
-    printer_ip = _to_text(ip)
-    printer_mac = _to_text(mac_address)
-    printer_name_value = _to_text(printer_name) or "Unknown Printer"
-    row = None
-    if printer_ip:
-        row = session.execute(
-            select(Printer).where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == printer_ip).limit(1)
-        ).scalar_one_or_none()
-    if row is None:
-        row = session.execute(
-            select(Printer)
-            .where(
-                Printer.lead == lead,
-                Printer.lan_uid == lan_uid,
-                Printer.agent_uid == agent_uid,
-                Printer.printer_name == printer_name_value,
-            )
-            .order_by(Printer.updated_at.desc(), Printer.id.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-    if row is None and not printer_ip:
-        row = session.execute(
-            select(Printer)
-            .where(
-                Printer.lead == lead,
-                Printer.lan_uid == lan_uid,
-                Printer.printer_name == printer_name_value,
-                Printer.ip == "",
-            )
-            .order_by(Printer.updated_at.desc(), Printer.id.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-    if row is None:
-        row = Printer(
-            lead=lead,
-            lan_uid=lan_uid,
-            agent_uid=agent_uid,
-            printer_name=printer_name_value,
-            ip=printer_ip,
-            enabled=True,
-            enabled_changed_at=event_time,
-            is_online=bool(mark_online_on_create),
-            online_changed_at=event_time,
-            mac_address=printer_mac,
-            auth_user=_to_text(auth_user),
-            auth_password=_to_text(auth_password),
-        )
-        session.add(row)
-        session.flush()
-        session.add(
-            PrinterEnableLog(
-                printer_id=row.id,
-                lead=lead,
-                lan_uid=lan_uid,
-                printer_name=row.printer_name,
-                ip=printer_ip,
-                enabled=True,
-                changed_at=event_time,
-            )
-        )
-        session.add(
-            PrinterOnlineLog(
-                printer_id=row.id,
-                lead=lead,
-                lan_uid=lan_uid,
-                printer_name=row.printer_name,
-                ip=printer_ip,
-                is_online=bool(mark_online_on_create),
-                changed_at=event_time,
-            )
-        )
-        return row
-
-    row.agent_uid = agent_uid or row.agent_uid
-    row.printer_name = printer_name_value or row.printer_name
-    row.ip = printer_ip if printer_ip else row.ip
-    row.mac_address = printer_mac if printer_mac else row.mac_address
-    if _to_text(auth_user):
-        row.auth_user = _to_text(auth_user)
-    if _to_text(auth_password):
-        row.auth_password = _to_text(auth_password)
-    if touch_seen:
-        row.updated_at = datetime.now(timezone.utc)
-    return row
-
-
-def _resolve_public_mac(
-    *,
-    session: Any,
-    lead: str,
-    lan_uid: str,
-    ip: str,
-    incoming_mac: Any,
-) -> str:
-    normalized = _normalize_mac(incoming_mac)
-    if normalized:
+def _safe_task_status(value: Any) -> str:
+    normalized = _to_text(value).lower()
+    if normalized in TASK_STATUS_VALUES:
         return normalized
-    ip_text = _to_text(ip)
-    if not ip_text:
-        return ""
-    printer = session.execute(
-        select(Printer)
-        .where(Printer.lead == lead, Printer.lan_uid == lan_uid, Printer.ip == ip_text)
-        .order_by(Printer.updated_at.desc(), Printer.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if printer is None:
-        return ""
-    return _normalize_mac(printer.mac_address)
+    return TaskStatus.BACKLOG.value
 
 
-def _set_printer_online_state(session: Any, printer: Printer, is_online: bool, changed_at: datetime) -> None:
-    next_state = bool(is_online)
-    if bool(printer.is_online) == next_state:
-        return
-    printer.is_online = next_state
-    printer.online_changed_at = changed_at
-    session.add(
-        PrinterOnlineLog(
-            printer_id=printer.id,
-            lead=printer.lead,
-            lan_uid=printer.lan_uid,
-            printer_name=printer.printer_name,
-            ip=printer.ip,
-            is_online=next_state,
-            changed_at=changed_at,
-        )
-    )
-
-
-def _apply_printer_enabled_state(session: Any, printer: Printer, enabled: bool, at: datetime) -> None:
-    next_state = bool(enabled)
-    if bool(printer.enabled) == next_state:
-        return
-    printer.enabled = next_state
-    printer.enabled_changed_at = at
-    session.add(
-        PrinterEnableLog(
-            printer_id=printer.id,
-            lead=printer.lead,
-            lan_uid=printer.lan_uid,
-            printer_name=printer.printer_name,
-            ip=printer.ip,
-            enabled=next_state,
-            changed_at=at,
-        )
-    )
-
-
-def _refresh_stale_offline(session: Any, lead: str = "", lan_uid: str = "", agent_uid: str = "") -> None:
-    stale_before = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_STALE_SECONDS)
-    stmt = select(Printer).where(Printer.is_online.is_(True), Printer.updated_at < stale_before)
-    if lead:
-        stmt = stmt.where(Printer.lead == lead)
-    if lan_uid:
-        stmt = stmt.where(Printer.lan_uid == lan_uid)
-    if agent_uid:
-        stmt = stmt.where(Printer.agent_uid == agent_uid)
-    rows = session.execute(stmt).scalars().all()
-    if not rows:
-        return
-    now = datetime.now(timezone.utc)
-    for item in rows:
-        _set_printer_online_state(session, item, False, now)
-
-
-def _parse_date(value: Any) -> date:
-    text = _to_text(value)
-    if not text:
-        return datetime.now(timezone.utc).date()
-    try:
-        return date.fromisoformat(text)
-    except Exception:  # noqa: BLE001
-        return datetime.now(timezone.utc).date()
+def _safe_task_priority(value: Any) -> str:
+    normalized = _to_text(value).lower()
+    if normalized in TASK_PRIORITY_VALUES:
+        return normalized
+    return TaskPriority.MEDIUM.value
 
 
 def _validate_polling_auth(body: dict[str, Any], lead_key_map: dict[str, str], sent_token: str) -> tuple[bool, str, Any]:
@@ -612,6 +174,7 @@ def _validate_polling_auth(body: dict[str, Any], lead_key_map: dict[str, str], s
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
+    _configure_server_logging()
     cfg = ServerConfig()
     session_factory = create_session_factory(cfg)
     Base.metadata.create_all(bind=session_factory.kw["bind"])
@@ -622,6 +185,9 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS mac_address VARCHAR(64) NOT NULL DEFAULT \'\';'))
+        
+        # Self-heal UserAccount table
+        session.execute(text('ALTER TABLE "UserAccount" ADD COLUMN IF NOT EXISTS password VARCHAR(128) NOT NULL DEFAULT \'\';'))
         
         # Self-heal LanSite table
         session.execute(text('ALTER TABLE "LanSite" ADD COLUMN IF NOT EXISTS fingerprint_signature TEXT;'))
@@ -640,6 +206,28 @@ def create_app() -> Flask:
         session.commit()
 
     lead_key_map = cfg.lead_keys()
+
+    @app.before_request
+    def _before_request_log() -> None:
+        g._req_started = time_module.perf_counter()
+
+    @app.after_request
+    def _after_request_log(response: Any) -> Any:
+        try:
+            path = request.path or ""
+            if path.startswith("/api/"):
+                elapsed_ms = int((time_module.perf_counter() - float(getattr(g, "_req_started", time_module.perf_counter()))) * 1000)
+                LOGGER.info(
+                    "api access method=%s path=%s status=%s ms=%s ip=%s",
+                    request.method,
+                    path,
+                    response.status_code,
+                    elapsed_ms,
+                    request.remote_addr,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return response
 
     @app.get("/")
     def index() -> Any:
@@ -681,8 +269,20 @@ def create_app() -> Flask:
 
     @app.get("/api/lan-sites")
     def list_lan_sites() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        name = _to_text(request.args.get("name"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
         with session_factory() as session:
             stmt = select(LanSite).order_by(LanSite.created_at.desc())
+            if lead:
+                stmt = stmt.where(LanSite.lead == lead)
+            if lan_uid:
+                stmt = stmt.where(LanSite.lan_uid.ilike(f"%{lan_uid}%"))
+            if name:
+                stmt = stmt.where(LanSite.lan_name.ilike(f"%{name}%"))
+            stmt = _apply_date_filters(stmt, LanSite, date_from, date_to)
             rows = session.execute(stmt).scalars().all()
             return jsonify({
                 "rows": [
@@ -694,11 +294,25 @@ def create_app() -> Flask:
                         "gateway_ip": r.gateway_ip,
                         "gateway_mac": r.gateway_mac,
                         "fingerprint_signature": r.fingerprint_signature,
-                        "created_at": r.created_at.isoformat() if r.created_at else "",
+                        "created_at": _format_date(r.created_at),
                     }
                     for r in rows
                 ]
             })
+
+    @app.delete("/api/lan-sites/<string:lan_uid>")
+    def delete_lan_site(lan_uid: str) -> Any:
+        lead = _to_text(request.args.get("lead"))
+        with session_factory() as session:
+            stmt = select(LanSite).where(LanSite.lan_uid == lan_uid)
+            if lead:
+                stmt = stmt.where(LanSite.lead == lead)
+            lan = session.execute(stmt).scalar_one_or_none()
+            if not lan:
+                return jsonify({"ok": False, "error": "LAN Site not found"}), 404
+            session.delete(lan)
+            session.commit()
+        return jsonify({"ok": True, "lan_uid": lan_uid})
 
     @app.get("/counter")
     def counter_page() -> Any:
@@ -2486,14 +2100,27 @@ def create_app() -> Flask:
     @app.get("/api/infor/list")
     def infor_list() -> Any:
         lead = _to_text(request.args.get("lead"))
+        page = _to_page(request.args.get("page"), 1)
+        limit = _to_int(request.args.get("limit"))
+        if limit is None:
+            limit = 50
+
         with session_factory() as session:
             _refresh_stale_offline(session=session, lead=lead)
             session.commit()
+            
+            history_count_stmt = select(func.count()).select_from(DeviceInforHistory)
             history_stmt = select(DeviceInforHistory).order_by(
                 DeviceInforHistory.updated_at.desc(), DeviceInforHistory.id.desc()
             )
             if lead:
+                history_count_stmt = history_count_stmt.where(DeviceInforHistory.lead == lead)
                 history_stmt = history_stmt.where(DeviceInforHistory.lead == lead)
+            
+            total = session.scalar(history_count_stmt) or 0
+            if limit > 0:
+                history_stmt = history_stmt.limit(limit).offset((page - 1) * limit)
+
             history_rows = session.execute(history_stmt).scalars().all()
 
             rows: list[dict[str, Any]] = []
@@ -2547,9 +2174,16 @@ def create_app() -> Flask:
                     )
             else:
                 # Backward compatibility for environments without history rows yet.
+                base_count_stmt = select(func.count()).select_from(DeviceInfor)
                 base_stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
                 if lead:
+                    base_count_stmt = base_count_stmt.where(DeviceInfor.lead == lead)
                     base_stmt = base_stmt.where(DeviceInfor.lead == lead)
+                
+                total = session.scalar(base_count_stmt) or 0
+                if limit > 0:
+                    base_stmt = base_stmt.limit(limit).offset((page - 1) * limit)
+
                 for d in session.execute(base_stmt).scalars().all():
                     counter_data = d.counter_data if isinstance(d.counter_data, dict) else {}
                     status_data = d.status_data if isinstance(d.status_data, dict) else {}
@@ -2588,7 +2222,20 @@ def create_app() -> Flask:
                             "updated_at": d.updated_at.isoformat() if d.updated_at else "",
                         }
                     )
-            return jsonify({"rows": rows})
+            
+            page_size = len(rows)
+            total_pages = 1
+            if limit > 0:
+                total_pages = max(1, (total + limit - 1) // limit)
+
+            return jsonify({
+                "rows": rows,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "limit": limit
+            })
 
     @app.get("/machinelist/")
     def public_machine_list() -> Any:
@@ -2949,14 +2596,948 @@ def create_app() -> Flask:
 
             return jsonify(result)
 
+    def _serialize_task_model(task: Task) -> dict[str, Any]:
+        return {
+            "id": int(task.id),
+            "lead": task.lead,
+            "lan_uid": task.lan_uid,
+            "agent_uid": task.agent_uid,
+            "network_id": task.network_id,
+            "task_key": task.task_key,
+            "mac_id": task.mac_id,
+            "machine_name": task.machine_name,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status,
+            "priority": task.priority,
+            "status_reason": task.status_reason,
+            "reporter_id": int(task.reporter_id) if task.reporter_id else None,
+            "reporter_name": task.reporter.full_name if task.reporter else "",
+            "assignee_id": int(task.assignee_id) if task.assignee_id else None,
+            "assignee_name": task.assignee.full_name if task.assignee else "",
+            "customer_id": int(task.customer_id) if task.customer_id else None,
+            "customer_name": task.customer.full_name if task.customer else "",
+            "reported_at": _format_datetime(task.reported_at),
+            "assigned_at": _format_datetime(task.assigned_at),
+            "due_at": _format_datetime(task.due_at),
+            "completed_at": _format_datetime(task.completed_at),
+            "status_updated_at": _format_datetime(task.status_updated_at),
+            "created_at": _format_date(task.created_at),
+            "updated_at": _format_datetime(task.updated_at),
+        }
+
+    def _serialize_user_model(user: UserAccount) -> dict[str, Any]:
+        return {
+            "id": int(user.id),
+            "lead": user.lead,
+            "username": user.username,
+            "password": user.password or "",
+            "full_name": user.full_name,
+            "email": user.email,
+            "phone_number": user.phone_number,
+            "role": user.role,
+            "is_active": user.is_active,
+            "notes": user.notes,
+            "created_at": _format_date(user.created_at),
+            "updated_at": _format_datetime(user.updated_at),
+        }
+
+    def _serialize_network_model(net: NetworkInfo) -> dict[str, Any]:
+        return {
+            "id": int(net.id),
+            "lead": net.lead,
+            "lan_uid": net.lan_uid,
+            "network_id": net.network_id,
+            "network_name": net.network_name,
+            "office_name": net.office_name,
+            "real_address": net.real_address,
+            "notes": net.notes,
+            "created_at": _format_date(net.created_at),
+            "updated_at": _format_datetime(net.updated_at),
+        }
+    @app.get("/api/public/agent-machines")
+    def public_agent_machines() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        agent_uid = _to_text(request.args.get("agent_uid"))
+        if not lead or not agent_uid:
+            return jsonify({"ok": False, "error": "Missing parameters: lead, agent_uid"}), 400
+
+        with session_factory() as session:
+            records = session.execute(
+                select(DeviceInfor)
+                .where(DeviceInfor.lead == lead, DeviceInfor.agent_uid == agent_uid)
+                .order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+            ).scalars().all()
+
+            normalized_macs: set[str] = set()
+            lan_uids: set[str] = set()
+            for row in records:
+                normalized = _normalize_mac(row.mac_id)
+                if normalized:
+                    normalized_macs.add(normalized)
+                if row.lan_uid:
+                    lan_uids.add(row.lan_uid)
+
+            lan_map: dict[str, LanSite] = {}
+            if lan_uids:
+                lan_rows = session.execute(
+                    select(LanSite).where(LanSite.lead == lead, LanSite.lan_uid.in_(lan_uids))
+                ).scalars().all()
+                lan_map = {row.lan_uid: row for row in lan_rows}
+
+            network_map: dict[str, NetworkInfo] = {}
+            if lan_uids:
+                network_rows = session.execute(
+                    select(NetworkInfo).where(NetworkInfo.lead == lead, NetworkInfo.lan_uid.in_(lan_uids))
+                ).scalars().all()
+                for net in network_rows:
+                    network_map.setdefault(net.lan_uid, net)
+
+            features_by_mac: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            if normalized_macs:
+                feature_rows = session.execute(
+                    select(DeviceFeatureFlag).where(
+                        DeviceFeatureFlag.lead == lead,
+                        DeviceFeatureFlag.mac_id.in_(normalized_macs),
+                    )
+                ).scalars().all()
+                for feature in feature_rows:
+                    normalized = _normalize_mac(feature.mac_id) or feature.mac_id
+                    features_by_mac[normalized].append(
+                        {
+                            "feature": feature.feature_name,
+                            "enabled": bool(feature.is_enabled),
+                            "metadata": feature.metadata,
+                            "last_seen_at": _format_datetime(feature.last_seen_at),
+                        }
+                    )
+
+            alerts_by_mac: dict[str, MachineAlert] = {}
+            if normalized_macs:
+                alert_rows = session.execute(
+                    select(MachineAlert)
+                    .where(
+                        MachineAlert.lead == lead,
+                        MachineAlert.mac_id.in_(normalized_macs),
+                        MachineAlert.status != AlertStatus.RESOLVED.value,
+                    )
+                    .order_by(MachineAlert.triggered_at.desc())
+                ).scalars().all()
+                for alert in alert_rows:
+                    normalized = _normalize_mac(alert.mac_id)
+                    if normalized and normalized not in alerts_by_mac:
+                        alerts_by_mac[normalized] = alert
+
+            lock_history_by_mac: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            if normalized_macs:
+                lock_rows = session.execute(
+                    select(DeviceLockHistory)
+                    .where(DeviceLockHistory.lead == lead, DeviceLockHistory.mac_id.in_(normalized_macs))
+                    .order_by(DeviceLockHistory.event_at.desc())
+                ).scalars().all()
+                for lock in lock_rows:
+                    normalized = _normalize_mac(lock.mac_id)
+                    if not normalized:
+                        continue
+                    history = lock_history_by_mac[normalized]
+                    if len(history) >= 3:
+                        continue
+                    history.append(
+                        {
+                            "action": lock.action,
+                            "reason": lock.reason,
+                            "source": lock.source,
+                            "event_at": _format_datetime(lock.event_at),
+                            "metadata": lock.metadata,
+                        }
+                    )
+
+            agent_node = session.execute(
+                select(AgentNode)
+                .where(AgentNode.lead == lead, AgentNode.agent_uid == agent_uid)
+                .limit(1)
+            ).scalar_one_or_none()
+
+            machines: list[dict[str, Any]] = []
+            seen_keys: set[tuple[str, str, str]] = set()
+            for row in records:
+                normalized_mac = _normalize_mac(row.mac_id)
+                machine_mac = normalized_mac or _to_text(row.mac_id)
+                dedupe_token = machine_mac or _to_text(row.ip) or row.printer_name
+                dedupe_key = (row.lead, row.lan_uid, dedupe_token)
+                if dedupe_token and dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+
+                counter_data = row.counter_data if isinstance(row.counter_data, dict) else {}
+                status_data = row.status_data if isinstance(row.status_data, dict) else {}
+                lan_info = lan_map.get(row.lan_uid)
+                network_info = network_map.get(row.lan_uid)
+                alert_entry = alerts_by_mac.get(normalized_mac) if normalized_mac else None
+                auto_alert = (
+                    {
+                        "severity": alert_entry.severity,
+                        "message": alert_entry.message,
+                        "status": alert_entry.status,
+                        "triggered_at": _format_datetime(alert_entry.triggered_at),
+                        "resolved_at": _format_datetime(alert_entry.resolved_at),
+                    }
+                    if alert_entry
+                    else None
+                )
+
+                machines.append(
+                    {
+                        "lead": row.lead,
+                        "lan_uid": row.lan_uid,
+                        "lan_name": lan_info.lan_name if lan_info else "",
+                        "fingerprint_signature": lan_info.fingerprint_signature if lan_info else "",
+                        "network": {
+                            "network_id": network_info.network_id,
+                            "network_name": network_info.network_name,
+                            "office_name": network_info.office_name,
+                            "real_address": network_info.real_address,
+                        }
+                        if network_info
+                        else {},
+                        "agent_uid": row.agent_uid,
+                        "printer_name": row.printer_name,
+                        "mac_id": machine_mac,
+                        "ip": row.ip,
+                        "counter_total": _to_int(counter_data.get("total")) or 0,
+                        "counter_summary": {
+                            "copier_bw": _to_int(counter_data.get("copier_bw")),
+                            "printer_bw": _to_int(counter_data.get("printer_bw")),
+                            "fax_bw": _to_int(counter_data.get("fax_bw")),
+                        },
+                        "status": _to_text(status_data.get("system_status") or status_data.get("printer_status")),
+                        "alert": _to_text(status_data.get("printer_alerts")),
+                        "toner": status_data.get("toner_black") or {},
+                        "counter_data": counter_data,
+                        "status_data": status_data,
+                        "features": features_by_mac.get(normalized_mac or machine_mac, []),
+                        "lock_history": lock_history_by_mac.get(normalized_mac or machine_mac, []),
+                        "auto_alert": auto_alert,
+                        "last_counter_at": _format_datetime(row.last_counter_at),
+                        "last_status_at": _format_datetime(row.last_status_at),
+                        "updated_at": _format_datetime(row.updated_at),
+                    }
+                )
+
+            machines.sort(
+                key=lambda item: (
+                    _to_text(item.get("lan_name")),
+                    _to_text(item.get("printer_name")),
+                    _to_text(item.get("ip")),
+                )
+            )
+
+            return jsonify(
+                {
+                    "ok": True,
+                    "lead": lead,
+                    "agent_uid": agent_uid,
+                    "agent": {
+                        "hostname": _to_text(agent_node.hostname) if agent_node else "",
+                        "local_ip": _to_text(agent_node.local_ip) if agent_node else "",
+                        "local_mac": _to_text(agent_node.local_mac) if agent_node else "",
+                    },
+                    "count": len(machines),
+                    "machines": machines,
+                }
+            )
+
+    @app.get("/api/tasks")
+    def list_tasks() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        agent_uid = _to_text(request.args.get("agent_uid"))
+        mac = _normalize_mac(request.args.get("mac_id") or request.args.get("mac"))
+        status_filter = _to_text(request.args.get("status")).lower()
+        priority = _to_text(request.args.get("priority"))
+        machine = _to_text(request.args.get("machine"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+
+        with session_factory() as session:
+            stmt = select(Task)
+            if lead:
+                stmt = stmt.where(Task.lead == lead)
+            if agent_uid:
+                stmt = stmt.where(Task.agent_uid == agent_uid)
+            if mac:
+                stmt = stmt.where(func.upper(Task.mac_id) == mac)
+            if status_filter:
+                stmt = stmt.where(Task.status == status_filter)
+            if priority:
+                stmt = stmt.where(Task.priority == priority)
+            if machine:
+                stmt = stmt.where(Task.machine_name.ilike(f"%{machine}%"))
+            
+            stmt = _apply_date_filters(stmt, Task, date_from, date_to)
+            
+            stmt = stmt.order_by(Task.status_updated_at.desc(), Task.id.desc())
+            rows = session.execute(stmt).scalars().all()
+            return jsonify(
+                {
+                    "ok": True,
+                    "lead": lead,
+                    "count": len(rows),
+                    "tasks": [_serialize_task_model(row) for row in rows],
+                    # Added for compatibility with repairs.html expectations
+                    "rows": [_serialize_task_model(row) for row in rows],
+                }
+            )
+
+    @app.post("/api/tasks")
+    def create_task() -> Any:
+        body = request.get_json(silent=True) or {}
+        lead = _to_text(body.get("lead"))
+        if not lead:
+            return jsonify({"ok": False, "error": "Missing parameter: lead"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, _, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+        agent_uid = _to_text(body.get("agent_uid"))
+        if not agent_uid:
+            return jsonify({"ok": False, "error": "Missing parameter: agent_uid"}), 400
+        title = _to_text(body.get("title"))
+        if not title:
+            return jsonify({"ok": False, "error": "Missing title"}), 400
+        normalized_mac = _normalize_mac(body.get("mac_id") or body.get("mac"))
+        if not normalized_mac:
+            normalized_mac = _to_text(body.get("ip"))
+        if not normalized_mac:
+            return jsonify({"ok": False, "error": "Missing mac_id or ip"}), 400
+        status_value = _safe_task_status(body.get("status"))
+        priority_value = _safe_task_priority(body.get("priority"))
+        status_updated = _parse_timestamp(body.get("status_updated_at")) or datetime.now(timezone.utc)
+        completed_at = _parse_timestamp(body.get("completed_at"))
+        if status_value == TaskStatus.DONE.value and completed_at is None:
+            completed_at = status_updated
+        reported_at = _parse_timestamp(body.get("reported_at")) or datetime.now(timezone.utc)
+        task_key = _to_text(body.get("task_key"))
+        if not task_key:
+            digest = hashlib.sha1(f"{lead}-{agent_uid}-{time_module.time()}".encode("utf-8")).hexdigest()[:10]
+            task_key = f"TASK-{lead.upper()}-{digest}"
+        new_task = Task(
+            lead=lead,
+            lan_uid=_to_text(body.get("lan_uid")),
+            agent_uid=agent_uid,
+            network_id=_to_text(body.get("network_id")),
+            task_key=task_key,
+            mac_id=normalized_mac,
+            machine_name=_to_text(body.get("machine_name")),
+            title=title,
+            description=_to_text(body.get("description")),
+            status=status_value,
+            priority=priority_value,
+            reporter_id=_to_int(body.get("reporter_id")),
+            assignee_id=_to_int(body.get("assignee_id")),
+            customer_id=_to_int(body.get("customer_id")),
+            reported_at=reported_at,
+            assigned_at=_parse_timestamp(body.get("assigned_at")),
+            due_at=_parse_timestamp(body.get("due_at")),
+            completed_at=completed_at,
+            status_updated_at=status_updated,
+            status_reason=_to_text(body.get("status_reason")),
+        )
+        with session_factory() as session:
+            session.add(new_task)
+            session.flush()
+            session.refresh(new_task)
+            payload = _serialize_task_model(new_task)
+            session.commit()
+            return jsonify({"ok": True, "task": payload})
+
+    @app.patch("/api/tasks/<int:task_id>")
+    def update_task(task_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        lead = _to_text(body.get("lead") or request.args.get("lead"))
+        if not lead:
+            return jsonify({"ok": False, "error": "Missing parameter: lead"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, _, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+        with session_factory() as session:
+            task = session.execute(
+                select(Task).where(Task.lead == lead, Task.id == task_id)
+            ).scalar_one_or_none()
+            if task is None:
+                return jsonify({"ok": False, "error": "Task not found"}), 404
+            if "agent_uid" in body:
+                task.agent_uid = _to_text(body.get("agent_uid"))
+            if "lan_uid" in body:
+                task.lan_uid = _to_text(body.get("lan_uid"))
+            if "network_id" in body:
+                task.network_id = _to_text(body.get("network_id"))
+            if "task_key" in body:
+                task.task_key = _to_text(body.get("task_key"))
+            if "mac_id" in body or "mac" in body:
+                normalized_mac = _normalize_mac(body.get("mac_id") or body.get("mac"))
+                if normalized_mac:
+                    task.mac_id = normalized_mac
+            if "title" in body:
+                task.title = _to_text(body.get("title"))
+            if "description" in body:
+                task.description = _to_text(body.get("description"))
+            if "machine_name" in body:
+                task.machine_name = _to_text(body.get("machine_name"))
+            status_updated_custom = _parse_timestamp(body.get("status_updated_at"))
+            if "status" in body:
+                new_status = _safe_task_status(body.get("status"))
+                if new_status != task.status:
+                    task.status = new_status
+                    task.status_updated_at = status_updated_custom or datetime.now(timezone.utc)
+            elif status_updated_custom:
+                task.status_updated_at = status_updated_custom
+            if "priority" in body:
+                task.priority = _safe_task_priority(body.get("priority"))
+            if "status_reason" in body:
+                task.status_reason = _to_text(body.get("status_reason"))
+            if "reporter_id" in body:
+                task.reporter_id = _to_int(body.get("reporter_id"))
+            if "assignee_id" in body:
+                task.assignee_id = _to_int(body.get("assignee_id"))
+            if "customer_id" in body:
+                task.customer_id = _to_int(body.get("customer_id"))
+            if "assigned_at" in body:
+                task.assigned_at = _parse_timestamp(body.get("assigned_at"))
+            if "due_at" in body:
+                task.due_at = _parse_timestamp(body.get("due_at"))
+            if "completed_at" in body:
+                task.completed_at = _parse_timestamp(body.get("completed_at"))
+            if task.status == TaskStatus.DONE.value and not task.completed_at:
+                task.completed_at = status_updated_custom or datetime.now(timezone.utc)
+            session.add(task)
+            session.flush()
+            payload = _serialize_task_model(task)
+            session.commit()
+            return jsonify({"ok": True, "task": payload})
+
+    @app.delete("/api/tasks/<int:task_id>")
+    def delete_task(task_id: int) -> Any:
+        lead = _to_text(request.args.get("lead"))
+        if not lead:
+            return jsonify({"ok": False, "error": "Missing parameter: lead"}), 400
+        sent_token = _to_text(request.headers.get("X-Lead-Token"))
+        ok_auth, _, auth_error = _validate_polling_auth({"lead": lead}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+        with session_factory() as session:
+            row = session.execute(select(Task).where(Task.lead == lead, Task.id == task_id)).scalar_one_or_none()
+            if row is None:
+                return jsonify({"ok": False, "error": "Task not found"}), 404
+            session.delete(row)
+            session.commit()
+        return jsonify({"ok": True, "id": task_id})
+
+    @app.get("/api/leads/list")
+    def list_leads_crud() -> Any:
+        name = _to_text(request.args.get("name"))
+        with session_factory() as session:
+            stmt = select(Lead).order_by(Lead.name.asc())
+            if name:
+                stmt = stmt.where(Lead.name.ilike(f"%{name}%"))
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_lead_model(r) for r in rows]})
+
+    @app.post("/api/leads")
+    def create_lead() -> Any:
+        body = request.get_json(silent=True) or {}
+        lead_id = _to_text(body.get("id"))
+        if not lead_id:
+            lead_id = _to_text(body.get("name")).lower().replace(" ", "-")
+        with session_factory() as session:
+            new_lead = Lead(
+                id=lead_id,
+                name=_to_text(body.get("name")),
+                email=_to_text(body.get("email")),
+                phone=_to_text(body.get("phone")),
+                notes=_to_text(body.get("notes")),
+            )
+            session.add(new_lead)
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_lead_model(new_lead)})
+
+    @app.patch("/api/leads/<string:lead_id>")
+    def update_lead(lead_id: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            lead_obj = session.get(Lead, lead_id)
+            if not lead_obj:
+                return jsonify({"ok": False, "error": "Lead not found"}), 404
+            if "name" in body: lead_obj.name = _to_text(body.get("name"))
+            if "email" in body: lead_obj.email = _to_text(body.get("email"))
+            if "phone" in body: lead_obj.phone = _to_text(body.get("phone"))
+            if "notes" in body: lead_obj.notes = _to_text(body.get("notes"))
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_lead_model(lead_obj)})
+
+    @app.delete("/api/leads/<string:lead_id>")
+    def delete_lead(lead_id: str) -> Any:
+        with session_factory() as session:
+            lead_obj = session.get(Lead, lead_id)
+            if not lead_obj:
+                return jsonify({"ok": False, "error": "Lead not found"}), 404
+            session.delete(lead_obj)
+            session.commit()
+        return jsonify({"ok": True, "id": lead_id})
+
+    @app.get("/leads")
+    def leads_page() -> Any:
+        return render_template("leads.html", active_tab="leads", page_title="Leads Management")
+
+    @app.get("/workspaces")
+    def workspaces_page() -> Any:
+        return render_template("workspaces.html", active_tab="workspaces", page_title="Workspaces")
+
+    @app.get("/api/workspaces")
+    def list_workspaces() -> Any:
+        name = _to_text(request.args.get("name"))
+        address = _to_text(request.args.get("address"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(Workspace).order_by(Workspace.name.asc())
+            if name:
+                stmt = stmt.where(Workspace.name.ilike(f"%{name}%"))
+            if address:
+                stmt = stmt.where(Workspace.address.ilike(f"%{address}%"))
+            stmt = _apply_date_filters(stmt, Workspace, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_workspace_model(r) for r in rows]})
+
+    @app.get("/locations")
+    def locations_page() -> Any:
+        return render_template("locations.html", active_tab="locations", page_title="Locations")
+
+    @app.get("/api/locations")
+    def list_locations() -> Any:
+        name = _to_text(request.args.get("name"))
+        workspace_id = _to_text(request.args.get("workspace_id"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(Location).order_by(Location.name.asc())
+            if name:
+                stmt = stmt.where(Location.name.ilike(f"%{name}%"))
+            if workspace_id:
+                stmt = stmt.where(Location.workspace_id == workspace_id)
+            stmt = _apply_date_filters(stmt, Location, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_location_model(r) for r in rows]})
+
+    @app.get("/repairs")
+    def repairs_page() -> Any:
+        return render_template("repairs.html", active_tab="repairs", page_title="Repair Requests")
+
+    @app.get("/api/repairs")
+    def list_repairs() -> Any:
+        machine = _to_text(request.args.get("machine"))
+        status = _to_text(request.args.get("status"))
+        priority = _to_text(request.args.get("priority"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(RepairRequest).order_by(RepairRequest.created_at.desc())
+            if machine:
+                stmt = stmt.where(RepairRequest.machine_name.ilike(f"%{machine}%"))
+            if status:
+                stmt = stmt.where(RepairRequest.status == status)
+            if priority:
+                stmt = stmt.where(RepairRequest.priority == priority)
+            stmt = _apply_date_filters(stmt, RepairRequest, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_repair_model(r) for r in rows]})
+
+    @app.get("/materials")
+    def materials_page() -> Any:
+        return render_template("materials.html", active_tab="materials", page_title="Materials")
+
+    @app.get("/api/materials")
+    def list_materials() -> Any:
+        name = _to_text(request.args.get("name"))
+        repair_id = _to_text(request.args.get("repair_id"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(Material).order_by(Material.name.asc())
+            if name:
+                stmt = stmt.where(Material.name.ilike(f"%{name}%"))
+            if repair_id:
+                stmt = stmt.where(Material.repair_request_id == repair_id)
+            stmt = _apply_date_filters(stmt, Material, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_material_model(r) for r in rows]})
+
+    @app.post("/api/workspaces")
+    def create_workspace() -> Any:
+        body = request.get_json(silent=True) or {}
+        ws_id = _to_text(body.get("id"))
+        if not ws_id:
+            digest = hashlib.sha1(f"ws-{time_module.time()}".encode()).hexdigest()[:8]
+            ws_id = f"ws-{digest}"
+        with session_factory() as session:
+            new_ws = Workspace(
+                id=ws_id,
+                name=_to_text(body.get("name")),
+                logo=_to_text(body.get("logo")),
+                color=_to_text(body.get("color")),
+                address=_to_text(body.get("address")),
+            )
+            session.add(new_ws)
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_workspace_model(new_ws)})
+
+    @app.patch("/api/workspaces/<string:ws_id>")
+    def update_workspace(ws_id: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            ws = session.get(Workspace, ws_id)
+            if not ws:
+                return jsonify({"ok": False, "error": "Workspace not found"}), 404
+            if "name" in body: ws.name = _to_text(body.get("name"))
+            if "logo" in body: ws.logo = _to_text(body.get("logo"))
+            if "color" in body: ws.color = _to_text(body.get("color"))
+            if "address" in body: ws.address = _to_text(body.get("address"))
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_workspace_model(ws)})
+
+    @app.delete("/api/workspaces/<string:ws_id>")
+    def delete_workspace(ws_id: str) -> Any:
+        with session_factory() as session:
+            ws = session.get(Workspace, ws_id)
+            if not ws:
+                return jsonify({"ok": False, "error": "Workspace not found"}), 404
+            session.delete(ws)
+            session.commit()
+        return jsonify({"ok": True, "id": ws_id})
+
+    @app.post("/api/locations")
+    def create_location() -> Any:
+        body = request.get_json(silent=True) or {}
+        loc_id = _to_text(body.get("id"))
+        if not loc_id:
+            digest = hashlib.sha1(f"loc-{time_module.time()}".encode()).hexdigest()[:8]
+            loc_id = f"loc-{digest}"
+        with session_factory() as session:
+            new_loc = Location(
+                id=loc_id,
+                name=_to_text(body.get("name")),
+                address=_to_text(body.get("address")),
+                phone=_to_text(body.get("phone")),
+                machine_count=_to_int(body.get("machine_count")) or 0,
+                workspace_id=_to_text(body.get("workspace_id")),
+            )
+            session.add(new_loc)
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_location_model(new_loc)})
+
+    @app.patch("/api/locations/<string:loc_id>")
+    def update_location(loc_id: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            loc = session.get(Location, loc_id)
+            if not loc:
+                return jsonify({"ok": False, "error": "Location not found"}), 404
+            if "name" in body: loc.name = _to_text(body.get("name"))
+            if "address" in body: loc.address = _to_text(body.get("address"))
+            if "phone" in body: loc.phone = _to_text(body.get("phone"))
+            if "machine_count" in body: loc.machine_count = _to_int(body.get("machine_count"))
+            if "workspace_id" in body: loc.workspace_id = _to_text(body.get("workspace_id"))
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_location_model(loc)})
+
+    @app.delete("/api/locations/<string:loc_id>")
+    def delete_location(loc_id: str) -> Any:
+        with session_factory() as session:
+            loc = session.get(Location, loc_id)
+            if not loc:
+                return jsonify({"ok": False, "error": "Location not found"}), 404
+            session.delete(loc)
+            session.commit()
+        return jsonify({"ok": True, "id": loc_id})
+
+    @app.post("/api/materials")
+    def create_material() -> Any:
+        body = request.get_json(silent=True) or {}
+        mat_id = _to_text(body.get("id"))
+        if not mat_id:
+            digest = hashlib.sha1(f"mat-{time_module.time()}".encode()).hexdigest()[:8]
+            mat_id = f"mat-{digest}"
+        with session_factory() as session:
+            new_mat = Material(
+                id=mat_id,
+                repair_request_id=_to_text(body.get("repair_request_id")),
+                name=_to_text(body.get("name")),
+                quantity=_to_int(body.get("quantity")) or 1,
+                unit_price=_to_int(body.get("unit_price")) or 0,
+                total_price=_to_int(body.get("total_price")) or 0,
+            )
+            session.add(new_mat)
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_material_model(new_mat)})
+
+    @app.patch("/api/materials/<string:mat_id>")
+    def update_material(mat_id: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            mat = session.get(Material, mat_id)
+            if not mat:
+                return jsonify({"ok": False, "error": "Material not found"}), 404
+            if "repair_request_id" in body: mat.repair_request_id = _to_text(body.get("repair_request_id"))
+            if "name" in body: mat.name = _to_text(body.get("name"))
+            if "quantity" in body: mat.quantity = _to_int(body.get("quantity"))
+            if "unit_price" in body: mat.unit_price = _to_int(body.get("unit_price"))
+            if "total_price" in body: mat.total_price = _to_int(body.get("total_price"))
+            session.commit()
+            return jsonify({"ok": True, "row": _serialize_material_model(mat)})
+
+    @app.delete("/api/materials/<string:mat_id>")
+    def delete_material(mat_id: str) -> Any:
+        with session_factory() as session:
+            mat = session.get(Material, mat_id)
+            if not mat:
+                return jsonify({"ok": False, "error": "Material not found"}), 404
+            session.delete(mat)
+            session.commit()
+        return jsonify({"ok": True, "id": mat_id})
+
+    def _apply_date_filters(stmt: Any, model: Any, date_from: str | None, date_to: str | None) -> Any:
+        if date_from:
+            try:
+                dt_from = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+                stmt = stmt.where(model.created_at >= dt_from)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                dt_to = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc)
+                # Set to end of day if only date is provided
+                if len(date_to) == 10:
+                    dt_to = dt_to.replace(hour=23, minute=59, second=59)
+                stmt = stmt.where(model.created_at <= dt_to)
+            except ValueError:
+                pass
+        return stmt
+
+    def _serialize_workspace_model(ws: Workspace) -> dict[str, Any]:
+        return {
+            "id": ws.id,
+            "name": ws.name,
+            "logo": ws.logo,
+            "color": ws.color,
+            "address": ws.address,
+            "created_at": _format_date(ws.created_at),
+        }
+
+    def _serialize_location_model(loc: Location) -> dict[str, Any]:
+        return {
+            "id": loc.id,
+            "name": loc.name,
+            "address": loc.address,
+            "phone": loc.phone,
+            "machine_count": loc.machine_count,
+            "workspace_id": loc.workspace_id,
+            "created_at": _format_date(loc.created_at),
+        }
+
+    def _serialize_repair_model(rep: RepairRequest) -> dict[str, Any]:
+        return {
+            "id": rep.id,
+            "machine_name": rep.machine_name,
+            "location_id": rep.location_id,
+            "workspace_id": rep.workspace_id,
+            "description": rep.description,
+            "priority": rep.priority,
+            "status": rep.status,
+            "created_by": rep.created_by,
+            "assigned_to": rep.assigned_to,
+            "labor_cost": rep.labor_cost,
+            "note": rep.note,
+            "contact_phone": rep.contact_phone,
+            "created_at": _format_date(rep.created_at),
+            "updated_at": _format_datetime(rep.updated_at),
+            "accepted_at": _format_datetime(rep.accepted_at),
+            "completed_at": _format_datetime(rep.completed_at),
+        }
+
+    def _serialize_material_model(mat: Material) -> dict[str, Any]:
+        return {
+            "id": mat.id,
+            "repair_request_id": mat.repair_request_id,
+            "name": mat.name,
+            "quantity": mat.quantity,
+            "unit_price": mat.unit_price,
+            "total_price": mat.total_price,
+            "created_at": _format_date(mat.created_at),
+        }
+
+    def _serialize_lead_model(lead: Lead) -> dict[str, Any]:
+        return {
+            "id": lead.id,
+            "name": lead.name,
+            "email": lead.email,
+            "phone": lead.phone,
+            "notes": lead.notes,
+            "created_at": _format_date(lead.created_at),
+        }
+
+    @app.get("/users")
+    def users_page() -> Any:
+        return render_template("users.html", active_tab="users", page_title="User Accounts")
+
+    @app.get("/api/users")
+    def list_users() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        username = _to_text(request.args.get("username"))
+        fullname = _to_text(request.args.get("fullname"))
+        role = _to_text(request.args.get("role"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(UserAccount).order_by(UserAccount.username.asc())
+            if lead:
+                stmt = stmt.where(UserAccount.lead == lead)
+            if username:
+                stmt = stmt.where(UserAccount.username.ilike(f"%{username}%"))
+            if fullname:
+                stmt = stmt.where(UserAccount.full_name.ilike(f"%{fullname}%"))
+            if role:
+                stmt = stmt.where(UserAccount.role == role)
+            stmt = _apply_date_filters(stmt, UserAccount, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_user_model(r) for r in rows]})
+
+    @app.post("/api/users")
+    def create_user() -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            new_user = UserAccount(
+                lead=_to_text(body.get("lead")),
+                username=_to_text(body.get("username")),
+                full_name=_to_text(body.get("full_name")),
+                email=_to_text(body.get("email")),
+                phone_number=_to_text(body.get("phone_number")),
+                role=_to_text(body.get("role")) or "worker",
+                is_active=bool(body.get("is_active", True)),
+                notes=_to_text(body.get("notes")),
+            )
+            session.add(new_user)
+            session.commit()
+            return jsonify({"ok": True, "user": _serialize_user_model(new_user)})
+
+    @app.patch("/api/users/<int:user_id>")
+    def update_user(user_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            user = session.get(UserAccount, user_id)
+            if not user:
+                return jsonify({"ok": False, "error": "User not found"}), 404
+            if "username" in body: user.username = _to_text(body.get("username"))
+            if "full_name" in body: user.full_name = _to_text(body.get("full_name"))
+            if "email" in body: user.email = _to_text(body.get("email"))
+            if "phone_number" in body: user.phone_number = _to_text(body.get("phone_number"))
+            if "role" in body: user.role = _to_text(body.get("role"))
+            if "is_active" in body: user.is_active = bool(body.get("is_active"))
+            if "notes" in body: user.notes = _to_text(body.get("notes"))
+            session.commit()
+            return jsonify({"ok": True, "user": _serialize_user_model(user)})
+
+    @app.delete("/api/users/<int:user_id>")
+    def delete_user(user_id: int) -> Any:
+        with session_factory() as session:
+            user = session.get(UserAccount, user_id)
+            if not user:
+                return jsonify({"ok": False, "error": "User not found"}), 404
+            session.delete(user)
+            session.commit()
+        return jsonify({"ok": True, "id": user_id})
+
+    @app.get("/companies")
+    def networks_page() -> Any:
+        return render_template("networks.html", active_tab="companies", page_title="Companies / Networks")
+
+    @app.get("/api/networks")
+    def list_networks() -> Any:
+        lead = _to_text(request.args.get("lead"))
+        lan_uid = _to_text(request.args.get("lan_uid"))
+        name = _to_text(request.args.get("name"))
+        office = _to_text(request.args.get("office"))
+        date_from = _to_text(request.args.get("date_from"))
+        date_to = _to_text(request.args.get("date_to"))
+        with session_factory() as session:
+            stmt = select(NetworkInfo).order_by(NetworkInfo.network_name.asc())
+            if lead:
+                stmt = stmt.where(NetworkInfo.lead == lead)
+            if lan_uid:
+                stmt = stmt.where(NetworkInfo.lan_uid.ilike(f"%{lan_uid}%"))
+            if name:
+                stmt = stmt.where(NetworkInfo.network_name.ilike(f"%{name}%"))
+            if office:
+                stmt = stmt.where(NetworkInfo.office_name.ilike(f"%{office}%"))
+            stmt = _apply_date_filters(stmt, NetworkInfo, date_from, date_to)
+            rows = session.execute(stmt).scalars().all()
+            return jsonify({"ok": True, "rows": [_serialize_network_model(r) for r in rows]})
+
+    @app.post("/api/networks")
+    def create_network() -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            new_net = NetworkInfo(
+                lead=_to_text(body.get("lead")),
+                lan_uid=_to_text(body.get("lan_uid")),
+                network_id=_to_text(body.get("network_id")),
+                network_name=_to_text(body.get("network_name")),
+                office_name=_to_text(body.get("office_name")),
+                real_address=_to_text(body.get("real_address")),
+                notes=_to_text(body.get("notes")),
+            )
+            session.add(new_net)
+            session.commit()
+            return jsonify({"ok": True, "network": _serialize_network_model(new_net)})
+
+    @app.patch("/api/networks/<int:net_id>")
+    def update_network(net_id: int) -> Any:
+        body = request.get_json(silent=True) or {}
+        with session_factory() as session:
+            net = session.get(NetworkInfo, net_id)
+            if not net:
+                return jsonify({"ok": False, "error": "Network not found"}), 404
+            if "lan_uid" in body: net.lan_uid = _to_text(body.get("lan_uid"))
+            if "network_id" in body: net.network_id = _to_text(body.get("network_id"))
+            if "network_name" in body: net.network_name = _to_text(body.get("network_name"))
+            if "office_name" in body: net.office_name = _to_text(body.get("office_name"))
+            if "real_address" in body: net.real_address = _to_text(body.get("real_address"))
+            if "notes" in body: net.notes = _to_text(body.get("notes"))
+            session.commit()
+            return jsonify({"ok": True, "network": _serialize_network_model(net)})
+
+    @app.delete("/api/networks/<int:net_id>")
+    def delete_network(net_id: int) -> Any:
+        with session_factory() as session:
+            net = session.get(NetworkInfo, net_id)
+            if not net:
+                return jsonify({"ok": False, "error": "Network not found"}), 404
+            session.delete(net)
+            session.commit()
+        return jsonify({"ok": True, "id": net_id})
+
+    @app.get("/tasks")
+    def tasks_page_ui() -> Any:
+        return render_template("tasks.html", active_tab="tasks", page_title="Support Tasks")
+
+    @app.get("/downloads")
+    def downloads_page_ui() -> Any:
+        return render_template("downloads.html", active_tab="downloads", page_title="Agent Downloads")
+
     return app
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    _configure_server_logging()
     config = ServerConfig()
     app = create_app()
     LOGGER.info("server start host=%s port=%s debug=%s", config.host, config.port, config.debug)

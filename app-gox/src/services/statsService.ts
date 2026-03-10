@@ -85,11 +85,17 @@ export function formatPeriodLabel(period: StatPeriod, now = new Date()): string 
 export function calculateUserRepairStats(
   requests: RepairRequest[],
   userId: string,
-  role: 'supplier' | 'technician',
+  role: 'supplier' | 'technician' | 'admin' | 'user',
   dateRange?: DateRange
 ): UserRepairStats {
   const userRequests = requests.filter((r) => {
-    const matchUser = role === 'supplier' ? r.createdBy === userId : r.assignedTo === userId;
+    // admin sees all, user/supplier created, technician assigned
+    const matchUser =
+      role === 'admin'
+        ? true
+        : role === 'technician'
+        ? r.assignedTo === userId
+        : r.createdBy === userId;
     if (!matchUser) return false;
     if (dateRange) {
       const d = new Date(r.completedAt ?? r.updatedAt);
@@ -139,11 +145,15 @@ export interface ActivityEntry {
 export function getUserActivityHistory(
   requests: RepairRequest[],
   userId: string,
-  role: 'supplier' | 'technician',
+  role: 'supplier' | 'technician' | 'admin' | 'user',
   limit = 20
 ): ActivityEntry[] {
   const userRequests = requests.filter((r) =>
-    role === 'supplier' ? r.createdBy === userId : r.assignedTo === userId
+    role === 'admin'
+      ? true
+      : role === 'technician'
+      ? r.assignedTo === userId
+      : r.createdBy === userId
   );
 
   return userRequests

@@ -20,6 +20,7 @@ interface RepairStore {
   createRequest: (data: {
     machineName: string;
     locationId: string;
+    workspaceId: string;
     description: string;
     priority: Priority;
     createdBy: string;
@@ -73,6 +74,7 @@ export const useRepairStore = create<RepairStore>((set, get) => ({
       const newRequest = await mockCreateRequest({
         machineName: data.machineName,
         locationId: data.locationId,
+        workspaceId: data.workspaceId,
         description: data.description,
         priority: data.priority,
         createdBy: data.createdBy,

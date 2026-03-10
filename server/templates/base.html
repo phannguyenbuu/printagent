@@ -10,12 +10,22 @@
     <div class="shell">
       <aside class="sidebar">
         <h2>GoPrinx</h2>
+        <a class="link {% if active_tab == 'downloads' %}active{% endif %}" href="{{ url_for('downloads_page_ui') }}"><span class="link-ico">&bull;</span><span>Agent</span></a>
+        <div class="sidebar-sep"></div>
         <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="link-ico">&bull;</span><span>Dashboard</span></a>
         <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>
         <a class="link {% if active_tab == 'api_docs' %}active{% endif %}" href="{{ url_for('api_docs_page') }}"><span class="link-ico">&bull;</span><span>API</span></a>
         <a class="link {% if active_tab == 'lan_sites' %}active{% endif %}" href="{{ url_for('lan_sites_page') }}"><span class="link-ico">&bull;</span><span>Lan Network</span></a>
         <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}"><span class="link-ico">&bull;</span><span>Heatmap</span></a>
         <a class="link {% if active_tab == 'configs' %}active{% endif %}" href="{{ url_for('configs_page') }}"><span class="link-ico">&bull;</span><span>Configs</span></a>
+        <div class="sidebar-sep"></div>
+        <a class="link {% if active_tab == 'leads' %}active{% endif %}" href="{{ url_for('leads_page') }}"><span class="link-ico">&bull;</span><span>Companies (Leads)</span></a>
+        <a class="link {% if active_tab == 'workspaces' %}active{% endif %}" href="{{ url_for('workspaces_page') }}"><span class="link-ico">&bull;</span><span>Workspaces</span></a>
+        <a class="link {% if active_tab == 'locations' %}active{% endif %}" href="{{ url_for('locations_page') }}"><span class="link-ico">&bull;</span><span>Locations</span></a>
+        <a class="link {% if active_tab == 'materials' %}active{% endif %}" href="{{ url_for('materials_page') }}"><span class="link-ico">&bull;</span><span>Materials</span></a>
+        <a class="link {% if active_tab == 'users' %}active{% endif %}" href="{{ url_for('users_page') }}"><span class="link-ico">&bull;</span><span>Users</span></a>
+        <a class="link {% if active_tab == 'companies' %}active{% endif %}" href="{{ url_for('networks_page') }}"><span class="link-ico">&bull;</span><span>Networks</span></a>
+        <a class="link {% if active_tab == 'repairs' %}active{% endif %}" href="{{ url_for('repairs_page') }}"><span class="link-ico">&bull;</span><span>Tasks</span></a>
       </aside>
       <main class="content">
         <header class="topbar">
@@ -35,7 +45,7 @@
             <button id="refresh-btn">Refresh</button>
           </div>
         </header>
-        {% if active_tab != 'configs' and active_tab != 'infor' and active_tab != 'api_docs' %}
+        {% if active_tab in ['dashboard', 'counter', 'status', 'heatmap'] %}
           <section class="floating-filter">
             <div class="floating-filter-row">
               <div class="filter-pill-group">
@@ -133,6 +143,17 @@
         <div class="confirm-actions">
           <button id="device-auth-cancel" type="button">Cancel</button>
           <button id="device-auth-ok" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+    <div id="upsert-modal" class="confirm-modal" hidden>
+      <div class="confirm-backdrop"></div>
+      <div class="confirm-dialog upsert-dialog">
+        <h3 id="upsert-title">Create Item</h3>
+        <div id="upsert-form-body" class="upsert-form-body"></div>
+        <div class="confirm-actions">
+          <button id="upsert-cancel" type="button">Cancel</button>
+          <button id="upsert-ok" type="button">Save</button>
         </div>
       </div>
     </div>

@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>Tasks</h3>
+    <div>
+      <button id="task-create-btn" class="filter-btn">Create Task</button>
+      <button id="refresh-btn" class="filter-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="filter-board">
+    <div class="filter-group">
+      <label>Lead</label>
+      <select id="filter-lead">
+        <option value="">All Leads</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Machine</label>
+      <input type="text" id="filter-machine" placeholder="Machine name...">
+    </div>
+    <div class="filter-group">
+      <label>Status</label>
+      <select id="filter-status">
+        <option value="">All</option>
+        <option value="backlog">Backlog</option>
+        <option value="todo">Todo</option>
+        <option value="in_progress">In Progress</option>
+        <option value="done">Done</option>
+        <option value="canceled">Canceled</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Priority</label>
+      <select id="filter-priority">
+        <option value="">All</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+        <option value="critical">Critical</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Date From</label>
+      <input type="date" id="filter-date-from">
+    </div>
+    <div class="filter-group">
+      <label>Date To</label>
+      <input type="date" id="filter-date-to">
+    </div>
+    <button id="apply-filters" class="filter-btn">Apply</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Lead</th>
+          <th>Machine</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th>Assignee</th>
+          <th>Reporter</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="repairs-tbody">
+        <tr><td colspan="10" class="loading">Loading tasks...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const loadLeads = () => {
+        fetch('/api/leads').then(res => res.json()).then(data => {
+            const sel = qs('filter-lead');
+            if (data.leads) {
+                data.leads.forEach(l => {
+                    const opt = document.createElement('option');
+                    opt.value = l;
+                    opt.textContent = l;
+                    sel.appendChild(opt);
+                });
+            }
+        });
+    };
+
+    const loadRepairs = () => {
+        const params = new URLSearchParams({
+            lead: qs('filter-lead').value,
+            machine: qs('filter-machine').value,
+            status: qs('filter-status').value,
+            priority: qs('filter-priority').value,
+            date_from: qs('filter-date-from').value,
+            date_to: qs('filter-date-to').value
+        });
+        fetch(`/api/tasks?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                const tbody = document.getElementById('repairs-tbody');
+                if (data.ok && data.rows) {
+                    tbody.innerHTML = data.rows.map(row => `
+                        <tr>
+                            <td>${row.id}</td>
+                            <td>${escapeHtml(row.lead)}</td>
+                            <td>${row.machine_name || ''}</td>
+                            <td>${row.title || ''}</td>
+                            <td><span class="badge status-${row.status}">${row.status}</span></td>
+                            <td><span class="badge priority-${row.priority}">${row.priority}</span></td>
+                            <td>${row.assignee_name || ''}</td>
+                            <td>${row.reporter_name || ''}</td>
+                            <td>${row.created_at}</td>
+                            <td class="action-cell">
+                                <button class="icon-btn edit" data-id="${row.id}" title="Edit">${iconPencilSvg()}</button>
+                                <button class="icon-btn delete" data-id="${row.id}" title="Delete">${iconTrashSvg()}</button>
+                            </td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="10">No data found</td></tr>';
+
+                    tbody.querySelectorAll('.edit').forEach(btn => {
+                        btn.onclick = () => {
+                            const row = data.rows.find(x => x.id === parseInt(btn.dataset.id));
+                            handleUpsertTask(row);
+                        };
+                    });
+                    tbody.querySelectorAll('.delete').forEach(btn => {
+                        btn.onclick = () => {
+                            if (confirm('Delete this task?')) {
+                                fetch(`/api/tasks/${btn.dataset.id}`, { method: 'DELETE' })
+                                    .then(res => res.json()).then(() => loadRepairs());
+                            }
+                        };
+                    });
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="9">No data found</td></tr>';
+                }
+            });
+    };
+
+    loadLeads();
+    loadRepairs();
+    document.getElementById('refresh-btn').onclick = loadRepairs;
+    document.getElementById('apply-filters').onclick = loadRepairs;
+    document.getElementById('task-create-btn').onclick = () => handleUpsertTask();
+});
+</script>
+<style>
+.badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+/* Status colors */
+.badge.status-backlog { background: #f1f5f9; color: #64748b; }
+.badge.status-todo { background: #e0f2fe; color: #0369a1; }
+.badge.status-in_progress { background: #fef3c7; color: #92400e; }
+.badge.status-done { background: #ecfdf5; color: #065f46; }
+.badge.status-canceled { background: #fee2e2; color: #991b1b; }
+/* Priority colors */
+.badge.priority-high, .badge.priority-critical { background: #fee2e2; color: #991b1b; }
+.badge.priority-medium { background: #fef3c7; color: #92400e; }
+.badge.priority-low { background: #f1f5f9; color: #64748b; }
+</style>
+{% endblock %}

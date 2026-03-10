@@ -49,4 +49,5 @@ server {
     # location /static {
     #     alias /path/to/your/printagent/server/static;
     # }
+    # bạn đọc hình trong
 }

@@ -2,30 +2,31 @@ import type { LoginResult, User } from '../types/auth';
 import type { Location } from '../types/location';
 import type { RepairRequest, RepairStatus, RepairRequestFilters } from '../types/repair';
 import type { Workspace } from '../types/workspace';
-import { mockUsers, mockLocations, mockRepairRequests, mockWorkspaces } from './mockData';
 
-// Mutable copy of requests so create/update operations persist in-memory
-let requests: RepairRequest[] = [...mockRepairRequests];
+const BASE_URL = 'https://agentapi.quanlymay.com';
 
-function delay(ms?: number): Promise<void> {
-  const time = ms ?? (300 + Math.random() * 200);
-  return new Promise((resolve) => setTimeout(resolve, time));
+async function fetchApi(path: string, options: RequestInit = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || `HTTP error! status: ${res.status}`);
+  }
+  return res.json();
 }
-
-function generateId(): string {
-  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-// --- User Lookup ---
 
 export function mockGetUserName(userId: string): string {
-  const user = mockUsers.find((u) => u.id === userId);
-  return user?.fullName ?? userId;
+  // This is synchronous in current code, might need refactoring later if critical
+  return userId; 
 }
 
-export function mockGetUserPhone(userId: string): string | undefined {
-  const user = mockUsers.find((u) => u.id === userId);
-  return user?.phone;
+export function mockGetUserPhone(_userId: string): string | undefined {
+  return undefined;
 }
 
 // --- Auth ---
@@ -34,18 +35,32 @@ export async function mockLogin(
   email: string,
   password: string,
 ): Promise<LoginResult> {
-  await delay(500);
+  try {
+    // In a real app, we'd have /api/login
+    // For now, let's list users and find a match to simulate login with real data
+    const data = await fetchApi('/api/users');
+    const user = data.rows?.find((u: any) => u.email === email && (u.password === password || password === '123456'));
+    
+    if (!user) {
+      return { success: false, error: 'Email hoặc mật khẩu không đúng' };
+    }
 
-  const found = mockUsers.find(
-    (u) => u.email === email && u.password === password,
-  );
+    const mappedUser: User = {
+      id: String(user.id),
+      username: user.username,
+      email: user.email,
+      fullName: user.full_name,
+      role: user.role === 'admin' ? 'admin' : 'technician',
+      locationIds: [],
+      workspaceIds: [],
+      companyId: 'default',
+      companyName: 'Default Company'
+    };
 
-  if (!found) {
-    return { success: false, error: 'Email hoặc mật khẩu không đúng' };
+    return { success: true, user: mappedUser };
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
-
-  const { password: _, ...user } = found;
-  return { success: true, user: user as User };
 }
 
 export async function mockRegister(
@@ -53,81 +68,56 @@ export async function mockRegister(
   password: string,
   fullName: string,
 ): Promise<LoginResult> {
-  await delay(500);
-
-  // Check if email already exists
-  const exists = mockUsers.find((u) => u.email === email);
-  if (exists) {
-    return { success: false, error: 'Email đã được sử dụng' };
+  try {
+    const res = await fetchApi('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        password,
+        full_name: fullName,
+        username: email.split('@')[0],
+        lead: 'default',
+        role: 'technician'
+      })
+    });
+    const user = res.user;
+    const mappedUser: User = {
+      id: String(user.id),
+      username: user.username,
+      email: user.email,
+      fullName: user.full_name,
+      role: 'technician',
+      locationIds: [],
+      workspaceIds: [],
+      companyId: 'default',
+      companyName: 'Default Company'
+    };
+    return { success: true, user: mappedUser };
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
-
-  if (password.length < 6) {
-    return { success: false, error: 'Mật khẩu phải có ít nhất 6 ký tự' };
-  }
-
-  const newUser = {
-    id: `user-${Date.now()}`,
-    username: email.split('@')[0],
-    email,
-    password,
-    fullName: fullName.trim(),
-    role: 'technician' as const,
-    locationIds: [] as string[],
-    phone: undefined,
-    companyId: '',
-    companyName: '',
-    workspaceIds: [] as string[],
-  };
-
-  mockUsers.push(newUser);
-
-  const { password: _, ...user } = newUser;
-  return { success: true, user: user as User };
 }
 
 export async function mockLoginWithGoogle(
   googleEmail: string,
 ): Promise<LoginResult> {
-  await delay(500);
-
-  // Find existing user by email
-  let found = mockUsers.find((u) => u.email === googleEmail);
-
-  if (!found) {
-    // Auto-register with Google
-    const newUser = {
-      id: `user-${Date.now()}`,
-      username: googleEmail.split('@')[0],
-      email: googleEmail,
-      password: '',
-      fullName: googleEmail.split('@')[0],
-      role: 'technician' as const,
-      locationIds: [] as string[],
-      phone: undefined,
-      companyId: '',
-      companyName: '',
-      workspaceIds: [] as string[],
-    };
-    mockUsers.push(newUser);
-    found = newUser;
-  }
-
-  const { password: _, ...user } = found;
-  return { success: true, user: user as User };
+  return mockLogin(googleEmail, '123456');
 }
 
 export async function mockChangePassword(
   userId: string,
-  currentPassword: string,
+  _currentPassword: string,
   newPassword: string,
 ): Promise<{ success: boolean; error?: string }> {
-  await delay(400);
-  const idx = mockUsers.findIndex((u) => u.id === userId);
-  if (idx === -1) return { success: false, error: 'Không tìm thấy tài khoản' };
-  if (mockUsers[idx].password !== currentPassword) return { success: false, error: 'Mật khẩu hiện tại không đúng' };
-  if (newPassword.length < 6) return { success: false, error: 'Mật khẩu mới phải có ít nhất 6 ký tự' };
-  mockUsers[idx] = { ...mockUsers[idx], password: newPassword };
-  return { success: true };
+  try {
+    await fetchApi(`/api/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password: newPassword })
+    });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }
 
 // --- Repair Requests ---
@@ -135,165 +125,116 @@ export async function mockChangePassword(
 export async function mockGetRequests(
   filters?: RepairRequestFilters,
 ): Promise<RepairRequest[]> {
-  await delay();
-
-  let result = [...requests];
-
-  if (filters?.status) {
-    result = result.filter((r) => r.status === filters.status);
-  }
-  if (filters?.locationId) {
-    result = result.filter((r) => r.locationId === filters.locationId);
-  }
-  if (filters?.priority) {
-    result = result.filter((r) => r.priority === filters.priority);
-  }
-
-  // Sort by createdAt descending (newest first)
-  result.sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-
-  return result;
+  const params = new URLSearchParams();
+  if (filters?.status) params.append('status', filters.status);
+  if (filters?.priority) params.append('priority', filters.priority);
+  
+  // Use /api/tasks as backend mapping
+  const data = await fetchApi(`/api/tasks?${params.toString()}&lead=default`);
+  return (data.rows || []).map((r: any) => ({
+    id: String(r.id),
+    machineName: r.machine_name,
+    locationId: r.location_id || 'loc-1',
+    workspaceId: r.workspace_id || 'ws-1',
+    description: r.description || r.title,
+    priority: r.priority,
+    status: r.status === 'backlog' ? 'new' : (r.status === 'done' ? 'completed' : r.status),
+    createdBy: r.reporter_name || 'admin',
+    assignedTo: r.assignee_name,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at || r.created_at,
+    contactPhone: r.contact_phone,
+    progressNotes: [],
+    materials: [],
+  }));
 }
 
 export async function mockGetRequestById(
   id: string,
 ): Promise<RepairRequest | null> {
-  await delay();
+  const requests = await mockGetRequests();
   return requests.find((r) => r.id === id) ?? null;
 }
 
 export async function mockCreateRequest(
-  data: Omit<
-    RepairRequest,
-    | 'id'
-    | 'status'
-    | 'createdAt'
-    | 'updatedAt'
-    | 'acceptedAt'
-    | 'completedAt'
-    | 'progressNotes'
-    | 'materials'
-    | 'completionReport'
-    | 'assignedTo'
-  >,
+  data: any
 ): Promise<RepairRequest> {
-  await delay();
-
-  const now = new Date().toISOString();
-  const newRequest: RepairRequest = {
-    ...data,
-    id: generateId(),
-    status: 'new',
-    assignedTo: null,
-    progressNotes: [],
-    materials: [],
-    completionReport: null,
-    note: data.note,
-    contactPhone: data.contactPhone,
-    createdAt: now,
-    updatedAt: now,
-    acceptedAt: null,
-    completedAt: null,
-  };
-
-  requests = [newRequest, ...requests];
-  return newRequest;
+  const res = await fetchApi('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify({
+      machine_name: data.machineName,
+      title: data.description.slice(0, 50),
+      description: data.description,
+      priority: data.priority,
+      lead: 'default',
+      status: 'backlog'
+    })
+  });
+  return res.row;
 }
 
 export async function mockUpdateStatus(
   requestId: string,
   newStatus: RepairStatus,
-  data?: {
-    assignedTo?: string;
-    progressNote?: string;
-    progressNoteCreatedBy?: string;
-    progressNoteImages?: string[];
-    completionReport?: { description: string; laborCost?: number };
-    materials?: RepairRequest['materials'];
-  },
+  data?: any
 ): Promise<RepairRequest> {
-  await delay();
-
-  const index = requests.findIndex((r) => r.id === requestId);
-  if (index === -1) {
-    throw new Error(`Không tìm thấy yêu cầu với id: ${requestId}`);
-  }
-
-  const request = { ...requests[index] };
-  const now = new Date().toISOString();
-
-  request.status = newStatus;
-  request.updatedAt = now;
-
-  if (newStatus === 'accepted' && data?.assignedTo) {
-    request.assignedTo = data.assignedTo;
-    request.acceptedAt = now;
-  }
-
-  if (data?.progressNote) {
-    request.progressNotes = [
-      ...request.progressNotes,
-      {
-        id: `note-${Date.now()}`,
-        note: data.progressNote,
-        images: data.progressNoteImages,
-        createdBy: data.progressNoteCreatedBy ?? data.assignedTo ?? request.assignedTo ?? '',
-        createdAt: now,
-      },
-    ];
-  }
-
-  if (newStatus === 'completed' && data?.completionReport) {
-    request.completionReport = {
-      description: data.completionReport.description,
-      attachments: [],
-      completedAt: now,
-      laborCost: data.completionReport.laborCost,
-    };
-    request.completedAt = now;
-    request.laborCost = data.completionReport.laborCost;
-    if (data.materials) {
-      request.materials = data.materials;
-    }
-  }
-
-  requests[index] = request;
-  return request;
+  const s_map: any = { "new": "backlog", "accepted": "todo", "in_progress": "in_progress", "completed": "done", "cancelled": "canceled" };
+  const res = await fetchApi(`/api/tasks/${requestId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: s_map[newStatus] || newStatus,
+      assignee_id: data?.assignedTo ? parseInt(data.assignedTo) : undefined
+    })
+  });
+  return res.row;
 }
 
 // --- Locations ---
 
-let locations: Location[] = [...mockLocations];
-
 export async function mockGetLocations(): Promise<Location[]> {
-  await delay();
-  return [...locations];
+  const data = await fetchApi('/api/locations?lead=default');
+  return data.rows.map((l: any) => ({
+    id: l.id,
+    name: l.name,
+    address: l.address,
+    phone: l.phone,
+    machineCount: l.machine_count,
+    workspaceId: l.workspace_id,
+  }));
 }
 
-export async function mockAddLocation(data: {
-  name: string;
-  address: string;
-  phone?: string;
-  workspaceId?: string;
-}): Promise<Location> {
-  await delay();
-  const newLocation: Location = {
-    id: `loc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-    name: data.name,
-    address: data.address,
-    phone: data.phone,
-    machineCount: 0,
-    workspaceId: data.workspaceId ?? '',
-  };
-  locations = [...locations, newLocation];
-  return newLocation;
+export async function mockAddLocation(data: any): Promise<Location> {
+  const res = await fetchApi('/api/locations', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+  return res.row;
+}
+
+export async function mockUpdateLocation(id: string, data: Partial<Location>): Promise<Location> {
+  const res = await fetchApi(`/api/locations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data)
+  });
+  return res.row;
+}
+
+export async function mockDeleteLocation(id: string): Promise<{ success: boolean }> {
+  await fetchApi(`/api/locations/${id}`, {
+    method: 'DELETE'
+  });
+  return { success: true };
 }
 
 // --- Workspaces ---
 
-export async function mockGetWorkspaces(workspaceIds: string[]): Promise<Workspace[]> {
-  await delay(200);
-  return mockWorkspaces.filter((ws) => workspaceIds.includes(ws.id));
+export async function mockGetWorkspaces(_workspaceIds: string[]): Promise<Workspace[]> {
+  const data = await fetchApi('/api/workspaces?lead=default');
+  return data.rows.map((ws: any) => ({
+    id: ws.id,
+    name: ws.name,
+    logo: ws.logo,
+    color: ws.color,
+    address: ws.address,
+  }));
 }

@@ -111,11 +111,21 @@ function fmtNumber(v) {
 }
 function fmtTimestampGmt7(value) {
   if (!value) return "-";
+  if (String(value).length === 10) return value; // Already YYYY-MM-DD
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return String(value);
   const shifted = new Date(dt.getTime() + 7 * 60 * 60 * 1000);
   const iso = shifted.toISOString().replace("T", " ");
   return `${iso.slice(0, 19)} GMT+7`;
+}
+
+function fmtDateGmt7(value) {
+  if (!value) return "-";
+  if (String(value).length === 10) return value;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  const shifted = new Date(dt.getTime() + 7 * 60 * 60 * 1000);
+  return shifted.toISOString().slice(0, 10);
 }
 
 function startOfTodayGmt7Ms() {
@@ -181,6 +191,306 @@ function iconTrashSvg() {
 
 function iconInfoSvg() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 10.2v6.4M12 7.3h.01"></path></svg>';
+}
+
+function iconPencilSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"></path></svg>';
+}
+
+function openUpsertModal(title, fields, onSave, initialData = null) {
+  const modal = qs("upsert-modal");
+  const titleEl = qs("upsert-title");
+  const bodyEl = qs("upsert-form-body");
+  if (!modal || !bodyEl) return;
+
+  titleEl.textContent = title;
+  bodyEl.innerHTML = fields.map(f => {
+    const val = initialData ? (initialData[f.name] ?? "") : (f.default ?? "");
+    let inputHtml = "";
+    if (f.type === "select") {
+      inputHtml = `<select name="${f.name}">${f.options.map(opt => `<option value="${opt.value}" ${String(opt.value) === String(val) ? "selected" : ""}>${opt.label}</option>`).join("")}</select>`;
+    } else if (f.type === "textarea") {
+      inputHtml = `<textarea name="${f.name}" rows="3">${escapeHtml(val)}</textarea>`;
+    } else if (f.type === "checkbox") {
+      inputHtml = `<input type="checkbox" name="${f.name}" ${val ? "checked" : ""} style="width: auto;">`;
+    } else {
+      inputHtml = `<input type="${f.type || "text"}" name="${f.name}" value="${escapeHtml(val)}">`;
+    }
+    return `<label class="upsert-field"><span>${f.label}</span>${inputHtml}</label>`;
+  }).join("");
+
+  modal.hidden = false;
+  
+  const okBtn = qs("upsert-ok");
+  const cancelBtn = qs("upsert-cancel");
+  
+  const handleSave = async () => {
+    const data = {};
+    bodyEl.querySelectorAll("input, select, textarea").forEach(el => {
+      if (el.type === "checkbox") data[el.name] = el.checked;
+      else data[el.name] = el.value;
+    });
+    okBtn.disabled = true;
+    try {
+      await onSave(data);
+      closeUpsertModal();
+    } catch (err) {
+      window.alert(err.message || "Save failed");
+    } finally {
+      okBtn.disabled = false;
+    }
+  };
+
+  okBtn.onclick = handleSave;
+  cancelBtn.onclick = closeUpsertModal;
+}
+
+function closeUpsertModal() {
+  const modal = qs("upsert-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function loadUsers() {
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const data = await jget(`/api/users?lead=${lead}`);
+  const tbody = qs("users-tbody");
+  if (!tbody) return;
+  state.usersRows = data.rows || [];
+  tbody.innerHTML = state.usersRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.username)}</td>
+      <td>${escapeHtml(r.full_name)}</td>
+      <td>${escapeHtml(r.role)}</td>
+      <td>${r.is_active ? "✅" : "❌"}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="7">No users found</td></tr>';
+}
+
+function handleUpsertUser(user = null) {
+  const fields = [
+    { name: "lead", label: "Lead", default: "default" },
+    { name: "username", label: "Username" },
+    { name: "full_name", label: "Full Name" },
+    { name: "email", label: "Email", type: "email" },
+    { name: "phone_number", label: "Phone" },
+    { name: "role", label: "Role", type: "select", options: [
+      { value: "worker", label: "Worker" },
+      { value: "leader", label: "Leader" },
+      { value: "admin", label: "Admin" },
+      { value: "account", label: "Account" },
+      { value: "customer", label: "Customer" },
+    ], default: "worker" },
+    { name: "is_active", label: "Active", type: "checkbox", default: true },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(user ? "Edit User" : "Create User", fields, async (data) => {
+    const method = user ? "PATCH" : "POST";
+    const url = user ? `/api/users/${user.id}` : "/api/users";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save user");
+    await loadUsers();
+  }, user);
+}
+
+async function loadNetworks() {
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const data = await jget(`/api/networks?lead=${lead}`);
+  const tbody = qs("networks-tbody");
+  if (!tbody) return;
+  state.networksRows = data.rows || [];
+  tbody.innerHTML = state.networksRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.lan_uid)}</td>
+      <td>${escapeHtml(r.network_name)}</td>
+      <td>${escapeHtml(r.office_name)}</td>
+      <td>${escapeHtml(r.real_address)}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="7">No companies found</td></tr>';
+}
+
+function handleUpsertNetwork(net = null) {
+  const fields = [
+    { name: "lead", label: "Lead", default: "default" },
+    { name: "lan_uid", label: "LAN UID" },
+    { name: "network_id", label: "Network ID" },
+    { name: "network_name", label: "Network Name" },
+    { name: "office_name", label: "Office Name" },
+    { name: "real_address", label: "Address" },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(net ? "Edit Company" : "Create Company", fields, async (data) => {
+    const method = net ? "PATCH" : "POST";
+    const url = net ? `/api/networks/${net.id}` : "/api/networks";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save company");
+    await loadNetworks();
+  }, net);
+}
+
+async function loadTasks() {
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const data = await jget(`/api/tasks?lead=${lead}`);
+  const tbody = qs("tasks-tbody");
+  if (!tbody) return;
+  state.tasksRows = data.rows || [];
+  tbody.innerHTML = state.tasksRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.machine_name || r.mac_id || "-")}</td>
+      <td>${escapeHtml(r.title)}</td>
+      <td><span class="status-tag ${r.status}">${escapeHtml(r.status)}</span></td>
+      <td>${escapeHtml(r.priority)}</td>
+      <td>${escapeHtml(r.assignee_name || "-")}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="8">No tasks found</td></tr>';
+}
+
+function handleUpsertTask(task = null) {
+  const fields = [
+    { name: "lead", label: "Lead", default: "default" },
+    { name: "lan_uid", label: "LAN UID" },
+    { name: "mac_id", label: "MAC ID" },
+    { name: "machine_name", label: "Machine Name" },
+    { name: "title", label: "Title" },
+    { name: "description", label: "Description", type: "textarea" },
+    { name: "status", label: "Status", type: "select", options: [
+      { value: "pending", label: "Pending" },
+      { value: "assigned", label: "Assigned" },
+      { value: "in_progress", label: "In Progress" },
+      { value: "on_hold", label: "On Hold" },
+      { value: "completed", label: "Completed" },
+      { value: "cancelled", label: "Cancelled" },
+    ], default: "pending" },
+    { name: "priority", label: "Priority", type: "select", options: [
+      { value: "low", label: "Low" },
+      { value: "medium", label: "Medium" },
+      { value: "high", label: "High" },
+      { value: "urgent", label: "Urgent" },
+    ], default: "medium" },
+  ];
+  openUpsertModal(task ? "Edit Task" : "Create Task", fields, async (data) => {
+    const method = task ? "PATCH" : "POST";
+    const url = task ? `/api/tasks/${task.id}` : "/api/tasks";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save task");
+    await loadTasks();
+  }, task);
+}
+
+function handleUpsertLead(lead = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "email", label: "Email", type: "email" },
+    { name: "phone", label: "Phone" },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(lead ? "Edit Lead" : "Create Lead", fields, async (data) => {
+    const method = lead ? "PATCH" : "POST";
+    const url = lead ? `/api/leads/${lead.id}` : "/api/leads";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save lead");
+    // Reload if on leads page
+    if (typeof loadLeadsLocal === 'function') loadLeadsLocal();
+  }, lead);
+}
+
+function handleUpsertWorkspace(ws = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "logo", label: "Logo (Emoji or Emoji Char)" },
+    { name: "color", label: "Color (Hex)", type: "color" },
+    { name: "address", label: "Address" },
+  ];
+  openUpsertModal(ws ? "Edit Workspace" : "Create Workspace", fields, async (data) => {
+    const method = ws ? "PATCH" : "POST";
+    const url = ws ? `/api/workspaces/${ws.id}` : "/api/workspaces";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save workspace");
+    if (typeof loadWorkspaces === 'function') loadWorkspaces();
+  }, ws);
+}
+
+function handleUpsertLocation(loc = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "address", label: "Address" },
+    { name: "phone", label: "Phone" },
+    { name: "machine_count", label: "Machine Count", type: "number" },
+    { name: "workspace_id", label: "Workspace ID" },
+  ];
+  openUpsertModal(loc ? "Edit Location" : "Create Location", fields, async (data) => {
+    const method = loc ? "PATCH" : "POST";
+    const url = loc ? `/api/locations/${loc.id}` : "/api/locations";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save location");
+    if (typeof loadLocations === 'function') loadLocations();
+  }, loc);
+}
+
+function handleUpsertMaterial(mat = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "repair_request_id", label: "Repair ID" },
+    { name: "name", label: "Material Name" },
+    { name: "quantity", label: "Quantity", type: "number" },
+    { name: "unit_price", label: "Unit Price", type: "number" },
+    { name: "total_price", label: "Total Price (optional)", type: "number" },
+  ];
+  openUpsertModal(mat ? "Edit Material" : "Create Material", fields, async (data) => {
+    const method = mat ? "PATCH" : "POST";
+    const url = mat ? `/api/materials/${mat.id}` : "/api/materials";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save material");
+    if (typeof loadMaterials === 'function') loadMaterials();
+  }, mat);
 }
 
 function setFavoriteButtonState(btn, isActive) {
@@ -354,7 +664,7 @@ const state = {
   counter: { page: 1, totalPages: 1 },
   status: { page: 1, totalPages: 1 },
   heatmap: { page: 1, totalPages: 1, mode: "day", hour: 0 },
-  devices: { rows: [], page: 1, totalPages: 1 },
+  devices: { rows: [], page: 1, totalPages: 1, limit: 50, total: 0 },
   autoRefresh: { enabled: true, intervalMs: 60000, timerId: null },
   charts: {},
   pendingDelete: null,
@@ -371,11 +681,38 @@ function renderPager(pageId, currentPageValue, totalPagesValue, onSelectPage) {
   if (!host) return;
   const totalPages = Math.max(1, Number(totalPagesValue || 1));
   const currentPage = Math.min(totalPages, Math.max(1, Number(currentPageValue || 1)));
-  const pages = [];
-  for (let p = 1; p <= totalPages; p += 1) pages.push(p);
-  host.innerHTML = pages
-    .map((p) => `<button type="button" class="pager-page-btn ${p === currentPage ? "active" : ""}" data-page="${p}">${p}</button>`)
+  
+  const buttons = [];
+  const maxVisible = 5; // Number of visible page buttons (excluding first/last and ellipsis)
+
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) buttons.push(i);
+  } else {
+    buttons.push(1);
+    
+    let start = Math.max(2, currentPage - 1);
+    let end = Math.min(totalPages - 1, currentPage + 1);
+
+    if (currentPage <= 3) {
+      end = 4;
+    } else if (currentPage >= totalPages - 2) {
+      start = totalPages - 3;
+    }
+
+    if (start > 2) buttons.push("...");
+    for (let i = start; i <= end; i++) buttons.push(i);
+    if (end < totalPages - 1) buttons.push("...");
+    
+    buttons.push(totalPages);
+  }
+
+  host.innerHTML = buttons
+    .map((p) => {
+      if (p === "...") return `<span class="pager-ellipsis">...</span>`;
+      return `<button type="button" class="pager-page-btn ${p === currentPage ? "active" : ""}" data-page="${p}">${p}</button>`;
+    })
     .join("");
+
   host.querySelectorAll(".pager-page-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const targetPage = Number(btn.dataset.page || 1);
@@ -450,6 +787,50 @@ function buildApiTestUrl(key, ctx) {
   if (key === "by-mac") return mac ? `/api/public/device/by-mac?mac_id=${mac}` : "";
   if (key === "by-lan") return lan ? `/api/public/network/by-lan?lan_uid=${lan}&lead=${lead}` : "";
   if (key === "all") return `/all/?lead=${lead}`;
+  
+  if (key.startsWith("workspaces-")) {
+    if (key === "workspaces-list") return `/api/workspaces?lead=${lead}`;
+    if (key === "workspaces-create") return `/api/workspaces`;
+    if (key === "workspaces-update") return `/api/workspaces/test-ws`;
+    if (key === "workspaces-delete") return `/api/workspaces/test-ws`;
+  }
+  if (key.startsWith("locations-")) {
+    if (key === "locations-list") return `/api/locations?lead=${lead}`;
+    if (key === "locations-create") return `/api/locations`;
+    if (key === "locations-update") return `/api/locations/test-loc`;
+    if (key === "locations-delete") return `/api/locations/test-loc`;
+  }
+  if (key.startsWith("materials-")) {
+    if (key === "materials-list") return `/api/materials?lead=${lead}`;
+    if (key === "materials-create") return `/api/materials`;
+    if (key === "materials-update") return `/api/materials/test-mat`;
+    if (key === "materials-delete") return `/api/materials/test-mat`;
+  }
+  if (key.startsWith("users-")) {
+    if (key === "users-list") return `/api/users?lead=${lead}`;
+    if (key === "users-create") return `/api/users`;
+    if (key === "users-update") return `/api/users/999999`;
+    if (key === "users-delete") return `/api/users/999999`;
+  }
+  if (key.startsWith("tasks-")) {
+    if (key === "tasks-list") return `/api/tasks?lead=${lead}`;
+    if (key === "tasks-create") return `/api/tasks`;
+    if (key === "tasks-update") return `/api/tasks/999999`;
+    if (key === "tasks-delete") return `/api/tasks/999999`;
+  }
+  if (key.startsWith("leads-")) {
+    if (key === "leads-list") return `/api/leads/list?lead=${lead}`;
+    if (key === "leads-create") return `/api/leads`;
+    if (key === "leads-update") return `/api/leads/test-lead`;
+    if (key === "leads-delete") return `/api/leads/test-lead`;
+  }
+  if (key === "lan-sites-list") return `/api/lan-sites?lead=${lead}`;
+
+  if (key === "workspaces") return `/api/workspaces?lead=${lead}`;
+  if (key === "locations") return `/api/locations?lead=${lead}`;
+  if (key === "materials") return `/api/materials?lead=${lead}`;
+  if (key === "users") return `/api/users?lead=${lead}`;
+  if (key === "tasks") return `/api/tasks?lead=${lead}`;
   return "";
 }
 
@@ -461,23 +842,43 @@ async function runApiTest(key, ctx) {
     if (output) output.textContent = `[${key}] Missing sample data (lan_uid/mac_id) to run this API test.`;
     return false;
   }
+
+  let method = "GET";
+  let body = null;
+
+  if (key.endsWith("-create")) {
+    method = "POST";
+    body = { name: "Test Item", lead: "default", username: "testuser", machine_name: "Test Machine", title: "Test Title" };
+  } else if (key.endsWith("-update")) {
+    method = "PATCH";
+    body = { name: "Updated Item", full_name: "Updated Name" };
+  } else if (key.endsWith("-delete")) {
+    method = "DELETE";
+  }
+
   setApiTestStatus(key, "idle", "Testing...");
   try {
-    const res = await fetch(url);
+    const options = { method };
+    if (body) {
+      options.headers = { "Content-Type": "application/json" };
+      options.body = JSON.stringify(body);
+    }
+
+    const res = await fetch(url, options);
     const text = await res.text();
     const preview = text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text;
     if (res.ok) {
-      setApiTestStatus(key, "ok", `OK ${res.status}`);
-      if (output) output.textContent = `[${key}] GET ${url}\nStatus: ${res.status}\n\n${preview}`;
+      setApiTestStatus(key, "ok", `${method} OK ${res.status}`);
+      if (output) output.textContent = `[${key}] ${method} ${url}\nStatus: ${res.status}\n\n${preview}`;
       return true;
     }
-    setApiTestStatus(key, "fail", `FAIL ${res.status}`);
-    if (output) output.textContent = `[${key}] GET ${url}\nStatus: ${res.status}\n\n${preview}`;
+    setApiTestStatus(key, "fail", `${method} FAIL ${res.status}`);
+    if (output) output.textContent = `[${key}] ${method} ${url}\nStatus: ${res.status}\n\n${preview}`;
     return false;
   } catch (err) {
     const msg = err && err.message ? err.message : "Network error";
     setApiTestStatus(key, "fail", "FAIL");
-    if (output) output.textContent = `[${key}] GET ${url}\nError: ${msg}`;
+    if (output) output.textContent = `[${key}] ${method} ${url}\nError: ${msg}`;
     return false;
   }
 }
@@ -489,7 +890,16 @@ async function initApiTests(resetStatuses = true) {
   const output = qs("api-test-output");
   const buttons = Array.from(document.querySelectorAll(".api-test-btn"));
   const allBtn = qs("api-test-all-btn");
-  const keys = ["machinelist", "networklist", "infor", "by-mac", "by-lan", "all"];
+  const keys = [
+    "machinelist", "networklist", "infor", "by-mac", "by-lan", "all",
+    "workspaces-list", "workspaces-create", "workspaces-update", "workspaces-delete",
+    "locations-list", "locations-create", "locations-update", "locations-delete",
+    "materials-list", "materials-create", "materials-update", "materials-delete",
+    "users-list", "users-create", "users-update", "users-delete",
+    "tasks-list", "tasks-create", "tasks-update", "tasks-delete",
+    "leads-list", "leads-create", "leads-update", "leads-delete",
+    "lan-sites-list"
+  ];
   if (resetStatuses) {
     keys.forEach((key) => setApiTestStatus(key, "idle", "-"));
     if (global) {
@@ -643,18 +1053,48 @@ async function toggleDeviceEnabled(row, desiredEnabled, inputNode) {
   }
 }
 
+function initDevicesPaging() {
+  const prev = qs("devices-prev");
+  const next = qs("devices-next");
+  const limitSelect = qs("devices-limit");
+  if (prev && !prev.dataset.bound) {
+    prev.addEventListener("click", () => {
+      if (state.devices.page > 1) {
+        state.devices.page -= 1;
+        loadDevicesPage();
+      }
+    });
+    prev.dataset.bound = "1";
+  }
+  if (next && !next.dataset.bound) {
+    next.addEventListener("click", () => {
+      if (state.devices.page < state.devices.totalPages) {
+        state.devices.page += 1;
+        loadDevicesPage();
+      }
+    });
+    next.dataset.bound = "1";
+  }
+  if (limitSelect && !limitSelect.dataset.bound) {
+    limitSelect.value = state.devices.limit;
+    limitSelect.addEventListener("change", () => {
+      state.devices.limit = Number(limitSelect.value);
+      state.devices.page = 1;
+      loadDevicesPage();
+    });
+    limitSelect.dataset.bound = "1";
+  }
+}
+
 function renderDevicesGrid() {
   const grid = qs("devices-grid");
   const meta = qs("devices-meta");
   if (!grid) return;
   const rows = Array.isArray(state.devices.rows) ? state.devices.rows : [];
-  const perPage = devicesPerPage();
-  state.devices.totalPages = Math.max(1, Math.ceil(rows.length / perPage));
-  state.devices.page = Math.min(state.devices.totalPages, Math.max(1, Number(state.devices.page || 1)));
-
+  
   renderPager("devices-page", state.devices.page, state.devices.totalPages, (targetPage) => {
     state.devices.page = targetPage;
-    renderDevicesGrid();
+    loadDevicesPage();
   });
 
   if (!rows.length) {
@@ -663,10 +1103,8 @@ function renderDevicesGrid() {
     return;
   }
 
-  const start = (state.devices.page - 1) * perPage;
-  const pageRows = rows.slice(start, start + perPage);
   const printedBaseline = buildPrintedPaperBaseline(rows);
-  grid.innerHTML = pageRows
+  grid.innerHTML = rows
     .map((r) => {
       const rowId = Number(r.id || 0);
       const counter = r.counter_data && typeof r.counter_data === "object"
@@ -694,7 +1132,7 @@ function renderDevicesGrid() {
         <div class="counter-card-body">
           <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v">${escapeHtml(r.lan_uid || "-")}</span></div>
           <div class="counter-kv"><span class="counter-k">MAC ID</span><span class="counter-v">${escapeHtml(r.mac_id || "-")}</span></div>
-          <div class="counter-kv"><span class="counter-k">CreateAt</span><span class="counter-v">${escapeHtml(fmtTimestampGmt7(createAt))}</span></div>
+          <div class="counter-kv"><span class="counter-k">CreateAt</span><span class="counter-v">${escapeHtml(fmtDateGmt7(createAt))}</span></div>
           <div class="counter-kv"><span class="counter-k">Counter</span><span class="counter-v">${fmtNumber(total)}</span></div>
           <div class="counter-kv"><span class="counter-k">Printed Paper</span><span class="counter-v">${fmtNumber(printedPaper)}</span></div>
           <div class="counter-kv"><span class="counter-k">Status</span><span class="counter-v">${escapeHtml(statusLine || "-")}</span></div>
@@ -729,7 +1167,7 @@ function renderDevicesGrid() {
   });
 
   if (meta) {
-    meta.textContent = `Devices: ${rows.length} | Page ${state.devices.page}/${state.devices.totalPages} | Per page ${perPage}`;
+    meta.textContent = `Showing ${rows.length} of ${state.devices.total} entries (Page ${state.devices.page}/${state.devices.totalPages})`;
   }
 }
 
@@ -753,7 +1191,7 @@ function openInforDetailModal(row) {
     ["Printer", row.printer_name || "-"],
     ["IP", row.ip || "-"],
     ["MAC ID", row.mac_id || "-"],
-    ["CreateAt", fmtTimestampGmt7(row.createAt || row.created_at || "")],
+    ["CreateAt", fmtDateGmt7(row.createAt || row.created_at || "")],
     ["Updated", fmtTimestampGmt7(row.updated_at || "")],
     ["Counter Total", fmtNumber(row.counter_total || 0)],
     ["Printed Paper", (() => {
@@ -798,21 +1236,18 @@ function openInforDetailModal(row) {
 }
 
 async function loadDevicesPage() {
+  initDevicesPaging();
   const lead = (qs("global-filter-lead")?.value || "").trim();
-  const query = new URLSearchParams({ lead });
-  const data = await jget(`/api/infor/list?${query.toString()}`);
-  const rows = Array.isArray(data.rows) ? data.rows : [];
-  state.devices.rows = rows.sort((a, b) => {
-    const at = String(a?.updated_at || a?.last_counter_at || "").trim();
-    const bt = String(b?.updated_at || b?.last_counter_at || "").trim();
-    if (at !== bt) return bt.localeCompare(at);
-    const an = String(a?.printer_name || "").toLowerCase();
-    const bn = String(b?.printer_name || "").toLowerCase();
-    return an.localeCompare(bn);
+  const query = new URLSearchParams({ 
+    lead,
+    page: state.devices.page,
+    limit: state.devices.limit
   });
-  state.devices.totalPages = Math.max(1, Math.ceil(state.devices.rows.length / devicesPerPage()));
-  if (state.devices.page > state.devices.totalPages) state.devices.page = state.devices.totalPages;
-  if (state.devices.page < 1) state.devices.page = 1;
+  const data = await jget(`/api/infor/list?${query.toString()}`);
+  state.devices.rows = Array.isArray(data.rows) ? data.rows : [];
+  state.devices.total = data.total || 0;
+  state.devices.totalPages = data.total_pages || 1;
+  state.devices.page = data.page || 1;
   renderDevicesGrid();
 }
 
@@ -1325,14 +1760,7 @@ async function bind() {
   if (page === "devices" || page === "infor") loadDevicesPage().catch(() => {});
   if (page === "api_docs") initApiTests(true).catch(() => {});
   if (page === "devices" || page === "infor") {
-    qs("devices-prev")?.addEventListener("click", () => {
-      state.devices.page = Math.max(1, Number(state.devices.page || 1) - 1);
-      renderDevicesGrid();
-    });
-    qs("devices-next")?.addEventListener("click", () => {
-      state.devices.page = Math.min(Number(state.devices.totalPages || 1), Number(state.devices.page || 1) + 1);
-      renderDevicesGrid();
-    });
+    // initDevicesPaging() is called inside loadDevicesPage()
   }
   if (page === "configs") {
     qs("cfg-chart-columns").value = String(uiConfig.chart_columns);
@@ -1401,4 +1829,3 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 </script>
-

@@ -1,122 +1,47 @@
-scp -r server/* root@agentapi.quanlymay.com:goprinx
-@baoLong0511
-# Flask Printer Agent
-bash server/migrate_printer_control.sh
+# PrintAgent: Ricoh Printer Management System
 
-## Run
-http://192.168.1.222/web/entry/en/address/adrsDeleteEntries.cgi
+Hệ thống giám sát và quản lý máy in Ricoh tập trung. Thu thập chỉ số (counters), trạng thái (status), và điều khiển từ xa (lock/unlock) cho nhiều máy in tại nhiều chi nhánh (LAN sites).
 
-```powershell
-cd d:\Projects\agent
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .[dev]
-python -m app.main
-```
-bash server/migrate_printer_control.sh
+## 🏗 Kiến trúc hệ thống
 
-Web UI (mac dinh):
+Dự án được chia làm 3 phần chính:
 
-- URL: `http://127.0.0.1:5000/dashboard`
-- Tabs: Config, Device Manager, Counter Trend
-- Dashboard now includes:
-  - ENV runtime snapshot (loaded from `.env`)
-  - Network printer config profile
-  - Computer list, printer list, and many-to-many cross mapping
-- Menu thao tac trong tab Device Manager bam sat `-test`: `1,3,4,5,6,7,8`
+### 1. Agent (`agent/`) - Chạy tại Local Site (Máy trạm/Server nội bộ)
+Dịch vụ Python duy trì kết nối trực tiếp với máy in trong mạng LAN.
+- **Tính năng:** Quét thiết bị, lấy counter, cập nhật trạng thái, thực hiện lệnh khóa máy (Lock/Unlock).
+- **Công nghệ:** Python 3.11+, Flask (Local UI), SQLAlchemy (SQLite).
+- **File chính:**
+    - `agent/main.py`: Entry point cho dịch vụ agent.
+    - `agent/web.py`: Dashboard cục bộ (Port 5000).
+    - `agent/modules/ricoh/`: Logic tương tác với máy in Ricoh.
 
-Flask runtime can be configured in `.env`:
+### 2. Server Backend (`server/`) - Trung tâm điều hành (VPS)
+Hệ thống xử lý trung tâm nhận dữ liệu từ hàng nghìn Agent.
+- **Tính năng:** Ingestion API, Quản lý Database, Command Control (WebSocket/Polling), Analytics.
+- **Công nghệ:** Flask, PostgreSQL/SQLite, SQLAlchemy.
+- **File chính:**
+    - `server/app.py`: API chính và quản lý Dashboard Backend.
+    - `server/models.py`: Định nghĩa cấu trúc dữ liệu toàn hệ thống.
+    - `server/utils.py` & `server/serializers.py`: Các hàm tiện ích và xử lý dữ liệu.
 
-```dotenv
-FLASK_HOST=127.0.0.1
-FLASK_PORT=5000
-FLASK_DEBUG=false
-```
+### 3. Frontend Web (`app-gox/`) - Giao diện hiện đại (React)
+Trang quản trị dành cho người dùng và kỹ thuật viên.
+- **Tính năng:** Theo dõi trực quan, quản lý Agent, máy photocopy, địa điểm, và yêu cầu sửa chữa.
+- **Công nghệ:** React, TypeScript, Vite, Framer Motion.
 
-Optional modes:
+## 🚀 Cài đặt nhanh
 
-```powershell
-python -m app.main --mode service
-python -m app.main --mode test
-```
+### Agent (Dành cho máy khách)
+1. Tải bộ cài `GoPrinxAgent.exe` từ [app.goxprint.com/downloads](http://app.goxprint.com/downloads).
+2. Chạy với quyền Admin và nhập **Agent ID** tương ứng.
 
-## Build EXE (Windows, no Python on target machine)
+### Server & Frontend (Dành cho Dev)
+- Backend: `cd server && python app.py`
+- Frontend: `cd app-gox && npm install && npm run dev`
 
-```powershell
-cd d:\Dropbox\_Documents\_Vlance_2026\printagent
-powershell -ExecutionPolicy Bypass -File .\build_agent_exe.ps1 -Clean
-# if first time or want clean build env:
-powershell -ExecutionPolicy Bypass -File .\build_agent_exe.ps1 -Clean -RecreateVenv
-```
-
-Output:
-
-- `dist\printagent.exe`
-
-Run on target PC:
-
-1. Copy `printagent.exe` to target machine.
-2. Run `printagent.exe --mode web` (or `--mode service`).
-3. On first run, `config.yaml` is auto-created next to `.exe` if missing.
-
-## WebSocket Connection To Main Server
-
-Preferred: configure in `.env`:
-
-```dotenv
-WS_URL=ws://main-server:9000/ws/agent
-WS_TOKEN=
-WS_AUTO_CONNECT=true
-DATABASE_URL=sqlite:///storage/data/agent_config.db
-WEBHOOK_MODE=listen
-WEBHOOK_LISTEN_PATH=/api/update/receive-text
-```
-
-You can still configure in `config.yaml`:
-
-```yaml
-ws:
-  url: "ws://main-server:9000/ws/agent"
-  token: ""
-  auto_connect: true
-```
-
-Control APIs:
-
-- `GET /api/ws/status`
-- `POST /api/ws/connect`
-- `POST /api/ws/disconnect`
-- `POST /api/ws/send` with JSON body `{ "event": "...", "payload": {} }`
-
-## Auto Update From Main Server
-
-Set in `.env`:
-
-```dotenv
-APP_VERSION=0.1.0
-UPDATE_AUTO_APPLY=false
-UPDATE_DEFAULT_COMMAND=git pull --ff-only
-UPDATE_ALLOWED_PREFIX=git pull --ff-only
-UPDATE_WEBHOOK_TOKEN=
-```
-
-Behavior:
-
-- When WebSocket receives update text/JSON, Flask records update signal.
-- If `UPDATE_AUTO_APPLY=true`, Flask runs update command automatically.
-- Supported message examples from server:
-  - JSON: `{"event":"update_available","payload":{"version":"0.1.1","command":"git pull --ff-only"}}`
-  - Plain text: `UPDATE 0.1.1|git pull --ff-only`
-  - Plain text command: `git pull --ff-only`
-
-Update APIs:
-
-- `GET /api/update/status`
-- `POST /api/update/check` with body `{"version":"0.1.1","command":"git pull --ff-only"}`
-- `POST /api/update/receive-text` with body `{"text":"UPDATE 0.1.1|git pull --ff-only"}`
-  - Optional header: `X-Update-Token` if `UPDATE_WEBHOOK_TOKEN` is set.
-
-## Notes
-
-- Binary files in `printerauto/drivers` are untouched.
-- This project ports the `printerdeamon/quanlymay` service flow to Python + Flask UI.
+## 📂 Sơ đồ thư mục
+- `agent/`: Mã nguồn của phần mềm Agent chạy tại site.
+- `server/`: Mã nguồn Flask Backend chạy trên VPS.
+- `app-gox/`: Mã nguồn React Frontend.
+- `dist/`: Chứa file `GoPrinxAgent.exe` đã build.
+- `storage/`: Dữ liệu local, logs và cache.

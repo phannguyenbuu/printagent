@@ -721,7 +721,7 @@ class RicohCollectorMixin(RicohServiceBase):
 
     @staticmethod
     def parse_counter(html: str) -> dict[str, str]:
-        results = {}
+        results: dict[str, str] = {}
         # Keep spacing between nodes so labels like "Copier" + "Black & White"
         # are not merged into "CopierBlack".
         plain = unescape(re.sub(r"<[^>]*>", " ", html or ""))
@@ -734,32 +734,70 @@ class RicohCollectorMixin(RicohServiceBase):
             value = str(match.group(1) or "").replace(",", "").strip()
             return value if value.isdigit() else ""
 
-        def _section(text: str, start_marker: str, end_marker: str) -> str:
+        def _section(text: str, start_marker: str, end_markers: list[str]) -> str:
             start = re.search(start_marker, text, re.IGNORECASE)
             if not start:
                 return ""
             remainder = text[start.start():]
-            end = re.search(end_marker, remainder, re.IGNORECASE)
-            if not end:
-                return remainder
-            return remainder[:end.start()]
+            end_idx = len(remainder)
+            for marker in end_markers:
+                end = re.search(marker, remainder, re.IGNORECASE)
+                if end and end.start() < end_idx:
+                    end_idx = end.start()
+            return remainder[:end_idx]
 
-        # Global counters
-        total = _find_number(r"\bTotal\s*:\s*([0-9,]+)", plain)
+        def _extract_color_metrics(block: str, prefix: str) -> None:
+            if not block:
+                return
+            mapping = {
+                f"{prefix}_bw": [
+                    r"Black\s*&\s*White\s*:\s*([0-9,]+)",
+                    r"B\s*&\s*W\s*:\s*([0-9,]+)",
+                ],
+                f"{prefix}_full_color": [r"Full\s*Color\s*:\s*([0-9,]+)"],
+                f"{prefix}_single_color": [r"Single\s*Color\s*:\s*([0-9,]+)"],
+                f"{prefix}_two_color": [r"Two[-\s]*color\s*:\s*([0-9,]+)"],
+            }
+            for key, patterns in mapping.items():
+                for pattern in patterns:
+                    value = _find_number(pattern, block)
+                    if value:
+                        results[key] = value
+                        break
+
+        def _extract_coverage_metrics(block: str, prefix: str) -> None:
+            if not block:
+                return
+            mapping = {
+                f"coverage_{prefix}_bw": [
+                    r"(?:B\s*&\s*W|Black\s*&\s*White)\s+Coverage\s*:\s*([0-9,]+)"
+                ],
+                f"coverage_{prefix}_single_color": [r"Single\s*Color\s+Coverage\s*:\s*([0-9,]+)"],
+                f"coverage_{prefix}_two_color": [r"Two[-\s]*color\s+Coverage\s*:\s*([0-9,]+)"],
+                f"coverage_{prefix}_full_color": [r"Full\s*Color\s+Coverage\s*:\s*([0-9,]+)"],
+            }
+            for key, patterns in mapping.items():
+                for pattern in patterns:
+                    value = _find_number(pattern, block)
+                    if value:
+                        results[key] = value
+                        break
+
+        # Global total (prefer the first "Total" near top, before Copier section).
+        top_block = _section(plain, r"\bTotal\b", [r"\bCopier\b", r"\bPrinter\b"])
+        total = _find_number(r"\bTotal\s*:\s*([0-9,]+)", top_block) or _find_number(r"\bTotal\s*:\s*([0-9,]+)", plain)
         if total:
             results["total"] = total
-        copier_bw = _find_number(r"Copier\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
-        if copier_bw:
-            results["copier_bw"] = copier_bw
-        printer_bw = _find_number(r"Printer\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
-        if printer_bw:
-            results["printer_bw"] = printer_bw
-        fax_bw = _find_number(r"Fax\s+Black\s*&\s*White\s*:\s*([0-9,]+)", plain)
-        if fax_bw:
-            results["fax_bw"] = fax_bw
+
+        copier_block = _section(plain, r"\bCopier\b", [r"\bPrinter\b", r"\bFax\b", r"\bSend/TX\s+Total\b"])
+        printer_block = _section(plain, r"\bPrinter\b", [r"\bFax\b", r"\bSend/TX\s+Total\b"])
+        fax_block = _section(plain, r"\bFax\b", [r"\bSend/TX\s+Total\b", r"\bFax\s+Transmission\b", r"\bCoverage\b"])
+        _extract_color_metrics(copier_block, "copier")
+        _extract_color_metrics(printer_block, "printer")
+        _extract_color_metrics(fax_block, "fax")
 
         # Send/TX Total block
-        send_tx_block = _section(plain, r"Send/TX\s+Total", r"Fax\s+Transmission")
+        send_tx_block = _section(plain, r"\bSend/TX\s+Total\b", [r"\bFax\s+Transmission\b", r"\bScanner\s+Send\b"])
         if send_tx_block:
             send_bw = _find_number(r"Black\s*&\s*White\s*:\s*([0-9,]+)", send_tx_block)
             send_color = _find_number(r"Color\s*:\s*([0-9,]+)", send_tx_block)
@@ -768,12 +806,13 @@ class RicohCollectorMixin(RicohServiceBase):
             if send_color:
                 results["send_tx_total_color"] = send_color
 
-        fax_tx_total = _find_number(r"Fax\s+Transmission\s+Total\s*:\s*([0-9,]+)", plain)
+        fax_tx_block = _section(plain, r"\bFax\s+Transmission\b", [r"\bScanner\s+Send\b", r"\bCoverage\b"])
+        fax_tx_total = _find_number(r"\bTotal\s*:\s*([0-9,]+)", fax_tx_block)
         if fax_tx_total:
             results["fax_transmission_total"] = fax_tx_total
 
         # Scanner Send block
-        scanner_block = _section(plain, r"Scanner\s+Send", r"Coverage")
+        scanner_block = _section(plain, r"\bScanner\s+Send\b", [r"\bCoverage\b", r"\bOther\s+Function\(s\)\b"])
         if scanner_block:
             scanner_bw = _find_number(r"Black\s*&\s*White\s*:\s*([0-9,]+)", scanner_block)
             scanner_color = _find_number(r"Color\s*:\s*([0-9,]+)", scanner_block)
@@ -783,21 +822,19 @@ class RicohCollectorMixin(RicohServiceBase):
                 results["scanner_send_color"] = scanner_color
 
         # Coverage block
-        coverage_block = _section(plain, r"Coverage", r"Other\s+Function\(s\)")
+        coverage_block = _section(plain, r"\bCoverage\b", [r"\bOther\s+Function\(s\)\b"])
         if coverage_block:
-            copier_cov = _find_number(r"Copier\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
-            printer_cov = _find_number(r"Printer\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
-            fax_cov = _find_number(r"Fax\s+B\s*&\s*W\s+Coverage\s*:\s*([0-9,]+)", coverage_block)
-            if copier_cov:
-                results["coverage_copier_bw"] = copier_cov
-            if printer_cov:
-                results["coverage_printer_bw"] = printer_cov
-            if fax_cov:
-                results["coverage_fax_bw"] = fax_cov
+            coverage_copier_block = _section(coverage_block, r"\bCopier\b", [r"\bPrinter\b", r"\bFax\b"])
+            coverage_printer_block = _section(coverage_block, r"\bPrinter\b", [r"\bFax\b"])
+            coverage_fax_block = _section(coverage_block, r"\bFax\b", [])
+            _extract_coverage_metrics(coverage_copier_block, "copier")
+            _extract_coverage_metrics(coverage_printer_block, "printer")
+            _extract_coverage_metrics(coverage_fax_block, "fax")
 
         # Other Function(s)
-        a3_dlt = _find_number(r"A3\/DLT\s*:\s*([0-9,]+)", plain)
-        duplex = _find_number(r"Duplex\s*:\s*([0-9,]+)", plain)
+        other_fn_block = _section(plain, r"\bOther\s+Function\(s\)\b", [])
+        a3_dlt = _find_number(r"A3\/DLT\s*:\s*([0-9,]+)", other_fn_block or plain)
+        duplex = _find_number(r"Duplex\s*:\s*([0-9,]+)", other_fn_block or plain)
         if a3_dlt:
             results["a3_dlt"] = a3_dlt
         if duplex:

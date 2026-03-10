@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>Support Tasks</h3>
+    <button id="task-create-btn" class="filter-btn">Create Task</button>
+  </div>
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Lead</th>
+          <th>Machine</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th>Assignee</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tasks-tbody">
+        <tr><td colspan="8" class="loading">Loading tasks...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

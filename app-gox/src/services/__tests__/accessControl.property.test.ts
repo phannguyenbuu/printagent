@@ -5,7 +5,7 @@ import type { Feature } from '../accessControl';
 import type { User } from '../../types/auth';
 import type { Location } from '../../types/location';
 
-const ROLES: User['role'][] = ['supplier', 'technician'];
+const ROLES: User['role'][] = ['supplier', 'technician', 'admin', 'user'];
 
 const SUPPLIER_FEATURES: Feature[] = [
   'create_request',
@@ -28,6 +28,8 @@ const TECHNICIAN_FEATURES: Feature[] = [
 const FEATURES_BY_ROLE: Record<User['role'], Feature[]> = {
   supplier: SUPPLIER_FEATURES,
   technician: TECHNICIAN_FEATURES,
+  admin: [...SUPPLIER_FEATURES, ...TECHNICIAN_FEATURES],
+  user: SUPPLIER_FEATURES,
 };
 
 // Arbitrary for a valid User
@@ -66,16 +68,14 @@ describe('Property 1: Phân quyền theo vai trò', () => {
         const expectedFeatures = FEATURES_BY_ROLE[user.role];
 
         // Must return exactly the features for the role — no more, no less
-        expect(features).toHaveLength(expectedFeatures.length);
-        for (const f of expectedFeatures) {
-          expect(features).toContain(f);
-        }
+        expect(features.sort()).toEqual(expectedFeatures.sort());
 
-        // Must not contain features from the other role that are exclusive to it
-        const otherRole = user.role === 'supplier' ? 'technician' : 'supplier';
-        const otherFeatures = FEATURES_BY_ROLE[otherRole];
-        const exclusiveToOther = otherFeatures.filter((f) => !expectedFeatures.includes(f));
-        for (const f of exclusiveToOther) {
+        // For any feature NOT in expectedFeatures, it must NOT be in the result
+        // We check this against the union of all possible features
+        const allPossibleFeatures = Array.from(new Set(Object.values(FEATURES_BY_ROLE).flat()));
+        const unexpectedFeatures = allPossibleFeatures.filter(f => !expectedFeatures.includes(f));
+        
+        for (const f of unexpectedFeatures) {
           expect(features).not.toContain(f);
         }
       }),

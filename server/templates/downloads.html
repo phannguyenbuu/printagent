@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>📥 GoPrinxAgent Setup Packages</h2>
+    <p>Download the latest version of GoPrinxAgent to install on target machines (VPS/Local PCs).</p>
+  </div>
+  
+  <div class="table-wrap" style="margin-top: 20px;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Release Date</th>
+          <th>Size</th>
+          <th>Target OS</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <img src="/static/releases/icon.ico" alt="Agent Icon" style="width: 24px; height: 24px;">
+              <strong>v1.2.0 (Stable)</strong>
+            </div>
+          </td>
+          <td>2026-03-10</td>
+          <td>12.5 MB</td>
+          <td>Windows 10/11, Server</td>
+          <td>
+            <a href="/static/releases/GoPrinxAgent.exe" class="filter-btn" style="text-decoration: none; display: inline-block;">Download .exe</a>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <img src="/static/releases/icon.ico" alt="Agent Icon" style="width: 24px; height: 24px;">
+              v1.0.0
+            </div>
+          </td>
+          <td>2026-01-15</td>
+          <td>10.2 MB</td>
+          <td>Windows 10/11</td>
+          <td>
+            <a href="/static/releases/GoPrinxAgent.exe" class="filter-btn ghost" style="text-decoration: none; display: inline-block;">Download .exe</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 30px; padding: 20px; background: rgba(0,0,0,0.02); border-radius: 8px; border: 1px dashed #ccc;">
+    <h3 style="margin-top: 0;">💡 Deployment Instructions</h3>
+    <ol style="line-height: 1.8; color: #555;">
+      <li>Download the <strong>.exe</strong> installer to the target computer.</li>
+      <li>Run the installer with <strong>Administrator</strong> privileges.</li>
+      <li>Follow the wizard and enter the <strong>Agent ID</strong> when prompted.</li>
+      <li>The machine will automatically register and appear in the <strong>Lan Network</strong> tab.</li>
+    </ol>
+  </div>
+</section>
+
+<style>
+  .table-wrap { overflow-x: auto; }
+  .data-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+  .data-table th, .data-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+  .data-table th { background: #f9f9f9; font-weight: 600; color: #333; }
+  .data-table tr:hover { background: #fafafa; }
+</style>
+{% endblock %}
