@@ -260,3 +260,28 @@ def _apply_baseline(delta_value: int | None, baseline_payload: dict[str, Any], k
     if base is None:
         base = 0
     return base + delta_value
+
+
+def _parse_date(value: Any) -> Any:
+    text = _to_text(value)
+    if not text:
+        return datetime.now(timezone.utc).date()
+    try:
+        from datetime import date
+        return date.fromisoformat(text)
+    except Exception:  # noqa: BLE001
+        return datetime.now(timezone.utc).date()
+
+
+def _format_datetime(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.isoformat()
+
+
+def _format_date(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(UI_TZ).strftime("%Y-%m-%d")
