@@ -5,12 +5,13 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 from typing import Any
 
 from flask import request
 from werkzeug.utils import secure_filename
+from sqlalchemy import func
 
 LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
@@ -267,7 +268,6 @@ def _parse_date(value: Any) -> Any:
     if not text:
         return datetime.now(timezone.utc).date()
     try:
-        from datetime import date
         return date.fromisoformat(text)
     except Exception:  # noqa: BLE001
         return datetime.now(timezone.utc).date()
@@ -285,3 +285,54 @@ def _format_date(value: datetime | None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(UI_TZ).strftime("%Y-%m-%d")
+
+def _apply_common_filters(
+    stmt: Any,
+    model: Any,
+    lead: str,
+    ip: str,
+    printer_name: str,
+    printer_type: str,
+    time_scope: str,
+    favorite_only: bool = False,
+    datetime_from: str = "",
+    datetime_to: str = "",
+) -> Any:
+    if lead:
+        stmt = stmt.where(model.lead == lead)
+    if ip:
+        stmt = stmt.where(model.ip == ip)
+    if printer_name:
+        stmt = stmt.where(model.printer_name == printer_name)
+    if printer_type in {"ricoh", "toshiba", "epson"}:
+        stmt = stmt.where(func.lower(model.printer_name).like(f"%{printer_type}%"))
+    from_dt = _parse_query_datetime(datetime_from, end_of_minute=False)
+    to_dt = _parse_query_datetime(datetime_to, end_of_minute=True)
+    if from_dt:
+        stmt = stmt.where(model.timestamp >= from_dt)
+    if to_dt:
+        stmt = stmt.where(model.timestamp <= to_dt)
+    if not from_dt and not to_dt:
+        scope_start = _time_scope_start(time_scope)
+        if scope_start:
+            stmt = stmt.where(model.timestamp >= scope_start)
+    if favorite_only:
+        stmt = stmt.where(model.is_favorite.is_(True))
+    return stmt
+
+def _apply_date_filters(stmt: Any, model: Any, date_from: str | None, date_to: str | None) -> Any:
+    if date_from:
+        try:
+            dt_from = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            stmt = stmt.where(model.created_at >= dt_from)
+        except (ValueError, TypeError):
+            pass
+    if date_to:
+        try:
+            dt_to = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc)
+            if len(date_to) == 10:
+                dt_to = dt_to.replace(hour=23, minute=59, second=59)
+            stmt = stmt.where(model.created_at <= dt_to)
+        except (ValueError, TypeError):
+            pass
+    return stmt
