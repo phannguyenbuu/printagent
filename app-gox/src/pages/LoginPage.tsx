@@ -75,8 +75,15 @@ export function LoginPage() {
     
     if (!fullName.trim()) { setError('Vui lòng nhập họ tên'); return; }
     if (!phoneNumber.trim()) { setError('Vui lòng nhập số điện thoại'); return; }
+    
+    // Modern Password Validation
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      setError('Mật khẩu phải từ 8 ký tự, bao gồm chữ hoa, chữ thường và ít nhất một ký tự đặc biệt');
+      return;
+    }
+
     if (password !== confirmPassword) { setError('Mật khẩu xác nhận không khớp'); return; }
-    if (password.length < 6) { setError('Mật khẩu phải có ít nhất 6 ký tự'); return; }
 
     setLoading(true);
     try {

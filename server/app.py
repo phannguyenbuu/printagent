@@ -3371,6 +3371,20 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Email is required"}), 400
             
         with session_factory() as session:
+            # Password validation
+            password = _to_text(body.get("password"))
+            if not password:
+                return jsonify({"ok": False, "error": "Password is required"}), 400
+            
+            # 8 chars, upper, lower, special
+            import re
+            pw_regex = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$"
+            if not re.match(pw_regex, password):
+                return jsonify({
+                    "ok": False, 
+                    "error": "Password must be at least 8 characters long, include uppercase, lowercase, and a special character"
+                }), 400
+
             # Check if email exists
             existing = session.execute(
                 select(UserAccount).where(UserAccount.email == email)
