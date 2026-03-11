@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from sqlalchemy import func, select, text
 from logging.handlers import RotatingFileHandler
@@ -183,6 +184,7 @@ def _validate_polling_auth(body: dict[str, Any], lead_key_map: dict[str, str], s
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
     _configure_server_logging()
     cfg = ServerConfig()
     session_factory = create_session_factory(cfg)
