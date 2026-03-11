@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { GoogleLogin } from '@react-oauth/google';
 import { useAuthStore } from '../stores/authStore';
 import { AnimatedButton } from '../components/ui/AnimatedButton';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
@@ -14,7 +15,6 @@ const QUICK_ACCOUNTS = [
   { email: 'tech1@kythuat.vn', password: 'password123', label: '🔧 Kỹ thuật viên - Lê Minh Cường' },
 ];
 
-// Simple Eye Icon Components
 const EyeIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
@@ -46,11 +46,10 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Forgot password multi-step
   const [forgotStep, setForgotStep] = useState<ForgotStep>('email');
   const [forgotEmail, setForgotEmail] = useState('');
   const [otpInput, setOtpInput] = useState('');
-  const [otpCode, setOtpCode] = useState(''); // mock: generated code
+  const [otpCode, setOtpCode] = useState(''); 
   const [newPw, setNewPw] = useState('');
   const [confirmNewPw, setConfirmNewPw] = useState('');
   const [pwResetDone, setPwResetDone] = useState(false);
@@ -72,32 +71,34 @@ export function LoginPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
     if (!fullName.trim()) { setError('Vui lòng nhập họ tên'); return; }
     if (!phoneNumber.trim()) { setError('Vui lòng nhập số điện thoại'); return; }
-    
-    // Modern Password Validation
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
     if (!passwordRegex.test(password)) {
       setError('Mật khẩu phải từ 8 ký tự, bao gồm chữ hoa, chữ thường và ít nhất một ký tự đặc biệt');
       return;
     }
-
     if (password !== confirmPassword) { setError('Mật khẩu xác nhận không khớp'); return; }
-
     setLoading(true);
     try {
       const result = await register(email, password, fullName, phoneNumber, address);
-      if (result.success) {
-        handleSuccess();
-      } else {
-        setError(result.error || 'Đăng ký thất bại');
-      }
+      if (result.success) handleSuccess();
+      else setError(result.error || 'Đăng ký thất bại');
     } catch (err: any) {
       setError(err.message || 'Đã xảy ra lỗi. Vui lòng thử lại.');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogleSuccess = async (credentialResponse: any) => {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await loginWithGoogle(credentialResponse.credential);
+      if (result.success) handleSuccess();
+      else setError(result.error);
+    } catch (err: any) {
+      setError(err.message || 'Đăng nhập Google thất bại');
+    } finally { setLoading(false); }
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -106,12 +107,10 @@ export function LoginPage() {
     if (!forgotEmail) { setError('Vui lòng nhập email'); return; }
     setLoading(true);
     await new Promise((r) => setTimeout(r, 800));
-    // Mock: generate 6-digit OTP (in real app this is sent via email)
     const code = String(Math.floor(100000 + Math.random() * 900000));
     setOtpCode(code);
     setLoading(false);
     setForgotStep('otp');
-    // Dev hint: show code in console
     console.info(`[DEV] OTP code for ${forgotEmail}: ${code}`);
   };
 
@@ -134,20 +133,6 @@ export function LoginPage() {
     await new Promise((r) => setTimeout(r, 600));
     setLoading(false);
     setPwResetDone(true);
-  };
-
-  const handleGoogle = async () => {
-    setError('');
-    setLoading(true);
-    try {
-      // Mock: prompt for email
-      const mockEmail = prompt('Nhập email Gmail để đăng nhập:');
-      if (!mockEmail) { setLoading(false); return; }
-      const result = await loginWithGoogle(mockEmail);
-      if (result.success) handleSuccess();
-      else setError(result.error);
-    } catch { setError('Đã xảy ra lỗi. Vui lòng thử lại.'); }
-    finally { setLoading(false); }
   };
 
   const handleQuickLogin = (acc: typeof QUICK_ACCOUNTS[0]) => {
@@ -177,7 +162,6 @@ export function LoginPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
       >
-        {/* Logo */}
         <div style={styles.logoArea}>
           <motion.div
             style={styles.logoGlow}
@@ -189,7 +173,6 @@ export function LoginPage() {
           <h1 style={styles.title}>Quản lý Sửa chữa Máy móc</h1>
         </div>
 
-        {/* Tabs */}
         <div style={styles.tabs}>
           <button
             style={{ ...styles.tab, ...(tab === 'login' ? styles.tabActive : {}) }}
@@ -200,25 +183,29 @@ export function LoginPage() {
             onClick={() => switchTab('register')}
           >Đăng ký</button>
         </div>
-        {tab !== 'forgot' && (<>
-        <motion.button
-          style={styles.googleBtn}
-          onClick={handleGoogle}
-          whileTap={{ scale: 0.97 }}
-          disabled={loading}
-        >
-          <span style={{ fontSize: '1.1rem' }}>G</span>
-          {tab === 'login' ? 'Đăng nhập với Google' : 'Đăng ký với Google'}
-        </motion.button>
+        
+        {tab !== 'forgot' && (
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={() => setError('Google Login Failed')}
+              useOneTap
+              theme="filled_blue"
+              shape="pill"
+              text={tab === 'login' ? 'signin_with' : 'signup_with'}
+              width="380"
+            />
+          </div>
+        )}
 
-        <div style={styles.divider}>
-          <span style={styles.dividerLine} />
-          <span style={styles.dividerText}>hoặc</span>
-          <span style={styles.dividerLine} />
-        </div>
-        </>)}
+        {tab !== 'forgot' && (
+          <div style={styles.divider}>
+            <span style={styles.dividerLine} />
+            <span style={styles.dividerText}>hoặc</span>
+            <span style={styles.dividerLine} />
+          </div>
+        )}
 
-        {/* Quick login (only on login tab) */}
         {tab === 'login' && (
           <div style={styles.quickSection}>
             <p style={styles.quickLabel}>Đăng nhập nhanh</p>
@@ -241,7 +228,6 @@ export function LoginPage() {
           </div>
         )}
 
-        {/* Form */}
         {tab !== 'forgot' && (
         <form onSubmit={tab === 'login' ? handleLogin : handleRegister} style={styles.form}>
           {tab === 'register' && (<>
@@ -330,12 +316,9 @@ export function LoginPage() {
         </form>
         )}
 
-        {/* Forgot password screen */}
         {tab === 'forgot' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
             <button style={styles.backBtn} onClick={() => switchTab('login')}>← Quay lại đăng nhập</button>
-
-            {/* Step indicator */}
             <div style={styles.stepRow}>
               {(['email', 'otp', 'newpw'] as ForgotStep[]).map((s, i) => (
                 <div key={s} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -351,7 +334,6 @@ export function LoginPage() {
               ))}
             </div>
 
-            {/* Step 1: Enter email */}
             {forgotStep === 'email' && (
               <form onSubmit={handleForgotPassword} style={styles.form}>
                 <p style={styles.forgotHint}>Nhập email tài khoản để nhận mã xác nhận.</p>
@@ -372,12 +354,10 @@ export function LoginPage() {
               </form>
             )}
 
-            {/* Step 2: Enter OTP */}
             {forgotStep === 'otp' && (
               <form onSubmit={handleVerifyOtp} style={styles.form}>
                 <p style={styles.forgotHint}>
                   Mã 6 số đã được gửi tới <strong style={{ color: 'var(--color-text)' }}>{forgotEmail}</strong>.
-                  Vui lòng kiểm tra hộp thư.
                 </p>
                 <div style={styles.field}>
                   <label htmlFor="otp" style={styles.label}>Mã xác nhận</label>
@@ -397,7 +377,6 @@ export function LoginPage() {
               </form>
             )}
 
-            {/* Step 3: New password */}
             {forgotStep === 'newpw' && !pwResetDone && (
               <form onSubmit={handleResetPassword} style={styles.form}>
                 <p style={styles.forgotHint}>Tạo mật khẩu mới cho tài khoản của bạn.</p>
@@ -425,7 +404,6 @@ export function LoginPage() {
               </form>
             )}
 
-            {/* Done */}
             {forgotStep === 'newpw' && pwResetDone && (
               <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
                 <div style={styles.successBox}>
@@ -469,15 +447,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabActive: {
     background: 'var(--color-primary)', color: '#0a0a0f',
-  },
-  googleBtn: {
-    width: '100%', padding: '12px', borderRadius: '10px',
-    border: '1px solid var(--color-surface-light)',
-    background: 'var(--color-surface)', color: 'var(--color-text)',
-    fontSize: '0.9rem', fontWeight: 500, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-    transition: 'border-color 150ms',
-    marginBottom: '16px',
   },
   divider: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' },
   dividerLine: { flex: 1, height: '1px', background: 'var(--color-surface-light)' },

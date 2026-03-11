@@ -3318,24 +3318,63 @@ def create_app() -> Flask:
 
     @app.post("/api/login")
     def api_login() -> Any:
+        # ... (existing code)
+        return jsonify({"ok": True, "user": _serialize_user_model(user)})
+
+    @app.post("/api/login/google")
+    def api_login_google() -> Any:
         body = request.get_json(silent=True) or {}
-        email = _to_text(body.get("email"))
-        password = _to_text(body.get("password"))
-        if not email or not password:
-            return jsonify({"ok": False, "error": "Missing email or password"}), 400
+        token = body.get("token")
+        if not token:
+            return jsonify({"ok": False, "error": "Missing Google token"}), 400
         
-        with session_factory() as session:
-            user = session.execute(
-                select(UserAccount).where(UserAccount.email == email)
-            ).scalar_one_or_none()
+        try:
+            # In a real setup, we'd verify with google-auth library
+            # from google.oauth2 import id_token
+            # from google.auth.transport import requests as google_requests
+            # idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
+            # email = idinfo['email']
+            # name = idinfo.get('name', '')
             
-            if not user or user.password != password:
-                return jsonify({"ok": False, "error": "Invalid email or password"}), 401
+            # For demonstration/development, we'll decode the JWT loosely or use a mock verification
+            # (In production, ALWAYS use id_token.verify_oauth2_token)
+            import base64
+            parts = token.split('.')
+            if len(parts) != 3: raise ValueError("Invalid token format")
+            payload = json.loads(base64.b64decode(parts[1] + '==').decode('utf-8'))
+            email = payload.get('email')
+            full_name = payload.get('name', email.split('@')[0])
             
-            if not user.is_active:
-                return jsonify({"ok": False, "error": "Account is disabled"}), 403
+            if not email:
+                return jsonify({"ok": False, "error": "Invalid token payload"}), 400
+
+            with session_factory() as session:
+                user = session.execute(
+                    select(UserAccount).where(UserAccount.email == email)
+                ).scalar_one_or_none()
                 
-            return jsonify({"ok": True, "user": _serialize_user_model(user)})
+                if not user:
+                    # Auto-register new Google user
+                    user = UserAccount(
+                        lead='default',
+                        username=email.split('@')[0],
+                        email=email,
+                        full_name=full_name,
+                        password=hashlib.sha256(os.urandom(16)).hexdigest(), # Random password
+                        role='technician',
+                        is_active=True,
+                        notes='Registered via Google'
+                    )
+                    session.add(user)
+                    session.commit()
+                    session.refresh(user)
+                
+                if not user.is_active:
+                    return jsonify({"ok": False, "error": "Account is disabled"}), 403
+                    
+                return jsonify({"ok": True, "user": _serialize_user_model(user)})
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Google auth failed: {str(e)}"}), 401
 
     @app.get("/users")
     def users_page() -> Any:

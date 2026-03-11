@@ -104,9 +104,35 @@ export async function mockRegister(
 }
 
 export async function mockLoginWithGoogle(
-  googleEmail: string,
+  token: string,
 ): Promise<LoginResult> {
-  return mockLogin(googleEmail, '123456');
+  try {
+    const data = await fetchApi('/api/login/google', {
+      method: 'POST',
+      body: JSON.stringify({ token })
+    });
+    
+    if (!data.ok) {
+      return { success: false, error: data.error || 'Google Login failed' };
+    }
+
+    const user = data.user;
+    const mappedUser: User = {
+      id: String(user.id),
+      username: user.username,
+      email: user.email,
+      fullName: user.full_name,
+      role: 'technician',
+      locationIds: [],
+      workspaceIds: [],
+      companyId: 'default',
+      companyName: 'Default Company'
+    };
+
+    return { success: true, user: mappedUser };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }
 
 export async function mockChangePassword(
