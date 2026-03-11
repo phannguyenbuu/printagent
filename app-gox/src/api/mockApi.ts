@@ -13,11 +13,11 @@ async function fetchApi(path: string, options: RequestInit = {}) {
       ...options.headers,
     },
   });
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || `HTTP error! status: ${res.status}`);
+    throw new Error(data.error || `HTTP error! status: ${res.status}`);
   }
-  return res.json();
+  return data;
 }
 
 export function mockGetUserName(userId: string): string {

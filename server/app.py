@@ -3366,13 +3366,24 @@ def create_app() -> Flask:
     @app.post("/api/users")
     def create_user() -> Any:
         body = request.get_json(silent=True) or {}
+        email = _to_text(body.get("email"))
+        if not email:
+            return jsonify({"ok": False, "error": "Email is required"}), 400
+            
         with session_factory() as session:
+            # Check if email exists
+            existing = session.execute(
+                select(UserAccount).where(UserAccount.email == email)
+            ).scalar_one_or_none()
+            if existing:
+                return jsonify({"ok": False, "error": "Email already registered"}), 400
+
             new_user = UserAccount(
                 lead=_to_text(body.get("lead")),
                 username=_to_text(body.get("username")),
                 password=_to_text(body.get("password")),
                 full_name=_to_text(body.get("full_name")),
-                email=_to_text(body.get("email")),
+                email=email,
                 phone_number=_to_text(body.get("phone_number")),
                 role=_to_text(body.get("role")) or "worker",
                 is_active=bool(body.get("is_active", True)),

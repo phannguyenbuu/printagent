@@ -81,10 +81,16 @@ export function LoginPage() {
     setLoading(true);
     try {
       const result = await register(email, password, fullName, phoneNumber, address);
-      if (result.success) handleSuccess();
-      else setError(result.error);
-    } catch { setError('Đã xảy ra lỗi. Vui lòng thử lại.'); }
-    finally { setLoading(false); }
+      if (result.success) {
+        handleSuccess();
+      } else {
+        setError(result.error || 'Đăng ký thất bại');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Đã xảy ra lỗi. Vui lòng thử lại.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -233,13 +239,13 @@ export function LoginPage() {
         <form onSubmit={tab === 'login' ? handleLogin : handleRegister} style={styles.form}>
           {tab === 'register' && (<>
             <div style={styles.field}>
-              <label htmlFor="fullName" style={styles.label}>Họ tên</label>
+              <label htmlFor="fullName" style={styles.label}>Họ tên <span style={{color: 'var(--color-error)'}}>*</span></label>
               <input id="fullName" type="text" value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="Nhập họ tên" style={styles.input} disabled={loading} />
             </div>
             <div style={styles.field}>
-              <label htmlFor="phoneNumber" style={styles.label}>Số điện thoại</label>
+              <label htmlFor="phoneNumber" style={styles.label}>Số điện thoại <span style={{color: 'var(--color-error)'}}>*</span></label>
               <input id="phoneNumber" type="tel" value={phoneNumber}
                 onChange={(e) => setPhoneNumber(e.target.value)}
                 placeholder="Nhập số điện thoại" style={styles.input} disabled={loading} />
@@ -253,7 +259,7 @@ export function LoginPage() {
           </>)}
           
           <div style={styles.field}>
-            <label htmlFor="email" style={styles.label}>Email</label>
+            <label htmlFor="email" style={styles.label}>Email <span style={{color: 'var(--color-error)'}}>*</span></label>
             <input id="email" type="email" value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Nhập email" style={styles.input}
@@ -261,7 +267,7 @@ export function LoginPage() {
           </div>
           
           <div style={styles.field}>
-            <label htmlFor="password" style={styles.label}>Mật khẩu</label>
+            <label htmlFor="password" style={styles.label}>Mật khẩu <span style={{color: 'var(--color-error)'}}>*</span></label>
             <div style={styles.passwordWrapper}>
               <input id="password" type={showPassword ? "text" : "password"} value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -276,7 +282,7 @@ export function LoginPage() {
 
           {tab === 'register' && (
             <div style={styles.field}>
-              <label htmlFor="confirmPassword" style={styles.label}>Xác nhận mật khẩu</label>
+              <label htmlFor="confirmPassword" style={styles.label}>Xác nhận mật khẩu <span style={{color: 'var(--color-error)'}}>*</span></label>
               <div style={styles.passwordWrapper}>
                 <input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
