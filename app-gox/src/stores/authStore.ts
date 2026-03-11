@@ -18,7 +18,7 @@ interface AuthStore {
   token: string | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
-  register: (email: string, password: string, fullName: string) => Promise<LoginResult>;
+  register: (email: string, password: string, fullName: string, phoneNumber?: string, address?: string) => Promise<LoginResult>;
   loginWithGoogle: (email: string) => Promise<LoginResult>;
   logout: () => void;
   checkSession: () => void;
@@ -69,8 +69,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     return result;
   },
 
-  register: async (email: string, password: string, fullName: string): Promise<LoginResult> => {
-    const result = await mockRegister(email, password, fullName);
+  register: async (email: string, password: string, fullName: string, phoneNumber?: string, address?: string): Promise<LoginResult> => {
+    const result = await mockRegister(email, password, fullName, phoneNumber, address);
     if (result.success) {
       const token = generateToken(result.user.id);
       saveSession(token, result.user);

@@ -14,6 +14,18 @@ const QUICK_ACCOUNTS = [
   { email: 'tech1@kythuat.vn', password: 'password123', label: '🔧 Kỹ thuật viên - Lê Minh Cường' },
 ];
 
+// Simple Eye Icon Components
+const EyeIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+  </svg>
+);
+const EyeOffIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+  </svg>
+);
+
 export function LoginPage() {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
@@ -23,7 +35,14 @@ export function LoginPage() {
   const [tab, setTab] = useState<Tab>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [address, setAddress] = useState('');
+  
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -53,10 +72,15 @@ export function LoginPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    
     if (!fullName.trim()) { setError('Vui lòng nhập họ tên'); return; }
+    if (!phoneNumber.trim()) { setError('Vui lòng nhập số điện thoại'); return; }
+    if (password !== confirmPassword) { setError('Mật khẩu xác nhận không khớp'); return; }
+    if (password.length < 6) { setError('Mật khẩu phải có ít nhất 6 ký tự'); return; }
+
     setLoading(true);
     try {
-      const result = await register(email, password, fullName);
+      const result = await register(email, password, fullName, phoneNumber, address);
       if (result.success) handleSuccess();
       else setError(result.error);
     } catch { setError('Đã xảy ra lỗi. Vui lòng thử lại.'); }
@@ -128,6 +152,8 @@ export function LoginPage() {
     setTab(t); setError('');
     setForgotStep('email'); setForgotEmail(''); setOtpInput(''); setOtpCode('');
     setNewPw(''); setConfirmNewPw(''); setPwResetDone(false);
+    setShowPassword(false);
+    setShowConfirmPassword(false);
   };
 
   return (
@@ -205,14 +231,27 @@ export function LoginPage() {
         {/* Form */}
         {tab !== 'forgot' && (
         <form onSubmit={tab === 'login' ? handleLogin : handleRegister} style={styles.form}>
-          {tab === 'register' && (
+          {tab === 'register' && (<>
             <div style={styles.field}>
               <label htmlFor="fullName" style={styles.label}>Họ tên</label>
               <input id="fullName" type="text" value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="Nhập họ tên" style={styles.input} disabled={loading} />
             </div>
-          )}
+            <div style={styles.field}>
+              <label htmlFor="phoneNumber" style={styles.label}>Số điện thoại</label>
+              <input id="phoneNumber" type="tel" value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="Nhập số điện thoại" style={styles.input} disabled={loading} />
+            </div>
+            <div style={styles.field}>
+              <label htmlFor="address" style={styles.label}>Địa chỉ</label>
+              <input id="address" type="text" value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Nhập địa chỉ" style={styles.input} disabled={loading} />
+            </div>
+          </>)}
+          
           <div style={styles.field}>
             <label htmlFor="email" style={styles.label}>Email</label>
             <input id="email" type="email" value={email}
@@ -220,14 +259,36 @@ export function LoginPage() {
               placeholder="Nhập email" style={styles.input}
               autoComplete="email" disabled={loading} />
           </div>
+          
           <div style={styles.field}>
             <label htmlFor="password" style={styles.label}>Mật khẩu</label>
-            <input id="password" type="password" value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Nhập mật khẩu" style={styles.input}
-              autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
-              disabled={loading} />
+            <div style={styles.passwordWrapper}>
+              <input id="password" type={showPassword ? "text" : "password"} value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Nhập mật khẩu" style={styles.input}
+                autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+                disabled={loading} />
+              <button type="button" style={styles.eyeBtn} onClick={() => setShowPassword(!showPassword)}>
+                {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </div>
           </div>
+
+          {tab === 'register' && (
+            <div style={styles.field}>
+              <label htmlFor="confirmPassword" style={styles.label}>Xác nhận mật khẩu</label>
+              <div style={styles.passwordWrapper}>
+                <input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Nhập lại mật khẩu" style={styles.input}
+                  autoComplete="new-password"
+                  disabled={loading} />
+                <button type="button" style={styles.eyeBtn} onClick={() => setShowConfirmPassword(!showConfirmPassword)}>
+                  {showConfirmPassword ? <EyeOffIcon /> : <EyeIcon />}
+                </button>
+              </div>
+            </div>
+          )}
 
           {tab === 'login' && (
             <div style={{ textAlign: 'right', marginTop: '-8px' }}>
@@ -248,7 +309,7 @@ export function LoginPage() {
             {loading ? (
               <div style={styles.spinnerWrapper}><LoadingSpinner size="sm" /></div>
             ) : (
-              <AnimatedButton disabled={!email || !password || (tab === 'register' && !fullName.trim())}>
+              <AnimatedButton disabled={!email || !password || (tab === 'register' && (!fullName.trim() || !phoneNumber.trim() || !confirmPassword))}>
                 {tab === 'login' ? 'Đăng nhập' : 'Đăng ký'}
               </AnimatedButton>
             )}
@@ -424,6 +485,12 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--color-surface)', color: 'var(--color-text)',
     border: '1px solid var(--color-surface-light)', borderRadius: '8px',
     padding: '12px', fontSize: '1rem', width: '100%', boxSizing: 'border-box' as const,
+  },
+  passwordWrapper: { position: 'relative', display: 'flex', alignItems: 'center' },
+  eyeBtn: {
+    position: 'absolute', right: '12px', background: 'none', border: 'none',
+    color: 'var(--color-text-secondary)', cursor: 'pointer', padding: '4px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   error: {
     color: 'var(--color-error)', fontSize: '0.875rem', padding: '10px 12px',

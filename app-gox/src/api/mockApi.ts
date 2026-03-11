@@ -68,6 +68,8 @@ export async function mockRegister(
   email: string,
   password: string,
   fullName: string,
+  phoneNumber?: string,
+  address?: string,
 ): Promise<LoginResult> {
   try {
     const res = await fetchApi('/api/users', {
@@ -77,6 +79,8 @@ export async function mockRegister(
         password,
         full_name: fullName,
         username: email.split('@')[0],
+        phone_number: phoneNumber,
+        notes: address,
         lead: 'default',
         role: 'technician'
       })
