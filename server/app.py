@@ -3314,6 +3314,27 @@ def create_app() -> Flask:
             session.commit()
         return jsonify({"ok": True, "id": mat_id})
 
+    @app.post("/api/login")
+    def api_login() -> Any:
+        body = request.get_json(silent=True) or {}
+        email = _to_text(body.get("email"))
+        password = _to_text(body.get("password"))
+        if not email or not password:
+            return jsonify({"ok": False, "error": "Missing email or password"}), 400
+        
+        with session_factory() as session:
+            user = session.execute(
+                select(UserAccount).where(UserAccount.email == email)
+            ).scalar_one_or_none()
+            
+            if not user or user.password != password:
+                return jsonify({"ok": False, "error": "Invalid email or password"}), 401
+            
+            if not user.is_active:
+                return jsonify({"ok": False, "error": "Account is disabled"}), 403
+                
+            return jsonify({"ok": True, "user": _serialize_user_model(user)})
+
     @app.get("/users")
     def users_page() -> Any:
         return render_template("users.html", active_tab="users", page_title="User Accounts")
@@ -3347,6 +3368,7 @@ def create_app() -> Flask:
             new_user = UserAccount(
                 lead=_to_text(body.get("lead")),
                 username=_to_text(body.get("username")),
+                password=_to_text(body.get("password")),
                 full_name=_to_text(body.get("full_name")),
                 email=_to_text(body.get("email")),
                 phone_number=_to_text(body.get("phone_number")),
@@ -3366,6 +3388,7 @@ def create_app() -> Flask:
             if not user:
                 return jsonify({"ok": False, "error": "User not found"}), 404
             if "username" in body: user.username = _to_text(body.get("username"))
+            if "password" in body: user.password = _to_text(body.get("password"))
             if "full_name" in body: user.full_name = _to_text(body.get("full_name"))
             if "email" in body: user.email = _to_text(body.get("email"))
             if "phone_number" in body: user.phone_number = _to_text(body.get("phone_number"))

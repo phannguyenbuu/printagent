@@ -36,15 +36,16 @@ export async function mockLogin(
   password: string,
 ): Promise<LoginResult> {
   try {
-    // In a real app, we'd have /api/login
-    // For now, let's list users and find a match to simulate login with real data
-    const data = await fetchApi('/api/users');
-    const user = data.rows?.find((u: any) => u.email === email && (u.password === password || password === '123456'));
+    const data = await fetchApi('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
     
-    if (!user) {
-      return { success: false, error: 'Email hoặc mật khẩu không đúng' };
+    if (!data.ok) {
+      return { success: false, error: data.error || 'Email hoặc mật khẩu không đúng' };
     }
 
+    const user = data.user;
     const mappedUser: User = {
       id: String(user.id),
       username: user.username,
