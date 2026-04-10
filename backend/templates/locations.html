@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>Locations</h3>
+    <div>
+      <button id="location-create-btn" class="filter-btn">Create Location</button>
+      <button id="refresh-btn" class="filter-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="filter-board">
+    <div class="filter-group">
+      <label>Name</label>
+      <input type="text" id="filter-name" placeholder="Search by name...">
+    </div>
+    <div class="filter-group">
+      <label>Workspace ID</label>
+      <input type="text" id="filter-workspace" placeholder="Workspace ID...">
+    </div>
+    <div class="filter-group">
+      <label>Date From</label>
+      <input type="date" id="filter-date-from">
+    </div>
+    <div class="filter-group">
+      <label>Date To</label>
+      <input type="date" id="filter-date-to">
+    </div>
+    <button id="apply-filters" class="filter-btn">Apply</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th>Room</th>
+          <th>Phone</th>
+          <th>Machines</th>
+          <th>Workspace ID</th>
+          <th>Workspace Name</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="locations-tbody">
+        <tr><td colspan="10" class="loading">Loading locations...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const loadLocations = () => {
+        const params = new URLSearchParams({
+            name: qs('filter-name').value,
+            workspace_id: qs('filter-workspace').value,
+            date_from: qs('filter-date-from').value,
+            date_to: qs('filter-date-to').value
+        });
+        fetch(`/api/locations?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                const tbody = document.getElementById('locations-tbody');
+                if (data.ok && data.rows) {
+                    tbody.innerHTML = data.rows.map(row => `
+                        <tr>
+                            <td>${row.id}</td>
+                            <td>${escapeHtml(row.name || '')}</td>
+                            <td>${escapeHtml(row.address || '')}</td>
+                            <td>${escapeHtml(row.room || '')}</td>
+                            <td>${escapeHtml(row.phone || '')}</td>
+                            <td>${row.machine_count}</td>
+                            <td>${escapeHtml(row.workspace_id || '')}</td>
+                            <td>${escapeHtml(row.workspace_name || '')}</td>
+                            <td>${row.created_at || ''}</td>
+                            <td class="action-cell">
+                                <button class="icon-btn edit" data-id="${row.id}" title="Edit">${iconPencilSvg()}</button>
+                                <button class="icon-btn delete" data-id="${row.id}" title="Delete">${iconTrashSvg()}</button>
+                            </td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="10">No data found</td></tr>';
+
+                    tbody.querySelectorAll('.edit').forEach(btn => {
+                        btn.onclick = () => {
+                            const row = data.rows.find(x => x.id === btn.dataset.id);
+                            handleUpsertLocation(row);
+                        };
+                    });
+                    tbody.querySelectorAll('.delete').forEach(btn => {
+                        btn.onclick = () => {
+                            if (confirm('Delete this location?')) {
+                                fetch(`/api/locations/${btn.dataset.id}`, { method: 'DELETE' })
+                                    .then(res => res.json()).then(() => loadLocations());
+                            }
+                        };
+                    });
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="10">No data found</td></tr>';
+                }
+            });
+    };
+
+    loadLocations();
+    document.getElementById('refresh-btn').onclick = loadLocations;
+    document.getElementById('apply-filters').onclick = loadLocations;
+    document.getElementById('location-create-btn').onclick = () => handleUpsertLocation();
+});
+</script>
+{% endblock %}

@@ -3,13 +3,14 @@ import type { Location } from '../types/location';
 import type { RepairRequest, RepairStatus, RepairRequestFilters } from '../types/repair';
 import type { Workspace } from '../types/workspace';
 
-const BASE_URL = 'https://agentapi.quanlymay.com';
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://agentapi.quanlymay.com';
 
 async function fetchApi(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'X-API-Token': 'change-me',
       ...options.headers,
     },
   });
@@ -22,7 +23,7 @@ async function fetchApi(path: string, options: RequestInit = {}) {
 
 export function mockGetUserName(userId: string): string {
   // This is synchronous in current code, might need refactoring later if critical
-  return userId; 
+  return userId;
 }
 
 export function mockGetUserPhone(_userId: string): string | undefined {
@@ -40,7 +41,7 @@ export async function mockLogin(
       method: 'POST',
       body: JSON.stringify({ email, password })
     });
-    
+
     if (!data.ok) {
       return { success: false, error: data.error || 'Email hoặc mật khẩu không đúng' };
     }
@@ -53,7 +54,7 @@ export async function mockLogin(
       fullName: user.full_name,
       role: user.role === 'admin' ? 'admin' : 'technician',
       locationIds: [],
-      workspaceIds: [],
+      workspaceIds: Array.isArray(user.workspaceIds) ? user.workspaceIds.map((id: any) => String(id)) : [],
       companyId: 'default',
       companyName: 'Default Company'
     };
@@ -93,7 +94,7 @@ export async function mockRegister(
       fullName: user.full_name,
       role: 'technician',
       locationIds: [],
-      workspaceIds: [],
+      workspaceIds: Array.isArray(user.workspaceIds) ? user.workspaceIds.map((id: any) => String(id)) : [],
       companyId: 'default',
       companyName: 'Default Company'
     };
@@ -111,7 +112,7 @@ export async function mockLoginWithGoogle(
       method: 'POST',
       body: JSON.stringify({ token })
     });
-    
+
     if (!data.ok) {
       return { success: false, error: data.error || 'Google Login failed' };
     }
@@ -124,7 +125,7 @@ export async function mockLoginWithGoogle(
       fullName: user.full_name,
       role: 'technician',
       locationIds: [],
-      workspaceIds: [],
+      workspaceIds: Array.isArray(user.workspaceIds) ? user.workspaceIds.map((id: any) => String(id)) : [],
       companyId: 'default',
       companyName: 'Default Company'
     };
@@ -159,7 +160,7 @@ export async function mockGetRequests(
   const params = new URLSearchParams();
   if (filters?.status) params.append('status', filters.status);
   if (filters?.priority) params.append('priority', filters.priority);
-  
+
   // Use /api/tasks as backend mapping
   const data = await fetchApi(`/api/tasks?${params.toString()}&lead=default`);
   return (data.rows || []).map((r: any) => ({
@@ -198,7 +199,8 @@ export async function mockCreateRequest(
       description: data.description,
       priority: data.priority,
       lead: 'default',
-      status: 'backlog'
+      status: 'backlog',
+      agent_uid: 'frontend'
     })
   });
   return res.row;
@@ -210,10 +212,10 @@ export async function mockUpdateStatus(
   data?: any
 ): Promise<RepairRequest> {
   const s_map: any = { "new": "backlog", "accepted": "todo", "in_progress": "in_progress", "completed": "done", "cancelled": "canceled" };
-  const res = await fetchApi(`/api/tasks/${requestId}`, {
+  const res = await fetchApi(`/api/tasks/${requestId}?lead=default`, {
     method: 'PATCH',
     body: JSON.stringify({
-      status: s_map[newStatus] || newStatus,
+      status: s_map[newStatus] || newStatus, lead: 'default',
       assignee_id: data?.assignedTo ? parseInt(data.assignedTo) : undefined
     })
   });
@@ -259,9 +261,12 @@ export async function mockDeleteLocation(id: string): Promise<{ success: boolean
 
 // --- Workspaces ---
 
-export async function mockGetWorkspaces(_workspaceIds: string[]): Promise<Workspace[]> {
+export async function mockGetWorkspaces(workspaceIds: string[]): Promise<Workspace[]> {
   const data = await fetchApi('/api/workspaces?lead=default');
-  return data.rows.map((ws: any) => ({
+  const wanted = new Set((workspaceIds || []).map((id) => String(id)));
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const filtered = wanted.size > 0 ? rows.filter((ws: any) => wanted.has(String(ws.id))) : rows;
+  return filtered.map((ws: any) => ({
     id: ws.id,
     name: ws.name,
     logo: ws.logo,

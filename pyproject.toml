@@ -5,11 +5,7 @@ description = "Python port of Ricoh printer monitor agent"
 requires-python = ">=3.11"
 dependencies = [
   "flask>=3.1.0",
-  "python-dotenv>=1.0.1",
-  "pyyaml>=6.0.1",
   "requests>=2.32.3",
-  "sqlalchemy>=2.0.37",
-  "websocket-client>=1.8.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,10 @@
+{
+  "version": "1.3.38",
+  "download_url": "/static/releases/printagent.exe",
+  "published_at": "2026-04-10T15:52:15+07:00",
+  "mandatory": false,
+  "channel": "stable",
+  "sha256": "aeb96079f6e1c25d74b105c153c10b6858cf448a27999e6a3843311b27faeb7a",
+  "size": 15976390,
+  "notes": "Resolve scan-folder assignment by mac_id + lan_uid on backend, refresh shared request UI components in app-gox, and rebuild printagent.exe with mojibake cleanup in agent scan template"
+}

@@ -1,34 +1,37 @@
-# GoPrinx Agent Documentation
+@RTK.md
 
-Detailed documentation for the Agent component running within the local LAN.
+# Frontend Component Reuse Rule
 
-## 🛠 Main Functions
-The Agent is a background service (with an optional UI) on Windows that performs:
-1. **Auto-Discovery:** Scans the LAN to find Ricoh printers (via SNMP/HTTP).
-2. **Data Polling:** Periodically accesses the printer's Web UI to "scrape" data:
-    - Counters (Total, Copier, Printer, Scan).
-    - Status (Online/Offline, Alerts, Toner levels).
-3. **Remote Control:** Receives commands from the Server to:
-    - **Lock:** Disable copy/print functions on the printer.
-    - **Unlock:** Re-enable the printer.
-4. **Data Sync:** Sends data to the central Server via REST API.
+Khi sinh code UI mới trong `app-gox/`, bắt buộc ưu tiên component cũ trước khi tạo component mới.
 
-## 📂 `agent/` Directory Structure
-- `main.py`: Launches the Agent (CLI or Service mode).
-- `web.py`: Provides a local configuration interface (http://localhost:5000).
-- `models.py`: SQLite database structure for storing local configurations.
-- `modules/ricoh/`:
-    - `service.py`: Core logic for printer control.
-    - `collector.py`: Counter index collection.
-    - `control.py`: Execution of Lock/Unlock commands.
-- `services/`:
-    - `api_client.py`: HTTP communication with the VPS Server.
-    - `ws_client.py`: Maintains a WebSocket connection for real-time commands.
-    - `polling_bridge.py`: Coordination bridge between scanning and data submission.
+## Required Order
 
-## ⚙️ Configuration
-The `config.yaml` configuration file contains:
-- `server_url`: Address of the Backend VPS.
-- `lead_id`: Customer identifier.
-- `agent_id`: Unique identifier for this workstation.
-- `polling_interval`: Data submission frequency (default 300 seconds).
+1. Kiểm tra component sẵn có trong:
+   - `app-gox/src/components/requests/`
+   - `app-gox/src/components/ui/`
+   - `app-gox/src/components/layout/`
+2. Ưu tiên mở rộng component cũ bằng props nhỏ, `children`, hoặc tách phần dùng chung ra từ component cũ.
+3. Chỉ tạo component mới khi component hiện có không đáp ứng được mà không làm API của nó méo hoặc khó hiểu.
+
+## Hard Rules
+
+- Không copy-paste markup từ component đã tồn tại để dựng component mới gần giống.
+- Không tạo badge/status/priority/request card/page state mới nếu có thể dùng lại:
+  - `StatusBadge`
+  - `PriorityBadge`
+  - `RequestCard`
+  - `RequestLocationBlock`
+  - `StatusStatCard`
+  - `PageLoading`
+  - `EmptyState`
+- Nếu cần tạo component mới, phải nêu ngắn gọn vì sao component cũ không đủ phù hợp.
+- Nếu UI chỉ dùng ở một page, ưu tiên page-local subcomponent trước; chỉ promote thành shared component khi có ít nhất 2 chỗ dùng hoặc có khả năng reuse rõ ràng.
+- Ưu tiên composition hơn duplication.
+
+## Checklist Before Adding A New Component
+
+- Đã tìm trong `app-gox/src/components/**`
+- Đã kiểm tra có thể thêm prop vào component cũ chưa
+- Đã kiểm tra có thể tách phần chung ra khỏi page hiện tại chưa
+- Đã xác định component mới thực sự có reuse value
+

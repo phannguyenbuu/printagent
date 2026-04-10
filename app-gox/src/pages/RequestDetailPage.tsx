@@ -6,13 +6,15 @@ import { useAuthStore } from '../stores/authStore';
 import { useMaterialStore } from '../stores/materialStore';
 import { mockGetRequestById, mockGetUserName, mockGetUserPhone } from '../api/mockApi';
 import { useLocationStore } from '../stores/locationStore';
-import { validateMaterial } from '../services/validation';
-import { GlowCard } from '../components/ui/GlowCard';
+import { PriorityBadge } from '../components/requests/PriorityBadge';
+import { StatusBadge } from '../components/requests/StatusBadge';
 import { AnimatedButton } from '../components/ui/AnimatedButton';
 import { AnimatedList } from '../components/ui/AnimatedList';
-import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { PageLoading } from '../components/ui/PageState';
+import { GlowCard } from '../components/ui/GlowCard';
 import { WorkspaceBadge } from '../components/ui/WorkspaceBadge';
-import type { RepairRequest, RepairStatus, Priority } from '../types/repair';
+import { validateMaterial } from '../services/validation';
+import type { Priority, RepairRequest, RepairStatus } from '../types/repair';
 
 const STATUS_COLORS: Record<RepairStatus, string> = {
   new: 'var(--color-primary)',
@@ -28,13 +30,6 @@ const STATUS_LABELS: Record<RepairStatus, string> = {
   in_progress: 'Đang xử lý',
   completed: 'Hoàn thành',
   cancelled: 'Đã hủy',
-};
-
-const PRIORITY_COLORS: Record<Priority, string> = {
-  critical: 'var(--color-error)',
-  high: 'var(--color-warning)',
-  medium: 'var(--color-primary)',
-  low: 'var(--color-text-secondary)',
 };
 
 const PRIORITY_LABELS: Record<Priority, string> = {
@@ -311,11 +306,7 @@ export function RequestDetailPage() {
   }, [request, reportDescription, reportLaborCost, completeRequest]);
 
   if (loading) {
-    return (
-      <div style={styles.loadingContainer}>
-        <LoadingSpinner size="lg" />
-      </div>
-    );
+    return <PageLoading message="Đang tải chi tiết yêu cầu..." />;
   }
 
   if (!request) {
@@ -345,28 +336,12 @@ export function RequestDetailPage() {
       <GlowCard>
         <div style={styles.headerRow}>
           <h1 style={styles.machineName}>{request.machineName}</h1>
-          <span
-            style={{
-              ...styles.badge,
-              background: `${STATUS_COLORS[request.status]}20`,
-              color: STATUS_COLORS[request.status],
-              borderColor: `${STATUS_COLORS[request.status]}40`,
-            }}
-          >
-            {STATUS_LABELS[request.status]}
-          </span>
+          <StatusBadge status={request.status} />
         </div>
         <WorkspaceBadge workspaceId={request.workspaceId} />
         <div style={styles.metaRow}>
-          <span
-            style={{
-              ...styles.priorityBadge,
-              background: `${PRIORITY_COLORS[request.priority]}20`,
-              color: PRIORITY_COLORS[request.priority],
-              borderColor: `${PRIORITY_COLORS[request.priority]}40`,
-            }}
-          >
-            {PRIORITY_LABELS[request.priority]}
+          <span title={PRIORITY_LABELS[request.priority]}>
+            <PriorityBadge priority={request.priority} />
           </span>
           <span style={styles.metaText}>📍 {requestLocation ? requestLocation.name : request.locationId}</span>
           <span style={styles.metaText}>{formatDate(request.createdAt)}</span>

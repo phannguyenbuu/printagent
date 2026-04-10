@@ -4,11 +4,39 @@
 <section class="panel">
   <div class="panel-head">
     <div class="panel-head-title">
+      <span>Active FTP Sites</span>
+      <button id="ftp-sites-refresh-btn" class="btn ghost" type="button">Reload Sites</button>
+    </div>
+    <span>Current FTP sites managed by the Windows FTP worker. Upload path/URL points to the active timestamped drop folder.</span>
+  </div>
+  <div class="table-wrap">
+    <table class="device-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Port</th>
+          <th>Upload Path</th>
+          <th>User</th>
+          <th>Password</th>
+          <th>Upload URL</th>
+          <th style="width: 180px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="ftp-sites-body">
+        <tr><td colspan="7">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-head-title">
       <span>PC list</span>
       <button id="ftp-refresh-btn" class="btn ghost" type="button">Reload PCs</button>
       <button id="ftp-create-btn" class="btn action" type="button">Create FTP</button>
     </div>
-    <span>Select one PC then create FTP</span>
+    <span>Select one PC then create a Windows FTP site</span>
   </div>
   <div class="table-wrap">
     <table class="device-table">
@@ -41,9 +69,18 @@
       <h4 id="ftp-create-modal-title">Create FTP</h4>
     </div>
     <div class="confirm-body">
+      <input id="ftp-site-original-name" type="hidden" />
       <label class="form-inline">
         <span>Name</span>
         <input id="ftp-create-name" type="text" placeholder="ftp_name" />
+      </label>
+      <label class="form-inline">
+        <span>Path</span>
+        <input id="ftp-create-path" type="text" placeholder="storage/ftp/ftp_name" />
+      </label>
+      <label class="form-inline">
+        <span>Port</span>
+        <input id="ftp-create-port" type="number" min="1" max="65535" placeholder="2121" />
       </label>
     </div>
     <div class="modal-tools confirm-actions">

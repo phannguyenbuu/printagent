@@ -4,6 +4,8 @@ import logging
 import subprocess
 from typing import Any
 
+from app.services.runtime import no_window_subprocess_kwargs
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ def ensure_ftp_firewall_rules(control_port: int) -> dict[str, Any]:
         try:
             show_cmd = ["netsh", "advfirewall", "firewall", "show", "rule", f'name={name}']
             LOGGER.info("Firewall check start: name=%s port=%s", name, port)
-            show_result = subprocess.run(show_cmd, capture_output=True, text=True, timeout=10)
+            show_result = subprocess.run(show_cmd, capture_output=True, text=True, timeout=10, **no_window_subprocess_kwargs())
             exists = show_result.returncode == 0 and "Rule Name:" in (show_result.stdout or "")
             LOGGER.info(
                 "Firewall check done: name=%s exists=%s returncode=%s",
@@ -46,7 +48,7 @@ def ensure_ftp_firewall_rules(control_port: int) -> dict[str, Any]:
                     "new",
                     "enable=Yes",
                 ]
-                set_result = subprocess.run(set_cmd, capture_output=True, text=True, timeout=10)
+                set_result = subprocess.run(set_cmd, capture_output=True, text=True, timeout=10, **no_window_subprocess_kwargs())
                 if set_result.returncode == 0:
                     applied.append({"name": name, "port": port, "action": "enabled"})
                     LOGGER.info("Firewall rule enabled: name=%s", name)
@@ -67,7 +69,7 @@ def ensure_ftp_firewall_rules(control_port: int) -> dict[str, Any]:
                     "protocol=TCP",
                     f"localport={port}",
                 ]
-                add_result = subprocess.run(add_cmd, capture_output=True, text=True, timeout=10)
+                add_result = subprocess.run(add_cmd, capture_output=True, text=True, timeout=10, **no_window_subprocess_kwargs())
                 if add_result.returncode == 0:
                     applied.append({"name": name, "port": port, "action": "added"})
                     LOGGER.info("Firewall rule added: name=%s port=%s", name, port)
@@ -82,4 +84,3 @@ def ensure_ftp_firewall_rules(control_port: int) -> dict[str, Any]:
     summary = {"ok": len(errors) == 0, "rules": applied, "errors": errors}
     LOGGER.info("Firewall ensure summary: control_port=%s ok=%s applied=%s errors=%s", control_port, summary["ok"], len(applied), len(errors))
     return summary
-

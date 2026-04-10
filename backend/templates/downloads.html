@@ -1,0 +1,415 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+{% set release = agent_release or {} %}
+<section class="card">
+  <div class="card-header">
+    <h2>PrintAgent Setup Packages</h2>
+    <p>Download the current PrintAgent release for target Windows machines. All times on this page use GMT+7.</p>
+  </div>
+
+  <div class="table-wrap" style="margin-top: 20px;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Release Date / Time (GMT+7)</th>
+          <th>Size</th>
+          <th>Target OS</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <img src="/static/releases/icon.ico" alt="Agent Icon" style="width: 24px; height: 24px;">
+              <strong>v{{ release.version }} ({{ (release.channel or 'stable')|upper }})</strong>
+            </div>
+          </td>
+          <td>{{ release.release_date or '-' }}</td>
+          <td>{{ release.size_label or '-' }}</td>
+          <td>Windows 10/11, Server</td>
+          <td>
+            <a href="{{ release.download_url or '/static/releases/printagent.exe' }}" class="filter-btn" style="text-decoration: none; display: inline-block;">Download .exe</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 18px; color: #445; line-height: 1.7;">
+    <strong>Release Notes:</strong>
+    <div>{{ release.notes or 'No release notes.' }}</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-top: 18px;">
+  <div class="panel-header-row">
+    <h3>Agents Running</h3>
+    <button id="download-agents-refresh" class="filter-btn" type="button">Refresh</button>
+  </div>
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Lead</th>
+          <th>LAN UID</th>
+          <th>Machine Name</th>
+          <th>Agent UID</th>
+          <th>Local IP</th>
+          <th>Mode</th>
+          <th>Version</th>
+          <th>FTP Sites</th>
+          <th>Last Run (GMT+7)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="download-agents-body">
+        <tr>
+          <td colspan="12" style="text-align:center;">Loading agents...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<style>
+  .table-wrap { overflow-x: auto; }
+  .data-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+  .data-table th, .data-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+  .data-table th { background: #f9f9f9; font-weight: 600; color: #333; }
+  .data-table tr:hover { background: #fafafa; }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const body = document.getElementById('download-agents-body');
+  const refreshBtn = document.getElementById('download-agents-refresh');
+  let refreshTimer = null;
+
+  const statusBadge = (isOnline) => {
+    const label = isOnline ? 'ONLINE' : 'OFFLINE';
+    const color = isOnline ? '#2fa36b' : '#c05a5a';
+    return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px;">${label}</span>`;
+  };
+
+    const trashIcon = () => '&#128465;';
+
+  const normalizeName = (value) => String(value || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .slice(0, 48);
+  const compactMac = (value) => String(value || '').replace(/[^A-Fa-f0-9]/g, '').toUpperCase().slice(0, 12);
+  const defaultScanFolderName = (macValue, fallbackValue = 'site') => {
+    const compact = compactMac(macValue);
+    if (compact) return normalizeName(`scan_${compact}`);
+    return normalizeName(`scan_${String(fallbackValue || 'site').trim().replace(/\s+/g, '_')}`.slice(0, 48));
+  };
+  const isExplicitScanPath = (value) => {
+    const text = String(value || '').trim();
+    return Boolean(text) && (text.startsWith('~') || text.startsWith('\\\\') || text.startsWith('/') || /[\\/]/.test(text) || /^[A-Za-z]:/.test(text));
+  };
+  const resolveSiblingScanPath = (currentPath, nextLeaf) => {
+    const rawPath = String(currentPath || '').trim();
+    const safeLeaf = normalizeName(nextLeaf || '');
+    if (!rawPath || !safeLeaf || isExplicitScanPath(nextLeaf)) return String(nextLeaf || '').trim();
+    const useBackslash = rawPath.includes('\\');
+    const parts = rawPath.replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean);
+    if (!parts.length) return safeLeaf;
+    parts.pop();
+    const separator = useBackslash ? '\\' : '/';
+    const parent = parts.join(separator);
+    if (!parent) return safeLeaf;
+    return `${parent}${separator}${safeLeaf}`;
+  };
+  const promptInput = (label, initialValue = '') => {
+    const result = window.prompt(label, initialValue);
+    if (result === null) return null;
+    return String(result).trim();
+  };
+
+  const ftpSiteBadges = (sites, portsValue, row) => {
+    const list = Array.isArray(sites) ? sites : [];
+    if (list.length) {
+      return list.map((site) => {
+        const name = String(site?.name || '').trim();
+        const path = String(site?.path || '').trim();
+        const port = Number.parseInt(String(site?.port || '0'), 10) || 0;
+        return `
+          <div style="display:grid;gap:4px;margin-bottom:10px;">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#eef6ff;color:#284b82;font-family:monospace;font-size:12px;font-weight:700;">
+                ${escapeHtml(name || '-')}${port ? `<span style="opacity:0.8;">:${escapeHtml(String(port))}</span>` : ''}
+              </span>
+              <button type="button" class="filter-btn ghost" data-ftp-site-edit="${escapeHtml(String(row?.id || ''))}" data-site-name="${escapeHtml(name)}" data-site-path="${escapeHtml(path)}" data-site-port="${escapeHtml(String(port || ''))}">Edit</button>
+              <button type="button" class="filter-btn" data-ftp-site-delete="${escapeHtml(String(row?.id || ''))}" data-site-name="${escapeHtml(name)}" title="Delete scan folder">Delete</button>
+            </div>
+            <div style="font-size:12px;line-height:1.4;color:#4f5d73;">
+              <span style="font-family:monospace;font-weight:700;">Scan Path:</span> ${escapeHtml(path || '-')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    const ports = String(portsValue || '').split(',').map((p) => p.trim()).filter(Boolean);
+    if (!ports.length) return '<span style="color:#888;">-</span>';
+    return ports.map((port) => `<span style="display:inline-block;margin:0 4px 4px 0;padding:4px 8px;border-radius:999px;background:#eef6ff;color:#284b82;font-family:monospace;font-size:12px;font-weight:700;">${escapeHtml(port)}</span>`).join('');
+  };
+
+  const copyText = async (text) => {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      return true;
+    } catch (err) {
+      console.error('Copy failed:', err);
+      return false;
+    }
+  };
+
+  const agentActions = (row) => {
+    const localUrl = String(row.localhost_url || '').trim();
+    const ftpUrl = String(row.ftp_page_url || '').trim();
+    const openBtn = localUrl
+      ? `<a href="${escapeHtml(localUrl)}" target="_blank" rel="noopener noreferrer" class="filter-btn ghost" style="text-decoration:none;display:inline-block;">Open Local UI</a>`
+      : '<span style="color:#888;">-</span>';
+    const openFtpBtn = ftpUrl
+      ? `<a href="${escapeHtml(ftpUrl)}" target="_blank" rel="noopener noreferrer" class="filter-btn ghost" style="text-decoration:none;display:inline-block;">Open FTP</a>`
+      : '<span style="color:#888;">-</span>';
+    const copyBtn = localUrl
+      ? `<button type="button" class="filter-btn" data-copy-url="${escapeHtml(localUrl)}">Copy URL</button>`
+      : '<span style="color:#888;">-</span>';
+    return `${openBtn} ${openFtpBtn} ${copyBtn}`;
+  };
+
+  const submitQueuedFtpCommand = async (agentId, payload) => {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/ftp-sites`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      let message = data.error || 'Queue scan-folder command failed';
+      if (Array.isArray(data.available_printers) && data.available_printers.length) {
+        const details = data.available_printers
+          .map((item) => `${String(item?.printer_name || '').trim() || 'Printer'} (${String(item?.ip || '').trim() || '-'} / ${String(item?.mac_id || '').trim() || '-'}${String(item?.agent_uid || '').trim() ? ` / ${String(item?.agent_uid || '').trim()}` : ''})`)
+          .join(' | ');
+        message += `\nAvailable printers: ${details}`;
+      }
+      window.alert(message);
+      return null;
+    }
+    return data;
+  };
+
+  const promptTargetMac = (row) => {
+    const directPrinters = Array.isArray(row?.printers) ? row.printers : [];
+    const printers = directPrinters.length ? directPrinters : (Array.isArray(row?.lan_printers) ? row.lan_printers : []);
+    if (printers.length === 1) {
+      return String(printers[0]?.mac_id || '').trim().toUpperCase();
+    }
+    const label = printers.length
+      ? `Target printer MAC ID\n${printers.map((printer) => `${String(printer?.printer_name || '').trim() || 'Printer'} (${String(printer?.ip || '').trim() || '-'} / ${String(printer?.mac_id || '').trim() || '-'}${String(printer?.agent_uid || '').trim() ? ` / ${String(printer?.agent_uid || '').trim()}` : ''})`).join(' | ')}`
+      : 'Target printer MAC ID';
+    return String(promptInput(label, String(printers[0]?.mac_id || '').trim()) || '').trim().toUpperCase();
+  };
+
+  const promptFtpPayload = (action, row, site = null) => {
+    const currentSite = site && typeof site === 'object' ? site : null;
+    const existingSiteName = normalizeName(String(currentSite?.name || '').trim());
+    const macId = action === 'create' ? promptTargetMac(row) : '';
+    if (action === 'create' && !macId) return null;
+    const defaultSiteName = defaultScanFolderName(macId, String(row?.hostname || 'site').trim() || 'site');
+    const scanPath = promptInput(
+      'Scan folder name or full path on the agent',
+      String(currentSite?.path || '').trim() || defaultSiteName
+    );
+    if (scanPath === null || !String(scanPath || '').trim()) return null;
+    const resolvedScanPath = resolveSiblingScanPath(String(currentSite?.path || '').trim(), scanPath);
+    return {
+      action,
+      site_name: existingSiteName || "",
+      mac_id: macId,
+      scan_path: String(resolvedScanPath || scanPath || '').trim(),
+    };
+  };
+
+  const queueFtpCommand = async (row, action, site = null) => {
+    const agentId = String(row?.id || '');
+    if (!agentId) return;
+    const currentSite = site && typeof site === 'object' ? site : null;
+    if (action === 'create' || action === 'update') {
+      const payload = promptFtpPayload(action, row, currentSite);
+      if (!payload) return;
+      const data = await submitQueuedFtpCommand(agentId, payload);
+      if (!data) return;
+      const targetSiteName = payload.scan_path || payload.new_site_name || payload.site_name;
+      const targetMac = String(data.mac_id || payload.mac_id || '').trim();
+      const warning = String(data.warning || '').trim();
+      window.alert(`Scan folder ${action} queued for ${targetSiteName}${targetMac ? ` on ${targetMac}` : ''}.${warning ? `\nWarning: ${warning}` : ''}\nThe agent will apply it on its next polling cycle.`);
+      return;
+    }
+    if (action === 'delete') {
+      const siteName = normalizeName(String(currentSite?.name || '').trim());
+      if (!siteName) return;
+      const ok = window.confirm(`Delete scan folder "${siteName}"?`);
+      if (!ok) return;
+      const data = await submitQueuedFtpCommand(agentId, {
+        action,
+        site_name: siteName,
+      });
+      if (!data) return;
+      window.alert(`Scan folder delete queued for ${siteName}. The agent will apply it on its next polling cycle.`);
+    }
+  };
+
+  const deleteAgent = async (agentId) => {
+    if (!agentId) return;
+    const ok = window.confirm('Delete this agent from the registry?');
+    if (!ok) return;
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      window.alert(data.error || 'Delete failed');
+      return;
+    }
+    await loadAgents();
+  };
+
+  const loadAgents = async () => {
+    try {
+      const res = await fetch('/api/agents?stale_seconds=900');
+      const data = await res.json();
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      body.innerHTML = '';
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="12" style="text-align:center;">No agents found</td></tr>';
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        const localUrl = String(row.localhost_url || '').trim();
+        const lanUidCell = `
+          <div style="display:grid; gap:4px;">
+            <div style="font-family:monospace;font-weight:700;">${escapeHtml(row.lan_uid || '')}</div>
+            <div style="font-size:12px; line-height:1.35;">
+              ${localUrl ? `<a href="${escapeHtml(localUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(localUrl)}</a>` : '<span style="color:#888;">-</span>'}
+            </div>
+          </div>
+        `;
+        tr.innerHTML = `
+          <td>${statusBadge(Boolean(row.is_online))}</td>
+          <td>${escapeHtml(row.lead || '')}</td>
+          <td>${lanUidCell}</td>
+          <td>${escapeHtml(row.hostname || '')}</td>
+          <td style="font-family:monospace;font-size:12px;color:#5f6f86;">${escapeHtml(row.agent_uid || '')}</td>
+          <td>${escapeHtml(row.local_ip || '')}</td>
+          <td>${escapeHtml(row.run_mode || 'web')} : ${escapeHtml(String(row.web_port || 9173))}</td>
+          <td>${escapeHtml(row.app_version || '-')}</td>
+    <td>${ftpSiteBadges(row.ftp_sites, row.ftp_ports, row)}</td>
+          <td>${escapeHtml(row.last_seen_at || row.last_run_at || '-')}</td>
+          <td>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              ${agentActions(row)}
+              <button type="button" class="filter-btn" data-add-ftp="${escapeHtml(String(row.id || ''))}">+ Assign Scan Folder</button>
+            ${row.is_online ? '<span title="Agent is online; stop it before deleting" style="display:inline-flex;align-items:center;justify-content:center;opacity:0.35;cursor:not-allowed;">' + trashIcon() + '</span>' : `<button type="button" class="filter-btn" data-delete-agent="${escapeHtml(String(row.id || ''))}" title="Delete agent" aria-label="Delete agent">${trashIcon()}</button>`}
+            </div>
+          </td>
+        `;
+        body.appendChild(tr);
+      }
+
+      body.querySelectorAll('[data-copy-url]').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          const url = btn.getAttribute('data-copy-url') || '';
+          const ok = await copyText(url);
+          const label = ok ? 'Copied' : 'Copy failed';
+          const old = btn.textContent;
+          btn.textContent = label;
+          window.setTimeout(() => { btn.textContent = old; }, 1200);
+        });
+      });
+
+      body.querySelectorAll('[data-delete-agent]').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          await deleteAgent(btn.getAttribute('data-delete-agent'));
+        });
+      });
+
+      body.querySelectorAll('[data-add-ftp]').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          const agentId = String(btn.getAttribute('data-add-ftp') || '');
+          const row = Array.isArray(rows) ? rows.find((item) => String(item.id || '') === agentId) : null;
+          if (!row) return;
+          await queueFtpCommand(row, 'create');
+        });
+      });
+
+      body.querySelectorAll('[data-ftp-site-edit]').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          const agentId = String(btn.getAttribute('data-ftp-site-edit') || '');
+          const row = Array.isArray(rows) ? rows.find((item) => String(item.id || '') === agentId) : null;
+          if (!row) return;
+          const site = {
+            name: String(btn.getAttribute('data-site-name') || ''),
+            path: String(btn.getAttribute('data-site-path') || ''),
+            port: Number.parseInt(String(btn.getAttribute('data-site-port') || '0'), 10) || 0,
+          };
+          await queueFtpCommand(row, 'update', site);
+        });
+      });
+
+      body.querySelectorAll('[data-ftp-site-delete]').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          const agentId = String(btn.getAttribute('data-ftp-site-delete') || '');
+          const row = Array.isArray(rows) ? rows.find((item) => String(item.id || '') === agentId) : null;
+          if (!row) return;
+          const site = {
+            name: String(btn.getAttribute('data-site-name') || ''),
+          };
+          await queueFtpCommand(row, 'delete', site);
+        });
+      });
+    } catch (err) {
+      body.innerHTML = '<tr><td colspan="11" style="text-align:center;">Failed to load agents</td></tr>';
+      console.error('Failed to load running agents:', err);
+    }
+  };
+
+  refreshBtn.addEventListener('click', loadAgents);
+  loadAgents();
+  refreshTimer = window.setInterval(loadAgents, 30000);
+  window.addEventListener('beforeunload', () => {
+    if (refreshTimer) window.clearInterval(refreshTimer);
+  });
+});
+</script>
+{% endblock %}
+

@@ -1,47 +1,174 @@
-# PrintAgent: Ricoh Printer Management System
+# GoPrinx / PrintAgent
 
-A centralized monitoring and management system for Ricoh printers. Collects counters, status, and provides remote control (lock/unlock) for multiple printers across various branches (LAN sites).
+Hệ thống quản lý máy Ricoh gồm 3 phần:
 
-## 🏗 Architecture Overview
+- `agent/`: agent chạy trong LAN, scan máy, polling dữ liệu, nhận lệnh lock/unlock và FTP queue
+- `backend/`: Flask server + PostgreSQL, nhận polling, render portal quản trị, public API
+- `app-gox/`: frontend React/Vite cho portal người dùng
 
-The project is divided into 3 main parts:
+## Trạng thái hiện tại
 
-### 1. Agent (`agent/`) - Runs at Local Site (Workstation/Internal Server)
-A Python service that maintains a direct connection with printers in the LAN.
-- **Features:** Device scanning, counter collection, status updates, remote command execution (Lock/Unlock).
-- **Technology:** Python 3.11+, Flask (Local UI), SQLAlchemy (SQLite).
-- **Key Files:**
-    - `agent/main.py`: Entry point for the agent service.
-    - `agent/web.py`: Local Dashboard (Port 5000).
-    - `agent/modules/ricoh/`: Logic for interacting with Ricoh printers.
+Snapshot này phản ánh trạng thái repo và production đã kiểm tra ngày `2026-04-08`.
 
-### 2. Server Backend (`server/`) - Operation Center (VPS)
-The central management hub that receives data from thousands of Agents.
-- **Features:** Ingestion API, Database Management, Command Control (WebSocket/Polling), Analytics.
-- **Technology:** Flask, PostgreSQL/SQLite, SQLAlchemy.
-- **Key Files:**
-    - `server/app.py`: Main API and Backend Dashboard management.
-    - `server/models.py`: Defines the system-wide data structure.
-    - `server/utils.py` & `server/serializers.py`: Utility functions and data processing.
+- Public API production: `https://agentapi.quanlymay.com`
+- Frontend production: `https://app.quanlymay.com`
+- Backend production chạy trực tiếp tại `/opt/printagent/`
+- Service thật trên VPS là `systemd`: `systemctl restart printagent`
+- Nginx proxy `agentapi.quanlymay.com` vào `127.0.0.1:8005`
+- Trang docs public render từ file `backend/PUBLIC_API.md` qua route `/api-docs`
 
-### 3. Frontend Web (`app-gox/`) - Modern UI (React)
-Administrative dashboard for users and technicians.
-- **Features:** Visual monitoring, Agent management, photocopier management, locations, and repair requests.
-- **Technology:** React, TypeScript, Vite, Framer Motion.
+## Điều quan trọng cần nhớ khi quay lại
 
-## 🚀 Quick Setup
+1. Repo hiện dùng `agent/` và `backend/`. Nhiều docs cũ vẫn nhắc `app/` và `server/`; coi đó là legacy.
+2. Production không dùng `pm2 restart printagent-server` cho backend này nữa. Dùng `systemctl restart printagent`.
+3. Device control public dùng `mac_id`, không còn dùng `printer_id` làm contract chính.
+4. `POST /api/devices/<mac_id>/lock|unlock` và `PATCH /api/devices/<mac_id>/enable` không còn yêu cầu `auth_user` / `auth_password` trong request body.
+5. Server hiện nhận `mac_id` theo 3 dạng:
+   - `AA:BB:CC:DD:EE:FF`
+   - `AA-BB-CC-DD-EE-FF`
+   - `AABBCCDDEEFF`
 
-### Agent (For Clients)
-1. Download the `GoPrinxAgent.exe` installer from [app.goxprint.com/downloads](http://app.goxprint.com/downloads).
-2. Run with Administrator privileges and enter the corresponding **Agent ID**.
+## Nên đọc gì trước
 
-### Server & Frontend (For Developers)
-- Backend: `cd server && python app.py`
-- Frontend: `cd app-gox && npm install && npm run dev`
+- `README.md`: overview + production reality
+- `backend/PUBLIC_API.md`: contract public API chuẩn
+- `docs/ENDPOINT.md`: bản đồ endpoint nội bộ
+- `docs/AGENTS.md`: agent runtime và cấu hình
+- `docs/GEMINI.md`: ghi chú handover / memory khi quay lại dự án
+- `backend/README.md`: runbook riêng cho backend
 
-## 📂 Directory Structure
-- `agent/`: Source code for the Agent software running on-site.
-- `server/`: Flask Backend source code running on the VPS.
-- `app-gox/`: React Frontend source code.
-- `dist/`: Contains the built `GoPrinxAgent.exe` file.
-- `storage/`: Local data, logs, and cache.
+## Cấu trúc repo
+
+```text
+printagent/
+├─ agent/                  Agent Windows + local web UI
+├─ backend/                Flask server, templates, SQLAlchemy models
+├─ app-gox/                React/Vite frontend
+├─ docs/                   Handover docs, endpoint map, test plans
+├─ scripts/deploy/         Các script deploy; có cả script current lẫn legacy
+├─ storage/                Dữ liệu cục bộ/dev
+└─ dist/                   Output build agent exe
+```
+
+## Chạy local
+
+### Backend
+
+```bash
+cd backend
+venv/bin/python app.py
+```
+
+Windows:
+
+```powershell
+cd backend
+venv\Scripts\python.exe app.py
+```
+
+Mặc định backend đọc `.env` từ thư mục hiện tại hoặc từ `backend/.env`.
+
+### Frontend
+
+```bash
+cd app-gox
+npm install
+npm run dev
+```
+
+### Agent
+
+```bash
+python agent/main.py --mode web
+python agent/main.py --mode service
+python agent/main.py --mode test
+python agent/main.py --mode ftp-worker
+```
+
+Agent local web UI hiện dùng port mặc định `9173`.
+
+## Deploy
+
+### Backend
+
+Cách an toàn nhất hiện tại là copy thủ công các file đã đổi lên `/opt/printagent/`, rồi restart:
+
+```bash
+systemctl restart printagent
+systemctl status printagent --no-pager
+```
+
+Lưu ý:
+
+- `scripts/deploy/` có cả script đúng path mới lẫn script cũ còn trỏ sang `server/` hoặc `pm2`.
+- Trước khi chạy script deploy, luôn đọc nhanh remote path của script đó.
+- Các file backend live trên VPS nằm trực tiếp tại `/opt/printagent/app.py`, `/opt/printagent/utils.py`, `/opt/printagent/templates/...`, không phải `/opt/printagent/backend/...`.
+
+### Frontend
+
+Script đang có trong repo:
+
+- `scripts/deploy/deploy_frontend.py`
+- Upload `app-gox/dist/` lên `/var/www/app-gox`
+
+### Agent EXE
+
+Build:
+
+```powershell
+.\build_agent_exe.ps1
+```
+
+Deploy:
+
+- `scripts/deploy/deploy_agent_exe.py`
+- Upload `dist/printagent.exe` lên `/opt/printagent/static/releases/printagent.exe`
+- Upload manifest từ `backend/storage/releases/agent_release.json`
+
+## Các luồng chính
+
+### Polling
+
+1. Agent scan LAN, nhận diện máy Ricoh
+2. Agent thu `counter`, `status`, `device info`
+3. Agent gửi `POST /api/polling`
+4. Backend upsert dữ liệu latest vào `DeviceInfor` và lưu history vào `CounterInfor`, `StatusInfor`
+
+### Device control
+
+1. Client gọi `POST /api/devices/<mac_id>/unlock` hoặc `lock`
+2. Backend queue `PrinterControlCommand`
+3. Agent lấy lệnh qua polling controls
+4. Agent thao tác lên máy Ricoh
+5. Backend nhận result và trả `200`, `409`, hoặc `504`
+
+### FTP queue
+
+1. Client gọi `POST /api/agents/<agent_id>/ftp-sites`
+2. Backend queue `FtpControlCommand`
+3. Agent lấy queue qua polling
+4. Agent tự suy ra FTP runtime nội bộ từ `mac_id + scan_path`, rồi apply scan destination
+
+## Các file đáng tin cậy nhất
+
+- Route thực tế: `backend/app.py`
+- Normalize MAC/IP và helper: `backend/utils.py`
+- Public API contract: `backend/PUBLIC_API.md`
+- Agent runtime config: `agent/config.py`
+- Polling control loop: `agent/services/polling_bridge.py`
+
+## Các bẫy tài liệu cũ
+
+- Tài liệu cũ có thể nhắc:
+  - `server/` thay vì `backend/`
+  - `app/` thay vì `agent/`
+  - WebSocket control flow cũ
+  - `pm2 restart printagent-server`
+  - `/api/printer/<id>/lock`
+- Các nội dung đó không còn là nguồn sự thật chính.
+
+## Gợi ý khi tiếp tục phát triển
+
+- Nếu thay public API, sửa `backend/PUBLIC_API.md` trước, rồi mới sửa docs còn lại.
+- Nếu thay polling/control flow, sửa `docs/AGENTS.md` và `docs/ENDPOINT.md`.
+- Nếu thay deploy production, cập nhật ngay `README.md` và `docs/GEMINI.md`.

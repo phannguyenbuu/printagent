@@ -1,0 +1,804 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .agent-main-cell {
+    display: grid;
+    gap: 4px;
+  }
+  .agent-main-cell .agent-uid {
+    font-family: monospace;
+    font-weight: 700;
+    word-break: break-all;
+  }
+  .agent-main-cell .agent-link {
+    font-size: 12px;
+    color: #2f5fb3;
+    text-decoration: underline;
+    word-break: break-all;
+  }
+  .agent-subtext {
+    font-size: 12px;
+    color: rgba(42, 57, 82, 0.72);
+    word-break: break-word;
+  }
+  .agent-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .agent-actions-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .agent-info-line {
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  .ftp-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 24, 40, 0.48);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 60;
+    padding: 16px;
+  }
+  .ftp-modal-backdrop.open {
+    display: flex;
+  }
+  .ftp-modal-card {
+    width: min(520px, 100%);
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 28px 60px rgba(17, 24, 39, 0.22);
+    border: 1px solid rgba(129, 140, 248, 0.16);
+    padding: 18px;
+  }
+  .ftp-modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .ftp-modal-field {
+    display: grid;
+    gap: 6px;
+  }
+  .ftp-modal-field.full {
+    grid-column: 1 / -1;
+  }
+  .ftp-modal-field label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #36455f;
+  }
+  .ftp-modal-field input {
+    border: 1px solid #d9e4f5;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    outline: none;
+  }
+  .ftp-modal-path {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    border: 1px solid #d9e4f5;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .ftp-modal-path-prefix {
+    padding: 10px 12px;
+    background: #f5f8ff;
+    color: #49608d;
+    font-family: monospace;
+    font-size: 13px;
+    border-right: 1px solid #d9e4f5;
+    white-space: nowrap;
+  }
+  .ftp-modal-path input {
+    border: 0;
+    border-radius: 0;
+  }
+  .ftp-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .agent-chip-list {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .agent-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #eef6ff;
+    color: #284b82;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .table-wrap { overflow-x: auto; }
+  .data-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+  .data-table th, .data-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+  .data-table th { background: #f9f9f9; font-weight: 600; color: #333; }
+  .data-table tr:hover { background: #fafafa; }
+</style>
+
+{% set release = agent_release or {} %}
+<section class="card">
+  <div class="card-header">
+    <h2>PrintAgent Setup Packages</h2>
+    <p>Download the current PrintAgent release for target Windows machines. All times on this page use GMT+7.</p>
+  </div>
+
+  <div class="table-wrap" style="margin-top: 20px;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Release Date / Time (GMT+7)</th>
+          <th>Size</th>
+          <th>Target OS</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <img src="/static/releases/icon.ico" alt="Agent Icon" style="width: 24px; height: 24px;">
+              <strong>v{{ release.version }} ({{ (release.channel or 'stable')|upper }})</strong>
+            </div>
+          </td>
+          <td>{{ release.release_date or '-' }}</td>
+          <td>{{ release.size_label or '-' }}</td>
+          <td>Windows 10/11, Server</td>
+          <td>
+            <a href="{{ release.download_url or '/static/releases/printagent.exe' }}" class="filter-btn" style="text-decoration: none; display: inline-block;">Download .exe</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 18px; color: #445; line-height: 1.7;">
+    <strong>Release Notes:</strong>
+    <div>{{ release.notes or 'No release notes.' }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>Agents</h3>
+    <button id="agents-refresh-btn" class="filter-btn">Refresh</button>
+  </div>
+
+  <div class="filter-board">
+    <div class="filter-group">
+      <label>Lead</label>
+      <select id="agents-filter-lead">
+        <option value="">All Leads</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>LAN UID</label>
+      <input type="text" id="agents-filter-lan" placeholder="Search lan_uid...">
+    </div>
+    <div class="filter-group">
+      <label>Status</label>
+      <select id="agents-filter-status">
+        <option value="">All</option>
+        <option value="online">Online</option>
+        <option value="offline">Offline</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Offline After</label>
+      <select id="agents-filter-stale">
+        <option value="300">5 min</option>
+        <option value="600">10 min</option>
+        <option value="1800">30 min</option>
+      </select>
+    </div>
+    <button id="agents-apply-btn" class="filter-btn">Apply</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Lead</th>
+          <th>LAN UID</th>
+          <th>Machine Name</th>
+          <th>Local IP</th>
+          <th>Mode</th>
+          <th>Version</th>
+          <th>FTP Sites</th>
+          <th>Last Run (GMT+7)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="agents-table-body">
+        <tr>
+          <td colspan="10" style="text-align:center;">Loading agents...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel" style="margin-top:16px;">
+  <div class="panel-header-row">
+    <h3>Agent Presence History</h3>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="agents-history-export-btn" class="filter-btn">Export JSON</button>
+      <button id="agents-history-refresh-btn" class="filter-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>Changed At (GMT+7)</th>
+          <th>Status</th>
+          <th>Lead</th>
+          <th>LAN UID</th>
+          <th>Machine Name</th>
+          <th>Local IP</th>
+          <th>Mode</th>
+          <th>Version</th>
+        </tr>
+      </thead>
+      <tbody id="agents-history-table-body">
+        <tr>
+          <td colspan="8" style="text-align:center;">Loading presence history...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div id="ftp-create-modal" class="ftp-modal-backdrop" aria-hidden="true">
+  <div class="ftp-modal-card" role="dialog" aria-modal="true" aria-labelledby="ftp-create-modal-title">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+      <div>
+        <div id="ftp-create-modal-title" style="font-size:20px;font-weight:800;color:#1f2f4d;">Assign Scan Folder</div>
+        <div style="margin-top:6px;color:#5d6b83;line-height:1.5;">
+          Choose the target printer <span style="font-family:monospace;font-weight:700;">MAC ID</span> and the scan folder on the agent machine.
+          You can enter a simple folder name or a full path on the agent.
+        </div>
+      </div>
+      <button type="button" class="filter-btn" data-ftp-modal-close aria-label="Close FTP form">&times;</button>
+    </div>
+
+    <form id="ftp-create-form">
+      <div class="ftp-modal-grid">
+        <div class="ftp-modal-field" style="grid-column:1 / -1;">
+          <label for="ftp-create-mac">Target MAC ID</label>
+          <input id="ftp-create-mac" name="mac_id" type="text" autocomplete="off" list="ftp-create-mac-list" placeholder="00:26:73:7D:78:F9" required>
+          <datalist id="ftp-create-mac-list"></datalist>
+          <div id="ftp-create-mac-help" style="margin-top:6px;font-size:12px;color:#5d6b83;">Choose the exact Ricoh machine by MAC ID.</div>
+        </div>
+        <div class="ftp-modal-field" style="grid-column:1 / -1;">
+          <label for="ftp-create-path">Scan Folder</label>
+          <input id="ftp-create-path" name="path" type="text" autocomplete="off" placeholder="scan_0026737D78F9 or C:\Scans\Ricoh-01" required>
+          <div style="margin-top:6px;font-size:12px;color:#5d6b83;">Simple names use the agent default scan root. Full paths stay on the agent exactly as entered.</div>
+        </div>
+      </div>
+
+      <div class="ftp-modal-actions">
+        <button type="button" class="filter-btn ghost" data-ftp-modal-close>Cancel</button>
+        <button type="submit" class="filter-btn">Assign</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const leadSel = qs('agents-filter-lead');
+  const tableBody = document.getElementById('agents-table-body');
+  const historyBody = document.getElementById('agents-history-table-body');
+  const ftpModal = document.getElementById('ftp-create-modal');
+  const ftpForm = document.getElementById('ftp-create-form');
+  const ftpMacInput = document.getElementById('ftp-create-mac');
+  const ftpMacList = document.getElementById('ftp-create-mac-list');
+  const ftpMacHelp = document.getElementById('ftp-create-mac-help');
+  const ftpPathInput = document.getElementById('ftp-create-path');
+  let ftpCreateAgentId = '';
+  let ftpCreatePrinters = [];
+  let ftpCreatePathDirty = false;
+  let ftpCreateFallbackName = 'site';
+
+  const trashIcon = () => '&#128465;';
+  const safeText = (value, fallback = '-') => {
+    const text = String(value || '').trim();
+    return text ? escapeHtml(text) : fallback;
+  };
+  const normalizeName = (value) => String(value || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .slice(0, 48);
+  const compactMac = (value) => String(value || '').replace(/[^A-Fa-f0-9]/g, '').toUpperCase().slice(0, 12);
+  const defaultScanFolderName = (macValue, fallbackValue = 'site') => {
+    const compact = compactMac(macValue);
+    if (compact) return normalizeName(`scan_${compact}`);
+    return normalizeName(`scan_${String(fallbackValue || 'site').trim().replace(/\s+/g, '_')}`.slice(0, 48));
+  };
+  const isExplicitScanPath = (value) => {
+    const text = String(value || '').trim();
+    return Boolean(text) && (text.startsWith('~') || text.startsWith('\\\\') || text.startsWith('/') || /[\\/]/.test(text) || /^[A-Za-z]:/.test(text));
+  };
+  const resolveSiblingScanPath = (currentPath, nextLeaf) => {
+    const rawPath = String(currentPath || '').trim();
+    const safeLeaf = normalizeName(nextLeaf || '');
+    if (!rawPath || !safeLeaf || isExplicitScanPath(nextLeaf)) return String(nextLeaf || '').trim();
+    const useBackslash = rawPath.includes('\\');
+    const parts = rawPath.replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean);
+    if (!parts.length) return safeLeaf;
+    parts.pop();
+    const separator = useBackslash ? '\\' : '/';
+    const parent = parts.join(separator);
+    if (!parent) return safeLeaf;
+    return `${parent}${separator}${safeLeaf}`;
+  };
+  const promptInput = (label, initialValue = '') => {
+    const result = window.prompt(label, initialValue);
+    if (result === null) return null;
+    return String(result).trim();
+  };
+
+  const ftpSiteBadges = (sites, portsValue, row) => {
+    const list = Array.isArray(sites) ? sites : [];
+    if (list.length) {
+      return list.map((site) => {
+        const name = String(site?.name || '').trim();
+        const path = String(site?.path || '').trim();
+        const port = Number.parseInt(String(site?.port || '0'), 10) || 0;
+        return `
+          <div style="display:grid;gap:4px;margin-bottom:10px;">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#eef6ff;color:#284b82;font-family:monospace;font-size:12px;font-weight:700;">
+                ${escapeHtml(name || '-')}${port ? `<span style="opacity:0.8;">:${escapeHtml(String(port))}</span>` : ''}
+              </span>
+              <button type="button" class="filter-btn ghost" data-ftp-site-edit="${escapeHtml(String(row?.id || ''))}" data-site-name="${escapeHtml(name)}" data-site-path="${escapeHtml(path)}" data-site-port="${escapeHtml(String(port || ''))}">Edit</button>
+              <button type="button" class="filter-btn" data-ftp-site-delete="${escapeHtml(String(row?.id || ''))}" data-site-name="${escapeHtml(name)}" title="Delete scan folder">Delete</button>
+            </div>
+            <div style="font-size:12px;line-height:1.4;color:#4f5d73;">
+              <span style="font-family:monospace;font-weight:700;">Scan Path:</span> ${escapeHtml(path || '-')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    const ports = String(portsValue || '').split(',').map((p) => p.trim()).filter(Boolean);
+    if (!ports.length) return '<span style="color:#888;">-</span>';
+    return ports.map((port) => `<span style="display:inline-block;margin:0 4px 4px 0;padding:4px 8px;border-radius:999px;background:#eef6ff;color:#284b82;font-family:monospace;font-size:12px;font-weight:700;">${escapeHtml(port)}</span>`).join('');
+  };
+
+  const printerBadges = (row) => {
+    const directPrinters = Array.isArray(row?.printers) ? row.printers : [];
+    const printers = directPrinters.length ? directPrinters : (Array.isArray(row?.lan_printers) ? row.lan_printers : []);
+    if (printers.length) {
+      return printers.map((printer) => {
+        const name = String(printer?.printer_name || '').trim() || 'Printer';
+        const ip = String(printer?.ip || '').trim() || '-';
+        const mac = String(printer?.mac_id || '').trim() || '-';
+        const owner = String(printer?.agent_uid || '').trim();
+        return `<span class="agent-chip">${escapeHtml(name)} | ${escapeHtml(ip)} | ${escapeHtml(mac)}${owner ? ` | ${escapeHtml(owner)}` : ''}</span>`;
+      }).join('');
+    }
+    const list = Array.isArray(row?.printer_ips) ? row.printer_ips : [];
+    if (!list.length) return '<span style="color:#888;">-</span>';
+    return list.map((ip) => `<span class="agent-chip">${escapeHtml(String(ip || '').trim())}</span>`).join('');
+  };
+
+  const copyToClipboard = async (value) => {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const input = document.createElement('input');
+      input.value = text;
+      input.style.position = 'fixed';
+      input.style.left = '-1000px';
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(input);
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const deleteAgent = async (agentId) => {
+    if (!agentId) return;
+    const ok = window.confirm('Delete this agent from the registry?');
+    if (!ok) return;
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      window.alert(data.error || 'Delete failed');
+      return;
+    }
+    await fetchAgents();
+  };
+
+  const openFtpCreateModal = (row) => {
+    const agentId = String(row?.id || '').trim();
+    if (!agentId) return;
+    ftpCreateAgentId = agentId;
+    ftpCreatePathDirty = false;
+    ftpCreateFallbackName = String(row?.hostname || row?.agent_uid || row?.lan_uid || 'site').trim() || 'site';
+    const directPrinters = Array.isArray(row?.printers) ? row.printers : [];
+    ftpCreatePrinters = directPrinters.length ? directPrinters : (Array.isArray(row?.lan_printers) ? row.lan_printers : []);
+    ftpMacList.innerHTML = '';
+    if (ftpCreatePrinters.length) {
+      ftpCreatePrinters.forEach((printer) => {
+        const mac = String(printer?.mac_id || '').trim();
+        if (!mac) return;
+        const option = document.createElement('option');
+        option.value = mac;
+        option.label = `${String(printer?.printer_name || '').trim()} ${String(printer?.ip || '').trim()}`.trim();
+        ftpMacList.appendChild(option);
+      });
+    }
+    if (ftpCreatePrinters.length === 1) {
+      ftpMacInput.value = String(ftpCreatePrinters[0]?.mac_id || '').trim();
+    } else {
+      ftpMacInput.value = '';
+    }
+    ftpMacHelp.textContent = ftpCreatePrinters.length
+      ? `${directPrinters.length ? 'Available printers' : 'Available LAN printers'}: ${ftpCreatePrinters.map((printer) => `${String(printer?.printer_name || '').trim() || 'Printer'} (${String(printer?.ip || '').trim() || '-'} / ${String(printer?.mac_id || '').trim() || '-'}${String(printer?.agent_uid || '').trim() ? ` / ${String(printer?.agent_uid || '').trim()}` : ''})`).join(' | ')}`
+      : 'No printer MAC suggestions from this agent. Enter the target Ricoh MAC ID manually.';
+    ftpPathInput.value = defaultScanFolderName(ftpMacInput.value, ftpCreateFallbackName);
+    ftpModal.classList.add('open');
+    ftpModal.setAttribute('aria-hidden', 'false');
+    window.setTimeout(() => ftpMacInput.focus(), 0);
+  };
+
+  const closeFtpCreateModal = () => {
+    ftpCreateAgentId = '';
+    ftpCreatePrinters = [];
+    ftpCreatePathDirty = false;
+    ftpCreateFallbackName = 'site';
+    ftpModal.classList.remove('open');
+    ftpModal.setAttribute('aria-hidden', 'true');
+    ftpForm.reset();
+    ftpMacList.innerHTML = '';
+    ftpMacHelp.textContent = 'Choose the exact Ricoh machine by MAC ID.';
+  };
+
+  const submitFtpCreate = async (event) => {
+    event.preventDefault();
+    const agentId = String(ftpCreateAgentId || '').trim();
+    if (!agentId) return;
+
+    const macId = String(ftpMacInput.value || '').trim().toUpperCase();
+    const scanPath = String(ftpPathInput.value || '').trim();
+    if (!macId) {
+      window.alert('Please enter the target printer MAC ID.');
+      return;
+    }
+    if (!scanPath) {
+      window.alert('Please enter a scan folder name or full path on the agent.');
+      return;
+    }
+
+    const data = await submitQueuedFtpCommand(agentId, {
+      action: 'create',
+      mac_id: macId,
+      scan_path: scanPath,
+    });
+    if (!data) {
+      return;
+    }
+
+    const warning = String(data.warning || '').trim();
+    window.alert(`Scan folder assignment queued for ${scanPath} on ${data.mac_id || macId}.${warning ? `\nWarning: ${warning}` : ''}\nThe agent will apply it on its next polling cycle.`);
+    closeFtpCreateModal();
+  };
+
+  const submitQueuedFtpCommand = async (agentId, payload) => {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/ftp-sites`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      let message = data.error || 'Queue scan-folder command failed';
+      if (Array.isArray(data.available_printers) && data.available_printers.length) {
+        const details = data.available_printers
+          .map((item) => `${String(item?.printer_name || '').trim() || 'Printer'} (${String(item?.ip || '').trim() || '-'} / ${String(item?.mac_id || '').trim() || '-'}${String(item?.agent_uid || '').trim() ? ` / ${String(item?.agent_uid || '').trim()}` : ''})`)
+          .join(' | ');
+        message += `\nAvailable printers: ${details}`;
+      }
+      window.alert(message);
+      return null;
+    }
+    return data;
+  };
+
+  const promptFtpUpdatePayload = (site) => {
+    const currentSite = site && typeof site === 'object' ? site : null;
+    const siteName = normalizeName(String(currentSite?.name || '').trim());
+    if (!siteName) return null;
+    const scanPath = promptInput(
+      'Scan folder name or full path on the agent',
+      String(currentSite?.path || '').trim() || siteName
+    );
+    if (scanPath === null || !String(scanPath || '').trim()) return null;
+    const resolvedScanPath = resolveSiblingScanPath(String(currentSite?.path || '').trim(), scanPath);
+    return {
+      action: 'update',
+      site_name: siteName,
+      scan_path: String(resolvedScanPath || scanPath || '').trim(),
+    };
+  };
+
+  const queueFtpCommand = async (row, action, site = null) => {
+    const agentId = String(row?.id || '');
+    if (!agentId) return;
+    const currentSite = site && typeof site === 'object' ? site : null;
+    if (action === 'create') {
+      openFtpCreateModal(row);
+      return;
+    }
+    if (action === 'update') {
+      const payload = promptFtpUpdatePayload(currentSite);
+      if (!payload) return;
+      const data = await submitQueuedFtpCommand(agentId, payload);
+      if (!data) return;
+      window.alert(`Scan folder update queued for ${payload.scan_path || payload.site_name}. The agent will apply it on its next polling cycle.`);
+      return;
+    }
+    if (action === 'delete') {
+      const siteName = normalizeName(String(currentSite?.name || '').trim());
+      if (!siteName) return;
+      const ok = window.confirm(`Delete scan folder "${siteName}"?`);
+      if (!ok) return;
+      const data = await submitQueuedFtpCommand(agentId, {
+        action,
+        site_name: siteName,
+      });
+      if (!data) return;
+      window.alert(`Scan folder delete queued for ${siteName}. The agent will apply it on its next polling cycle.`);
+    }
+  };
+
+  const loadLeads = async () => {
+    const res = await fetch('/api/leads');
+    const data = await res.json();
+    if (!Array.isArray(data.leads)) return;
+    for (const lead of data.leads) {
+      const opt = document.createElement('option');
+      opt.value = lead;
+      opt.textContent = lead;
+      leadSel.appendChild(opt);
+    }
+  };
+
+  const fetchAgents = async () => {
+      const params = new URLSearchParams({
+        lead: qs('agents-filter-lead').value,
+        lan_uid: qs('agents-filter-lan').value,
+        status: qs('agents-filter-status').value,
+        stale_seconds: qs('agents-filter-stale').value
+      });
+    const res = await fetch(`/api/agents?${params.toString()}`);
+    const data = await res.json();
+    tableBody.innerHTML = '';
+    if (!Array.isArray(data.rows) || data.rows.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="11" style="text-align:center;">No agents found</td></tr>';
+      return;
+    }
+
+    for (const row of data.rows) {
+      const tr = document.createElement('tr');
+      const state = row.is_online ? 'ONLINE' : 'OFFLINE';
+      const stateColor = row.is_online ? '#2fa36b' : '#c05a5a';
+      const modeText = `${safeText(row.run_mode || 'web')} : ${safeText(String(row.web_port || 9173))}`;
+      const ftpSites = ftpSiteBadges(row.ftp_sites, row.ftp_ports, row);
+      const printerIps = printerBadges(row);
+        tr.innerHTML = `
+          <td><span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${stateColor};color:#fff;font-weight:700;font-size:12px;">${state}</span></td>
+          <td>${safeText(row.lead)}</td>
+          <td>
+            <div class="agent-main-cell">
+              <div class="agent-uid">${safeText(row.lan_uid)}</div>
+              <a class="agent-link" href="${escapeHtml(row.localhost_url || '')}" target="_blank" rel="noopener noreferrer">${safeText(row.localhost_url, '')}</a>
+            </div>
+          </td>
+          <td>
+            <div class="agent-main-cell">
+              <div>${safeText(row.hostname)}</div>
+              <div class="agent-subtext">${modeText}</div>
+            </div>
+          </td>
+          <td>${safeText(row.local_ip)}</td>
+          <td>${modeText}</td>
+          <td>${safeText(row.app_version || '-')}</td>
+        <td>${ftpSites}</td>
+        <td>${safeText(row.last_seen_at || '-')}</td>
+        <td>
+          <div class="agent-actions">
+            <a class="filter-btn ghost" href="${escapeHtml(row.localhost_url || '')}" target="_blank" rel="noopener noreferrer">Open Local UI</a>
+            <a class="filter-btn ghost" href="${escapeHtml(row.ftp_page_url || '')}" target="_blank" rel="noopener noreferrer">Open FTP</a>
+            <button type="button" class="filter-btn ghost" data-copy-url="${escapeHtml(String(row.id || ''))}" data-copy-value="${escapeHtml(row.localhost_url || '')}">Copy URL</button>
+          </div>
+          <div class="agent-info-line">
+            <div style="font-weight:700;margin-bottom:4px;">Scan Folder Actions</div>
+            <div class="agent-actions-row">
+              <button type="button" class="filter-btn" data-add-ftp="${escapeHtml(String(row.id || ''))}">+ Assign Scan Folder</button>
+              ${row.is_online ? '<span title="Agent is online; stop it before deleting" style="display:inline-flex;align-items:center;justify-content:center;opacity:0.35;cursor:not-allowed;">' + trashIcon() + '</span>' : `<button type="button" class="filter-btn" data-delete-agent="${escapeHtml(String(row.id || ''))}" title="Delete agent" aria-label="Delete agent">${trashIcon()}</button>`}
+            </div>
+          </div>
+          <div class="agent-info-line">
+            <div style="font-weight:700;margin-bottom:4px;">Printers on same network</div>
+            <div class="agent-chip-list">${printerIps}</div>
+          </div>
+        </td>
+      `;
+      tableBody.appendChild(tr);
+    }
+
+    tableBody.querySelectorAll('[data-delete-agent]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        await deleteAgent(btn.getAttribute('data-delete-agent'));
+      });
+    });
+
+    tableBody.querySelectorAll('[data-add-ftp]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const agentId = String(btn.getAttribute('data-add-ftp') || '');
+        const row = Array.isArray(data.rows) ? data.rows.find((item) => String(item.id || '') === agentId) : null;
+        if (!row) return;
+        await queueFtpCommand(row, 'create');
+      });
+    });
+
+    tableBody.querySelectorAll('[data-copy-url]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const value = String(btn.getAttribute('data-copy-value') || '').trim();
+        if (!value) {
+          window.alert('No URL available');
+          return;
+        }
+        const ok = await copyToClipboard(value);
+        window.alert(ok ? 'URL copied' : 'Copy failed');
+      });
+    });
+
+    tableBody.querySelectorAll('[data-ftp-site-edit]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const agentId = String(btn.getAttribute('data-ftp-site-edit') || '');
+        const row = Array.isArray(data.rows) ? data.rows.find((item) => String(item.id || '') === agentId) : null;
+        if (!row) return;
+        const site = {
+          name: String(btn.getAttribute('data-site-name') || ''),
+          path: String(btn.getAttribute('data-site-path') || ''),
+          port: Number.parseInt(String(btn.getAttribute('data-site-port') || '0'), 10) || 0,
+        };
+        await queueFtpCommand(row, 'update', site);
+      });
+    });
+
+    tableBody.querySelectorAll('[data-ftp-site-delete]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const agentId = String(btn.getAttribute('data-ftp-site-delete') || '');
+        const row = Array.isArray(data.rows) ? data.rows.find((item) => String(item.id || '') === agentId) : null;
+        if (!row) return;
+        const site = {
+          name: String(btn.getAttribute('data-site-name') || ''),
+        };
+        await queueFtpCommand(row, 'delete', site);
+      });
+    });
+  };
+
+  const fetchAgentHistory = async () => {
+      const params = new URLSearchParams({
+        lead: qs('agents-filter-lead').value,
+        lan_uid: qs('agents-filter-lan').value,
+        status: qs('agents-filter-status').value,
+        limit: '200'
+      });
+    const res = await fetch(`/api/agents/history?${params.toString()}`);
+    const data = await res.json();
+    historyBody.innerHTML = '';
+    if (!Array.isArray(data.rows) || data.rows.length === 0) {
+      historyBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No presence history found</td></tr>';
+      return;
+    }
+    for (const row of data.rows) {
+      const tr = document.createElement('tr');
+      const state = row.is_online ? 'ONLINE' : 'OFFLINE';
+      const stateColor = row.is_online ? '#2fa36b' : '#c05a5a';
+      tr.innerHTML = `
+        <td style="font-family:monospace;">${escapeHtml(row.changed_at || '')}</td>
+        <td><span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${stateColor};color:#fff;font-weight:700;font-size:12px;">${state}</span></td>
+        <td>${safeText(row.lead)}</td>
+        <td style="font-family:monospace;font-weight:700;">${safeText(row.lan_uid)}</td>
+        <td>${safeText(row.hostname)}</td>
+        <td>${safeText(row.local_ip)}</td>
+        <td>${safeText(row.run_mode || 'web')} : ${safeText(String(row.web_port || 9173))}</td>
+        <td>${safeText(row.app_version || '-')}</td>
+      `;
+      historyBody.appendChild(tr);
+    }
+  };
+
+  loadLeads().then(() => Promise.all([fetchAgents(), fetchAgentHistory()])).catch(() => {
+    fetchAgents();
+    fetchAgentHistory();
+  });
+  qs('agents-apply-btn').onclick = fetchAgents;
+  qs('agents-refresh-btn').onclick = fetchAgents;
+  qs('agents-history-refresh-btn').onclick = fetchAgentHistory;
+  ftpForm.addEventListener('submit', submitFtpCreate);
+  ftpMacInput.addEventListener('input', () => {
+    if (ftpCreatePathDirty) return;
+    ftpPathInput.value = defaultScanFolderName(ftpMacInput.value, ftpCreateFallbackName);
+  });
+  ftpPathInput.addEventListener('input', () => {
+    ftpCreatePathDirty = true;
+  });
+  ftpModal.addEventListener('click', (event) => {
+    if (event.target === ftpModal) {
+      closeFtpCreateModal();
+    }
+  });
+  ftpModal.querySelectorAll('[data-ftp-modal-close]').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', closeFtpCreateModal);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && ftpModal.classList.contains('open')) {
+      closeFtpCreateModal();
+    }
+  });
+  qs('agents-history-export-btn').onclick = () => {
+    const params = new URLSearchParams({
+      lead: qs('agents-filter-lead').value,
+      lan_uid: qs('agents-filter-lan').value,
+      status: qs('agents-filter-status').value,
+      limit: '5000'
+    });
+    window.location.href = `/api/agents/history/export?${params.toString()}`;
+  };
+});
+</script>
+{% endblock %}

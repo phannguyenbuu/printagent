@@ -1,58 +1,19 @@
-import { useEffect, useMemo, useCallback, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useRepairStore } from '../stores/repairStore';
+import { useNavigate } from 'react-router-dom';
+
+import { mockGetUserName } from '../api/mockApi';
+import { PullToRefresh } from '../components/layout/PullToRefresh';
+import { RequestCard } from '../components/requests/RequestCard';
+import { RequestLocationBlock } from '../components/requests/RequestLocationBlock';
+import { ALL_STATUSES, STATUS_LABELS, STATUS_SORT_ORDER } from '../components/requests/repairVisuals';
+import { AnimatedList } from '../components/ui/AnimatedList';
+import { EmptyState, PageLoading } from '../components/ui/PageState';
+import { filterRequests } from '../services/filterService';
 import { useAuthStore } from '../stores/authStore';
 import { useLocationStore } from '../stores/locationStore';
-import { filterRequests } from '../services/filterService';
-import { mockGetUserName } from '../api/mockApi';
-import { GlowCard } from '../components/ui/GlowCard';
-import { AnimatedList } from '../components/ui/AnimatedList';
-import { LoadingSpinner } from '../components/ui/LoadingSpinner';
-import { PullToRefresh } from '../components/layout/PullToRefresh';
-import { WorkspaceBadge } from '../components/ui/WorkspaceBadge';
-import type { RepairStatus, Priority } from '../types/repair';
-
-const STATUS_COLORS: Record<RepairStatus, string> = {
-  new: 'var(--color-primary)',
-  accepted: 'var(--color-secondary)',
-  in_progress: 'var(--color-warning)',
-  completed: 'var(--color-success)',
-  cancelled: 'var(--color-error)',
-};
-
-const STATUS_LABELS: Record<RepairStatus, string> = {
-  new: 'Mới tạo',
-  accepted: 'Đã tiếp nhận',
-  in_progress: 'Đang xử lý',
-  completed: 'Hoàn thành',
-  cancelled: 'Đã hủy',
-};
-
-const PRIORITY_COLORS: Record<Priority, string> = {
-  critical: 'var(--color-error)',
-  high: 'var(--color-warning)',
-  medium: 'var(--color-primary)',
-  low: 'var(--color-text-secondary)',
-};
-
-const PRIORITY_LABELS: Record<Priority, string> = {
-  critical: 'Khẩn cấp',
-  high: 'Cao',
-  medium: 'Trung bình',
-  low: 'Thấp',
-};
-
-const ALL_STATUSES: RepairStatus[] = ['new', 'accepted', 'in_progress', 'completed', 'cancelled'];
-
-// Status sort order: new & in_progress first
-const STATUS_SORT_ORDER: Record<RepairStatus, number> = {
-  new: 0,
-  in_progress: 1,
-  accepted: 2,
-  completed: 3,
-  cancelled: 4,
-};
+import { useRepairStore } from '../stores/repairStore';
+import type { RepairStatus } from '../types/repair';
 
 function removeDiacritics(str: string): string {
   return str
@@ -63,26 +24,36 @@ function removeDiacritics(str: string): string {
     .toLowerCase();
 }
 
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleDateString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export function RequestListPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
-  const { requests, loading, fetchRequests, filters, setFilters } = useRepairStore();
+  const { requests, loading, fetchRequests, setFilters } = useRepairStore();
   const { locations, fetchLocations } = useLocationStore();
 
   const [statusFilter, setStatusFilter] = useState<RepairStatus | ''>('');
-  const [locationFilter, setLocationFilter] = useState<string>('');
+  const [locationFilter, setLocationFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [locationSearchQuery, setLocationSearchQuery] = useState('');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const locationPickerRef = useRef<HTMLDivElement>(null);
 
-  // Close location dropdown on outside click
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (locationPickerRef.current && !locationPickerRef.current.contains(e.target as Node)) {
         setShowLocationDropdown(false);
       }
     }
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
@@ -93,22 +64,28 @@ export function RequestListPage() {
   }, [fetchRequests, fetchLocations]);
 
   useEffect(() => {
-    const newFilters: typeof filters = {};
-    if (statusFilter) newFilters.status = statusFilter;
-    if (locationFilter) newFilters.locationId = locationFilter;
-    setFilters(newFilters);
-  }, [statusFilter, locationFilter, setFilters]);
+    const nextFilters: { status?: RepairStatus; locationId?: string } = {};
+    if (statusFilter) nextFilters.status = statusFilter;
+    if (locationFilter) nextFilters.locationId = locationFilter;
+    setFilters(nextFilters);
+  }, [locationFilter, setFilters, statusFilter]);
+
+  const locationMap = useMemo(
+    () => new Map(locations.map((location) => [location.id, location])),
+    [locations],
+  );
 
   const filteredLocations = useMemo(() => {
     if (!locationSearchQuery.trim()) return locations;
-    const q = removeDiacritics(locationSearchQuery.trim());
-    return locations.filter((loc) => {
-      const name = removeDiacritics(loc.name);
-      const addr = removeDiacritics(loc.address);
-      const phone = loc.phone ? removeDiacritics(loc.phone) : '';
-      return name.includes(q) || addr.includes(q) || phone.includes(q);
+
+    const query = removeDiacritics(locationSearchQuery.trim());
+    return locations.filter((location) => {
+      const name = removeDiacritics(location.name);
+      const address = removeDiacritics(location.address);
+      const phone = location.phone ? removeDiacritics(location.phone) : '';
+      return name.includes(query) || address.includes(query) || phone.includes(query);
     });
-  }, [locations, locationSearchQuery]);
+  }, [locationSearchQuery, locations]);
 
   const filteredAndSortedRequests = useMemo(() => {
     const activeFilters: { status?: RepairStatus; locationId?: string } = {};
@@ -117,25 +94,35 @@ export function RequestListPage() {
 
     let filtered = filterRequests(requests, activeFilters);
 
-    // Text search
-    if (searchQuery.trim()) {
-      const q = removeDiacritics(searchQuery.trim());
-      filtered = filtered.filter((req) => {
-        const machine = removeDiacritics(req.machineName);
-        const desc = removeDiacritics(req.description);
-        const note = removeDiacritics(req.note ?? '');
-        const assignee = req.assignedTo ? removeDiacritics(mockGetUserName(req.assignedTo)) : '';
-        return machine.includes(q) || desc.includes(q) || note.includes(q) || assignee.includes(q);
+    if (user && user.role !== 'admin') {
+      filtered = filtered.filter((request) => {
+        if (user.role === 'technician') {
+          return request.assignedTo === user.id || (request.status === 'new' && !request.assignedTo);
+        }
+        if (user.role === 'supplier') {
+          return request.createdBy === user.id;
+        }
+        return true;
       });
     }
 
-    // Sort: status priority first, then by createdAt desc within same status group
+    if (searchQuery.trim()) {
+      const query = removeDiacritics(searchQuery.trim());
+      filtered = filtered.filter((request) => {
+        const machine = removeDiacritics(request.machineName);
+        const description = removeDiacritics(request.description);
+        const note = removeDiacritics(request.note ?? '');
+        const assignee = request.assignedTo ? removeDiacritics(mockGetUserName(request.assignedTo)) : '';
+        return machine.includes(query) || description.includes(query) || note.includes(query) || assignee.includes(query);
+      });
+    }
+
     return [...filtered].sort((a, b) => {
       const statusDiff = STATUS_SORT_ORDER[a.status] - STATUS_SORT_ORDER[b.status];
       if (statusDiff !== 0) return statusDiff;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-  }, [requests, statusFilter, locationFilter, searchQuery]);
+  }, [locationFilter, requests, searchQuery, statusFilter, user]);
 
   const handleRefresh = useCallback(async () => {
     await fetchRequests();
@@ -144,11 +131,7 @@ export function RequestListPage() {
   const canCreateRequest = user?.role === 'supplier' || user?.role === 'technician';
 
   if (loading && requests.length === 0) {
-    return (
-      <div style={styles.loadingContainer}>
-        <LoadingSpinner size="lg" />
-      </div>
-    );
+    return <PageLoading message="Đang tải yêu cầu..." />;
   }
 
   return (
@@ -162,7 +145,6 @@ export function RequestListPage() {
         <h1 style={styles.title}>Yêu cầu sửa chữa</h1>
       </div>
 
-      {/* Search */}
       <input
         type="text"
         value={searchQuery}
@@ -172,7 +154,6 @@ export function RequestListPage() {
         aria-label="Tìm kiếm yêu cầu"
       />
 
-      {/* Filter Bar */}
       <div style={styles.filterBar}>
         <select
           value={statusFilter}
@@ -181,11 +162,12 @@ export function RequestListPage() {
           aria-label="Lọc theo trạng thái"
         >
           <option value="">Tất cả trạng thái</option>
-          {ALL_STATUSES.map((s) => (
-            <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+          {ALL_STATUSES.map((status) => (
+            <option key={status} value={status}>{STATUS_LABELS[status]}</option>
           ))}
         </select>
-        <div ref={locationPickerRef} style={{ flex: 1, position: 'relative' }}>
+
+        <div ref={locationPickerRef} style={styles.locationPicker}>
           <input
             type="text"
             value={locationSearchQuery}
@@ -197,11 +179,16 @@ export function RequestListPage() {
               }
             }}
             onFocus={() => setShowLocationDropdown(true)}
-            placeholder={locationFilter ? locations.find((l) => l.id === locationFilter)?.name ?? 'Tất cả địa điểm' : '📍 Tất cả địa điểm'}
+            placeholder={
+              locationFilter
+                ? locations.find((location) => location.id === locationFilter)?.name ?? 'Tất cả địa điểm'
+                : '📍 Tất cả địa điểm'
+            }
             style={styles.select}
             aria-label="Lọc theo địa điểm"
             autoComplete="off"
           />
+
           {showLocationDropdown && (
             <div style={styles.locationDropdown}>
               <div
@@ -215,30 +202,33 @@ export function RequestListPage() {
                   setShowLocationDropdown(false);
                 }}
               >
-                <span style={{ fontSize: '0.85rem', color: 'var(--color-primary)' }}>Tất cả địa điểm</span>
+                <span style={styles.locationDropdownPrimary}>Tất cả địa điểm</span>
               </div>
-              {filteredLocations.map((loc) => (
+
+              {filteredLocations.map((location) => (
                 <div
-                  key={loc.id}
+                  key={location.id}
                   style={{
                     ...styles.locationDropdownItem,
-                    background: locationFilter === loc.id ? 'rgba(0, 212, 255, 0.1)' : 'transparent',
+                    background: locationFilter === location.id ? 'rgba(0, 212, 255, 0.1)' : 'transparent',
                   }}
                   onClick={() => {
-                    setLocationFilter(loc.id);
-                    setLocationSearchQuery(loc.name);
+                    setLocationFilter(location.id);
+                    setLocationSearchQuery(location.name);
                     setShowLocationDropdown(false);
                   }}
                 >
-                  <div style={{ fontSize: '0.85rem', color: 'var(--color-text)', fontWeight: 500 }}>{loc.name}</div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--color-text-secondary)' }}>
-                    {loc.address}{loc.phone ? ` · ${loc.phone}` : ''}
+                  <div style={styles.locationDropdownName}>{location.name}</div>
+                  <div style={styles.locationDropdownMeta}>
+                    {location.address}
+                    {location.phone ? ` · ${location.phone}` : ''}
                   </div>
                 </div>
               ))}
+
               {filteredLocations.length === 0 && (
                 <div style={styles.locationDropdownItem}>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Không tìm thấy</span>
+                  <span style={styles.locationDropdownEmpty}>Không tìm thấy</span>
                 </div>
               )}
             </div>
@@ -248,66 +238,34 @@ export function RequestListPage() {
 
       <PullToRefresh onRefresh={handleRefresh}>
         {filteredAndSortedRequests.length === 0 ? (
-          <p style={styles.emptyText}>Không có yêu cầu sửa chữa nào.</p>
+          <EmptyState message="Không có yêu cầu sửa chữa nào." centered />
         ) : (
           <AnimatedList>
-            {filteredAndSortedRequests.map((req) => (
-              <GlowCard key={req.id} onClick={() => navigate(`/requests/${req.id}`)}>
-                <div style={styles.cardHeader}>
-                  <span style={styles.machineName}>{req.machineName}</span>
-                  <span
-                    style={{
-                      ...styles.badge,
-                      background: `${STATUS_COLORS[req.status]}20`,
-                      color: STATUS_COLORS[req.status],
-                      borderColor: `${STATUS_COLORS[req.status]}40`,
-                    }}
-                  >
-                    {STATUS_LABELS[req.status]}
-                  </span>
-                </div>
-                <WorkspaceBadge workspaceId={req.workspaceId} />
-                <div style={styles.cardMeta}>
-                  <span
-                    style={{
-                      ...styles.priorityBadge,
-                      background: `${PRIORITY_COLORS[req.priority]}20`,
-                      color: PRIORITY_COLORS[req.priority],
-                      borderColor: `${PRIORITY_COLORS[req.priority]}40`,
-                    }}
-                  >
-                    {PRIORITY_LABELS[req.priority]}
-                  </span>
-                </div>
-                {/* Location info */}
-                {(() => {
-                  const loc = locations.find((l) => l.id === req.locationId);
-                  return loc ? (
-                    <div style={styles.locationInfo}>
-                      <span style={styles.locationName}>📍 {loc.name}</span>
-                      {loc.address && <span style={styles.locationDetail}>{loc.address}</span>}
-                      {loc.phone && <span style={styles.locationDetail}>📞 {loc.phone}</span>}
-                    </div>
-                  ) : (
-                    <span style={styles.locationDetail}>📍 {req.locationId}</span>
-                  );
-                })()}
-                <p style={styles.description}>
-                  {req.description.length > 80 ? `${req.description.slice(0, 80)}…` : req.description}
-                </p>
-                <div style={styles.cardFooter}>
-                  <span style={styles.dateText}>
-                    {new Date(req.createdAt).toLocaleDateString('vi-VN', {
-                      day: '2-digit', month: '2-digit', year: 'numeric',
-                      hour: '2-digit', minute: '2-digit',
-                    })}
-                  </span>
-                  {req.assignedTo && (
-                    <span style={styles.assigneeText}>👤 {mockGetUserName(req.assignedTo)}</span>
-                  )}
-                </div>
-              </GlowCard>
-            ))}
+            {filteredAndSortedRequests.map((request) => {
+              const location = locationMap.get(request.locationId);
+              return (
+                <RequestCard
+                  key={request.id}
+                  request={request}
+                  onClick={() => navigate(`/requests/${request.id}`)}
+                  locationContent={
+                    <RequestLocationBlock
+                      location={location}
+                      fallbackLabel={`📍 ${request.locationId}`}
+                    />
+                  }
+                  description={request.description}
+                  footer={
+                    <>
+                      <span style={styles.dateText}>{formatDateTime(request.createdAt)}</span>
+                      {request.assignedTo && (
+                        <span style={styles.assigneeText}>👤 {mockGetUserName(request.assignedTo)}</span>
+                      )}
+                    </>
+                  }
+                />
+              );
+            })}
           </AnimatedList>
         )}
       </PullToRefresh>
@@ -340,13 +298,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: '16px',
   },
-  loadingContainer: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+  header: {
+    marginBottom: '4px',
   },
-  header: { marginBottom: '4px' },
   title: {
     fontSize: '1.5rem',
     fontWeight: 700,
@@ -361,10 +315,17 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '12px 14px',
     fontSize: '0.9rem',
     width: '100%',
-    boxSizing: 'border-box' as const,
+    boxSizing: 'border-box',
     outline: 'none',
   },
-  filterBar: { display: 'flex', gap: '8px' },
+  filterBar: {
+    display: 'flex',
+    gap: '8px',
+  },
+  locationPicker: {
+    flex: 1,
+    position: 'relative',
+  },
   select: {
     flex: 1,
     background: 'var(--color-surface)',
@@ -374,84 +335,21 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 12px',
     fontSize: '0.85rem',
     outline: 'none',
-    appearance: 'auto' as React.CSSProperties['appearance'],
-  },
-  emptyText: {
-    color: 'var(--color-text-secondary)',
-    fontSize: '0.875rem',
-    textAlign: 'center',
-    padding: '40px 0',
-  },
-  cardHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '6px',
-  },
-  machineName: {
-    fontSize: '0.95rem',
-    fontWeight: 600,
-    color: 'var(--color-text)',
-  },
-  badge: {
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    padding: '3px 8px',
-    borderRadius: '6px',
-    border: '1px solid',
-    whiteSpace: 'nowrap',
-  },
-  cardMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginBottom: '6px',
-  },
-  priorityBadge: {
-    fontSize: '0.65rem',
-    fontWeight: 600,
-    padding: '2px 6px',
-    borderRadius: '4px',
-    border: '1px solid',
-  },
-  description: {
-    fontSize: '0.8rem',
-    color: 'var(--color-text-secondary)',
-    margin: '0 0 6px',
-    lineHeight: 1.4,
+    appearance: 'auto',
+    width: '100%',
+    boxSizing: 'border-box',
   },
   dateText: {
     fontSize: '0.75rem',
     color: 'var(--color-text-secondary)',
-  },
-  cardFooter: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
   },
   assigneeText: {
     fontSize: '0.75rem',
     color: 'var(--color-secondary)',
     fontWeight: 500,
   },
-  locationInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-    marginBottom: '6px',
-  },
-  locationName: {
-    fontSize: '0.8rem',
-    color: 'var(--color-text)',
-    fontWeight: 500,
-  },
-  locationDetail: {
-    fontSize: '0.75rem',
-    color: 'var(--color-text-secondary)',
-    paddingLeft: '20px',
-  },
   locationDropdown: {
-    position: 'absolute' as const,
+    position: 'absolute',
     top: '100%',
     left: 0,
     right: 0,
@@ -459,13 +357,30 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--color-surface-light)',
     borderRadius: '0 0 8px 8px',
     maxHeight: '200px',
-    overflowY: 'auto' as const,
+    overflowY: 'auto',
     zIndex: 20,
   },
   locationDropdownItem: {
     padding: '8px 12px',
     cursor: 'pointer',
     borderBottom: '1px solid var(--color-surface-light)',
+  },
+  locationDropdownPrimary: {
+    fontSize: '0.85rem',
+    color: 'var(--color-primary)',
+  },
+  locationDropdownName: {
+    fontSize: '0.85rem',
+    color: 'var(--color-text)',
+    fontWeight: 500,
+  },
+  locationDropdownMeta: {
+    fontSize: '0.7rem',
+    color: 'var(--color-text-secondary)',
+  },
+  locationDropdownEmpty: {
+    fontSize: '0.8rem',
+    color: 'var(--color-text-secondary)',
   },
   fab: {
     position: 'fixed',

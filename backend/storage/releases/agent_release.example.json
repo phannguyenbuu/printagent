@@ -1,0 +1,10 @@
+{
+  "version": "1.3.31",
+  "download_url": "/static/releases/printagent.exe",
+  "published_at": "2026-03-26T00:00:00+07:00",
+  "mandatory": false,
+  "channel": "stable",
+  "sha256": "C273952ED2ACD1A32418B103430B2AFC2D7D3D1A20CE6651350BBDD9C7BB2853",
+  "size": 14863648,
+  "notes": "Config-free agent defaults; LAN UID derived from lead_gateway_mac_gateway_ip; report FTP sites and ports to backend; CRUD FTP from server through polling; add FTP CRUD UI on agent; update check every 300s; mandatory relaunch after staging with hidden VBS helper"
+}

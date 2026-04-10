@@ -35,6 +35,15 @@ export function AgentPage() {
   const [expandedCopier, setExpandedCopier] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Pagination
+  const [agentPage, setAgentPage] = useState(0);
+  const [copierPage, setCopierPage] = useState(0);
+  const [pageSize, setPageSize] = useState(5);
+  const pagedAgents = useMemo(() => agents.slice(agentPage * pageSize, (agentPage + 1) * pageSize), [agents, agentPage, pageSize]);
+  const pagedCopiers = useMemo(() => copiers.slice(copierPage * pageSize, (copierPage + 1) * pageSize), [copiers, copierPage, pageSize]);
+  const agentTotalPages = Math.ceil(agents.length / pageSize);
+  const copierTotalPages = Math.ceil(copiers.length / pageSize);
+
   // Copier scan state
   const [scanProgress, setScanProgress] = useState<'idle' | 'scanning' | 'done'>('idle');
   const [scanFound, setScanFound] = useState<{ ip: string; mac: string }[]>([]);
@@ -428,7 +437,7 @@ export function AgentPage() {
 
       {/* Tab switcher */}
       <div style={styles.tabBar}>
-        {([['agents', '🖥️ Máy tính'], ['copiers', '🖨️ Photocopy'], ['downloads', '📥 Tải Agent']] as [LanTab, string][]).map(([tab, label]) => (
+        {([['agents', '🖥️ Máy tính'], ['copiers', '🖨️ Photocopy']] as [LanTab, string][]).map(([tab, label]) => (
           <button
             key={tab}
             style={{
@@ -486,9 +495,8 @@ export function AgentPage() {
               </div>
             </GlowCard>
 
-            {/* Agent List */}
             <AnimatedList>
-              {agents.map((agent) => (
+              {pagedAgents.map((agent) => (
                 <GlowCard key={agent.id}>
                   <div style={styles.agentHeader}>
                     <div style={styles.agentInfo}>
@@ -603,7 +611,7 @@ export function AgentPage() {
               </div>
             </div>
             <AnimatedList>
-              {copiers.map((copier) => {
+              {pagedCopiers.map((copier) => {
                 const isExpanded = expandedCopier === copier.id;
                 const isOnline = copier.status === 'online';
                 return (
@@ -735,7 +743,7 @@ export function AgentPage() {
                       <span style={styles.configSub}>Phát hành: 10/03/2026 · 12.5 MB</span>
                     </div>
                     <a href="https://github.com/nguyenbuu/printagent/releases/download/v1.2.0/PrintAgent_Setup.exe"
-                       style={{ ...styles.bulkSecondary, flex: 'none', background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none', textAlign: 'center' }}>
+                      style={{ ...styles.bulkSecondary, flex: 'none', background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none', textAlign: 'center' }}>
                       Tải về .exe
                     </a>
                   </div>
@@ -767,6 +775,51 @@ export function AgentPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Floating paging toolbar */}
+      {(lanTab === 'agents' || lanTab === 'copiers') && (
+        <div style={{
+          position: 'fixed', bottom: 70, left: 0, right: 0, zIndex: 85,
+          background: 'color-mix(in srgb, var(--color-surface) 92%, transparent)',
+          backdropFilter: 'blur(12px)',
+          borderTop: '1px solid var(--color-surface-light)',
+          padding: '6px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+        }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+            {lanTab === 'agents'
+              ? `${Math.min(agentPage * pageSize + 1, agents.length)}–${Math.min((agentPage + 1) * pageSize, agents.length)} / ${agents.length} máy tính`
+              : `${Math.min(copierPage * pageSize + 1, copiers.length)}–${Math.min((copierPage + 1) * pageSize, copiers.length)} / ${copiers.length} photo`
+            }
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setAgentPage(0); setCopierPage(0); }}
+              style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-surface-light)', borderRadius: '6px', padding: '4px 6px', fontSize: '0.75rem' }}
+            >
+              {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / trang</option>)}
+            </select>
+            {lanTab === 'agents' ? (
+              <>
+                <button disabled={agentPage === 0} onClick={() => setAgentPage(p => p - 1)}
+                  style={{ ...styles.smallBtn, padding: '4px 10px', opacity: agentPage === 0 ? 0.4 : 1 }}>‹</button>
+                <span style={{ fontSize: '0.8rem', color: 'var(--color-text)', fontWeight: 600, minWidth: 40, textAlign: 'center' }}>{agentPage + 1}/{agentTotalPages}</span>
+                <button disabled={agentPage >= agentTotalPages - 1} onClick={() => setAgentPage(p => p + 1)}
+                  style={{ ...styles.smallBtn, padding: '4px 10px', opacity: agentPage >= agentTotalPages - 1 ? 0.4 : 1 }}>›</button>
+              </>
+            ) : (
+              <>
+                <button disabled={copierPage === 0} onClick={() => setCopierPage(p => p - 1)}
+                  style={{ ...styles.smallBtn, padding: '4px 10px', opacity: copierPage === 0 ? 0.4 : 1 }}>‹</button>
+                <span style={{ fontSize: '0.8rem', color: 'var(--color-text)', fontWeight: 600, minWidth: 40, textAlign: 'center' }}>{copierPage + 1}/{copierTotalPages}</span>
+                <button disabled={copierPage >= copierTotalPages - 1} onClick={() => setCopierPage(p => p + 1)}
+                  style={{ ...styles.smallBtn, padding: '4px 10px', opacity: copierPage >= copierTotalPages - 1 ? 0.4 : 1 }}>›</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal */}
       {modal && (
@@ -826,7 +879,7 @@ export function AgentPage() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={styles.configLabel}>PrintAgent v1.2.0 (Ổn định)</span>
                     <a href="https://github.com/nguyenbuu/printagent/releases/download/v1.2.0/PrintAgent_Setup.exe"
-                       style={{ ...styles.smallBtn, background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none' }}>
+                      style={{ ...styles.smallBtn, background: 'var(--color-primary)', color: 'white', border: 'none', textDecoration: 'none' }}>
                       Tải .exe
                     </a>
                   </div>
@@ -1003,11 +1056,11 @@ export function AgentPage() {
                   {actionLoading
                     ? <LoadingSpinner size="sm" />
                     : <>
-                        <AnimatedButton onClick={handleSaveCopierConfig} disabled={!configIp.trim() || !configMac.trim()}>
-                          💾 Lưu cấu hình
-                        </AnimatedButton>
-                        <AnimatedButton onClick={closeModal} variant="secondary">Hủy</AnimatedButton>
-                      </>
+                      <AnimatedButton onClick={handleSaveCopierConfig} disabled={!configIp.trim() || !configMac.trim()}>
+                        💾 Lưu cấu hình
+                      </AnimatedButton>
+                      <AnimatedButton onClick={closeModal} variant="secondary">Hủy</AnimatedButton>
+                    </>
                   }
                 </div>
               </div>
@@ -1455,7 +1508,7 @@ export function AgentPage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { minHeight: '100vh', padding: '20px 16px', paddingBottom: '100px', display: 'flex', flexDirection: 'column', gap: '16px' },
+  container: { minHeight: '100vh', padding: '20px 16px', paddingBottom: '150px', display: 'flex', flexDirection: 'column', gap: '16px' },
   loadingContainer: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: '1.5rem', fontWeight: 700, color: 'var(--color-primary)', margin: 0 },
   subtitle: { fontSize: '0.85rem', color: 'var(--color-text-secondary)', margin: 0 },

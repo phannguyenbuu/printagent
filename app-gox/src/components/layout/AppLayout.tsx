@@ -20,6 +20,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       style={{
         minHeight: '100vh',
         paddingBottom: 70,
+        paddingTop: hasWorkspaces ? 34 : 0,
         position: 'relative',
       }}
     >
@@ -53,7 +54,7 @@ const wsBarStyles: Record<string, React.CSSProperties> = {
     padding: '6px 16px', gap: '8px',
     background: 'color-mix(in srgb, var(--color-primary) 8%, var(--color-surface))',
     borderBottom: '1px solid var(--color-surface-light)',
-    position: 'sticky', top: 0, zIndex: 90,
+    position: 'fixed', top: 0, left: 0, right: 0, zIndex: 90,
   },
   names: {
     display: 'flex', alignItems: 'center', gap: '0',

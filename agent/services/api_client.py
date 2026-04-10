@@ -24,7 +24,6 @@ class APIClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
         if config.user_token:
             self.session.headers.update({"Authorization": f"Bearer {config.user_token}"})
 

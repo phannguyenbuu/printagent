@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div style="max-width: 920px;">
+    <label style="display:block;font-weight:700;margin-bottom:8px;">Google Drive</label>
+    <input
+      type="text"
+      value="{{ google_drive_url }}"
+      readonly
+      style="width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;color:#0f172a;font:inherit;"
+    />
+  </div>
+</section>
+{% endblock %}

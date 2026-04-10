@@ -1,0 +1,23 @@
+{
+    "include": [
+        "backend/**/*.py",
+        "*.py"
+    ],
+    "exclude": [
+        "**/venv/**",
+        "**/__pycache__/**",
+        "**/.git/**"
+    ],
+    "pythonVersion": "3.14",
+    "pythonPlatform": "Windows",
+    "pythonPath": "C:/Python314/python.exe",
+    "venvPath": "backend",
+    "venv": "venv",
+    "extraPaths": [
+        "backend",
+        "C:/Python314/Lib/site-packages",
+        "C:/Users/nguyenbuu.DESKTOP-TOEFTR1/AppData/Roaming/Python/Python314/site-packages",
+        "backend/venv/Lib/site-packages"
+    ],
+    "typeCheckingMode": "off"
+}

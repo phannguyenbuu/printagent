@@ -1,19 +1,162 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import socket
+import subprocess
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 import requests
 
 from app.modules.ricoh.base import RicohServiceBase, AddressEntry, ADDRESS_DEBUG_LOG_FILE
 from app.services.api_client import Printer
+from app.services.runtime import default_ftp_root, no_window_subprocess_kwargs
+from app.services.scan_drop import build_drop_folder_metadata
 
 LOGGER = logging.getLogger(__name__)
 
 class RicohAddressBookMixin(RicohServiceBase):
+    @staticmethod
+    def _sanitize_ftp_site_name(value: str) -> str:
+        text = str(value or "").strip().replace(" ", "_")
+        text = re.sub(r"[^A-Za-z0-9_-]", "", text)
+        return text[:48]
+
+    @staticmethod
+    def _normalize_ipv4(value: str) -> str:
+        text = str(value or "").strip()
+        if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
+            return ""
+        try:
+            parts = [int(part) for part in text.split(".")]
+        except Exception:  # noqa: BLE001
+            return ""
+        if any(part < 0 or part > 255 for part in parts):
+            return ""
+        if parts[0] in {0, 127}:
+            return ""
+        if parts[0] == 169 and parts[1] == 254:
+            return ""
+        if parts == [255, 255, 255, 255]:
+            return ""
+        return ".".join(str(part) for part in parts)
+
+    @staticmethod
+    def _ipv4_scope_score(value: str) -> int:
+        text = RicohAddressBookMixin._normalize_ipv4(value)
+        if not text:
+            return -1
+        octets = [int(part) for part in text.split(".")]
+        if octets[0] == 10:
+            return 300
+        if octets[0] == 192 and octets[1] == 168:
+            return 400
+        if octets[0] == 172 and 16 <= octets[1] <= 31:
+            return 350
+        return 200
+
+    @classmethod
+    def _resolve_local_ipv4_candidates(cls) -> list[str]:
+        candidates: list[str] = []
+
+        def _push(value: str) -> None:
+            text = cls._normalize_ipv4(value)
+            if text and text not in candidates:
+                candidates.append(text)
+
+        hostname = socket.gethostname()
+        try:
+            host_info = socket.gethostbyname_ex(hostname)
+            for value in host_info[2]:
+                _push(str(value or "").strip())
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            for info in socket.getaddrinfo(hostname, None, family=socket.AF_INET):
+                _push(str(info[4][0] or "").strip())
+        except Exception:  # noqa: BLE001
+            pass
+
+        for probe_ip in ("8.8.8.8", "1.1.1.1", "192.168.1.1"):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect((probe_ip, 80))
+                    _push(sock.getsockname()[0])
+            except Exception:  # noqa: BLE001
+                continue
+
+        try:
+            script = r"""
+$ErrorActionPreference='SilentlyContinue'
+Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -and $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '0.0.0.0' } |
+  Select-Object IPAddress |
+  ConvertTo-Json -Depth 3
+"""
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=True,
+                **no_window_subprocess_kwargs(),
+            )
+            payload = json.loads(result.stdout or "[]")
+            if isinstance(payload, dict):
+                payload = [payload]
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    _push(str(item.get("IPAddress", "") or "").strip())
+        except Exception:  # noqa: BLE001
+            pass
+
+        return sorted(candidates, key=cls._ipv4_scope_score, reverse=True)
+
+    @classmethod
+    def resolve_ftp_host_ip(cls, printer_ip: str = "") -> dict[str, Any]:
+        normalized_printer_ip = cls._normalize_ipv4(printer_ip)
+        candidates = cls._resolve_local_ipv4_candidates()
+        if normalized_printer_ip:
+            subnet_prefix = ".".join(normalized_printer_ip.split(".")[:3])
+            same_subnet = [item for item in candidates if ".".join(item.split(".")[:3]) == subnet_prefix]
+            if same_subnet:
+                return {
+                    "ip": same_subnet[0],
+                    "strategy": "same-subnet",
+                    "candidates": candidates,
+                    "warning": "",
+                }
+            if candidates:
+                fallback_ip = candidates[0]
+                return {
+                    "ip": fallback_ip,
+                    "strategy": "fallback-other-local-ip",
+                    "candidates": candidates,
+                    "warning": (
+                        f'No local FTP IP on the same subnet as printer {normalized_printer_ip}. '
+                        f'Using {fallback_ip} instead; choose another FTP/agent if the printer cannot reach it.'
+                    ),
+                }
+        if candidates:
+            return {
+                "ip": candidates[0],
+                "strategy": "best-local-ip",
+                "candidates": candidates,
+                "warning": "",
+            }
+        return {
+            "ip": "127.0.0.1",
+            "strategy": "loopback-fallback",
+            "candidates": [],
+            "warning": "No valid local LAN IP found for FTP; defaulted to 127.0.0.1. Choose another FTP/agent.",
+        }
+
     def read_address_list_with_client(self, session: requests.Session, printer: Printer) -> str:
         targets = [
             "/web/entry/en/address/adrsList.cgi?modeIn=LIST_ALL",
@@ -273,42 +416,124 @@ class RicohAddressBookMixin(RicohServiceBase):
             "timestamp": self._timestamp(),
         }
 
-    def setup_scan_destination(self, printer: Printer, username: str, fields: dict[str, Any] | None = None) -> dict[str, Any]:
+    def setup_scan_destination(
+        self,
+        printer: Printer | None,
+        username: str,
+        fields: dict[str, Any] | None = None,
+        ftp_site_name: str = "",
+        ftp_root: str | Path | None = None,
+        ftp_port: int = 2121,
+        ftp_user: str = "",
+        ftp_password: str = "",
+    ) -> dict[str, Any]:
         safe_username = re.sub(r"[^A-Za-z0-9_-]", "", str(username or "").strip().replace(" ", "_"))[:48] or "scan"
-        ftp_name = f"ftp_{safe_username}"[:48]
-        ftp_root = f"storage/ftp/{ftp_name}"
-        ftp_res = self.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root, port=2121)
+        ftp_name = self._sanitize_ftp_site_name(ftp_site_name or f"ftp_{safe_username}") or f"ftp_{safe_username}"
+        ftp_root_path = Path(ftp_root) if ftp_root is not None else default_ftp_root(ftp_name)
+        ftp_res = self.share_manager.create_ftp_site(
+            site_name=ftp_name,
+            local_path=ftp_root_path,
+            port=int(ftp_port or 2121),
+            ftp_user=ftp_user,
+            ftp_password=ftp_password,
+        )
         if not ftp_res.get("ok"):
             return ftp_res
+        ftp_root_path = Path(str(ftp_res.get("physical_path", "") or ftp_root_path))
+        ftp_user = str(ftp_res.get("ftp_user", "") or "")
+        ftp_password = str(ftp_res.get("ftp_password", "") or "")
+        scan_dir_added = False
+        scan_dirs: list[str] = []
+        app_config = getattr(self, "_config", None)
+        if app_config is not None and hasattr(app_config, "ensure_scan_dir"):
+            try:
+                scan_dir_added, scan_dirs = app_config.ensure_scan_dir(ftp_root_path)
+            except Exception:  # noqa: BLE001
+                scan_dir_added = False
+                scan_dirs = []
 
-        hostname = socket.gethostname()
-        try:
-            local_ip = socket.gethostbyname(hostname)
-        except Exception:  # noqa: BLE001
-            local_ip = "127.0.0.1"
-        ftp_port = int(ftp_res.get("port") or 2121)
-        ftp_url = f"ftp://{local_ip}:{ftp_port}/"
+        ftp_host_info = self.resolve_ftp_host_ip(str(getattr(printer, "ip", "") or ""))
+        local_ip = str(ftp_host_info.get("ip", "") or "127.0.0.1")
+        ftp_ip_warning = str(ftp_host_info.get("warning", "") or "").strip()
+        ftp_port_value = int(ftp_res.get("port") or ftp_port or 2121)
+        ftp_url = f"ftp://{local_ip}:{ftp_port_value}/"
+        drop_folder = build_drop_folder_metadata(ftp_root_path, base_url=ftp_url)
+        ftp_upload_url = str(drop_folder.get("upload_url", "") or ftp_url)
+
+        if printer is None or not str(getattr(printer, "ip", "") or "").strip():
+            return {
+                "ok": True,
+                "ftp": ftp_res,
+                "printer": None,
+                "printer_setup_ok": False,
+                "ftp_url": ftp_url,
+                "ftp_upload_url": ftp_upload_url,
+                "ftp_upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+                "drop_folder_name": str(drop_folder.get("drop_folder_name", "") or ""),
+                "drop_relative_path": str(drop_folder.get("drop_relative_path", "") or ""),
+                "ftp_host_ip": local_ip,
+                "ftp_ip_candidates": list(ftp_host_info.get("candidates", []) or []),
+                "ftp_ip_strategy": str(ftp_host_info.get("strategy", "") or ""),
+                "warning": ftp_ip_warning,
+                "scan_dir_added": scan_dir_added,
+                "scan_dirs": scan_dirs,
+            }
 
         try:
             merged_fields = {"entryTypeIn": "1"}
             if isinstance(fields, dict):
                 merged_fields.update(fields)
+            if ftp_user:
+                merged_fields["folderAuthUserNameIn"] = ftp_user
+                merged_fields["folderAuthUserName"] = ftp_user
+            if ftp_password:
+                merged_fields["folderPasswordIn"] = ftp_password
+                merged_fields["wk_folderPasswordIn"] = ftp_password
+                merged_fields["folderPasswordConfirmIn"] = ftp_password
+                merged_fields["wk_folderPasswordConfirmIn"] = ftp_password
             wizard_res = self.create_address_user_wizard(
                 printer=printer,
                 name=f"Scan to {username}",
-                folder=ftp_url,
+                folder=ftp_upload_url,
                 fields=merged_fields,
             )
             return {
                 "ok": True,
                 "ftp": ftp_res,
                 "printer": wizard_res,
+                "printer_setup_ok": True,
                 "ftp_url": ftp_url,
+                "ftp_upload_url": ftp_upload_url,
+                "ftp_upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+                "drop_folder_name": str(drop_folder.get("drop_folder_name", "") or ""),
+                "drop_relative_path": str(drop_folder.get("drop_relative_path", "") or ""),
+                "ftp_host_ip": local_ip,
+                "ftp_ip_candidates": list(ftp_host_info.get("candidates", []) or []),
+                "ftp_ip_strategy": str(ftp_host_info.get("strategy", "") or ""),
+                "warning": ftp_ip_warning,
+                "scan_dir_added": scan_dir_added,
+                "scan_dirs": scan_dirs,
             }
         except Exception as e:
             LOGGER.exception("Auto-scan setup failed: %s", e)
+            warning_parts = []
+            if ftp_ip_warning:
+                warning_parts.append(ftp_ip_warning)
+            warning_parts.append(f"FTP created at {ftp_url}, but printer setup failed: {e}")
             return {
-                "ok": False,
-                "error": f"FTP created at {ftp_url}, but printer setup failed: {e}",
+                "ok": True,
+                "warning": " ".join(warning_parts).strip(),
                 "ftp": ftp_res,
+                "printer_setup_ok": False,
+                "printer_error": str(e),
+                "ftp_url": ftp_url,
+                "ftp_upload_url": ftp_upload_url,
+                "ftp_upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+                "drop_folder_name": str(drop_folder.get("drop_folder_name", "") or ""),
+                "drop_relative_path": str(drop_folder.get("drop_relative_path", "") or ""),
+                "ftp_host_ip": local_ip,
+                "ftp_ip_candidates": list(ftp_host_info.get("candidates", []) or []),
+                "ftp_ip_strategy": str(ftp_host_info.get("strategy", "") or ""),
+                "scan_dir_added": scan_dir_added,
+                "scan_dirs": scan_dirs,
             }

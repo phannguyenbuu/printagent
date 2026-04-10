@@ -5,6 +5,7 @@ import threading
 import time
 from typing import Any
 
+from app.config import AppConfig
 from app.modules.ricoh.base import RicohServiceBase
 from app.modules.ricoh.collector import RicohCollectorMixin
 from app.modules.ricoh.control import RicohControlMixin
@@ -25,9 +26,28 @@ class RicohService(
     Unified Ricoh printer service that coordinates polling, counters, 
     machine control, and address book management.
     """
-    def __init__(self, api_client: APIClient, interval_seconds: int = 60) -> None:
+    def __init__(self, api_client: APIClient, interval_seconds: int = 60, config: AppConfig | None = None) -> None:
         super().__init__(api_client, interval_seconds)
+        self._config = config
         self.share_manager = ShareManager()
+        self._sync_existing_ftp_scan_dirs()
+
+    def _sync_existing_ftp_scan_dirs(self) -> None:
+        if self._config is None:
+            return
+        try:
+            added = 0
+            for site in self.share_manager.list_ftp_sites():
+                path = str(site.get("path", "") or "").strip()
+                if not path:
+                    continue
+                changed, _ = self._config.ensure_scan_dir(path)
+                if changed:
+                    added += 1
+            if added > 0:
+                LOGGER.info("Registered FTP scan roots into polling.scan_dirs: added=%s", added)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to register existing FTP scan roots: %s", exc)
 
     def process_printers(self, printers: list[Printer], should_post: bool = True) -> list[dict[str, Any]]:
         results = []

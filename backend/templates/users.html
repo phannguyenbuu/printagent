@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header-row">
+    <h3>User Accounts</h3>
+    <div>
+      <button id="user-create-btn" class="filter-btn">Create User</button>
+      <button id="refresh-btn" class="filter-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="filter-board">
+    <div class="filter-group">
+      <label>Lead</label>
+      <select id="filter-lead">
+        <option value="">All Leads</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Username</label>
+      <input type="text" id="filter-username" placeholder="Search username...">
+    </div>
+    <div class="filter-group">
+      <label>Full Name</label>
+      <input type="text" id="filter-fullname" placeholder="Search name...">
+    </div>
+    <div class="filter-group">
+      <label>Type</label>
+      <select id="filter-type">
+        <option value="">All</option>
+        <option value="tech">Tech</option>
+        <option value="support">Support</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Date From</label>
+      <input type="date" id="filter-date-from">
+    </div>
+    <div class="filter-group">
+      <label>Date To</label>
+      <input type="date" id="filter-date-to">
+    </div>
+    <button id="apply-filters" class="filter-btn">Apply</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="generic-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Lead</th>
+          <th>Username</th>
+          <th>Password</th>
+          <th>Full Name</th>
+          <th>Email</th>
+          <th>Type</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr><td colspan="9" class="loading">Loading users...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const loadLeads = () => {
+        fetch('/api/leads').then(res => res.json()).then(data => {
+            const sel = qs('filter-lead');
+            if (data.leads) {
+                data.leads.forEach(l => {
+                    const opt = document.createElement('option');
+                    opt.value = l;
+                    opt.textContent = l;
+                    sel.appendChild(opt);
+                });
+            }
+        });
+    };
+
+    const loadUsersLocal = () => {
+        const params = new URLSearchParams({
+            lead: qs('filter-lead').value,
+            username: qs('filter-username').value,
+            fullname: qs('filter-fullname').value,
+            type: qs('filter-type').value,
+            date_from: qs('filter-date-from').value,
+            date_to: qs('filter-date-to').value
+        });
+        
+        fetch(`/api/users?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                const tbody = document.getElementById('users-tbody');
+                if (data.ok && data.rows) {
+                    tbody.innerHTML = data.rows.map(r => `
+                        <tr>
+                            <td>${r.id}</td>
+                            <td>${escapeHtml(r.lead)}</td>
+                            <td>${escapeHtml(r.username)}</td>
+                            <td><code>${escapeHtml(r.password || '')}</code></td>
+                            <td>${escapeHtml(r.full_name)}</td>
+                            <td>${escapeHtml(r.email || '')}</td>
+                            <td><span class="badge type-${r.type || r.role || 'support'}">${escapeHtml(r.type || r.role || 'support')}</span></td>
+                            <td>${r.created_at || ''}</td>
+                            <td class="action-cell">
+                                <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+                                <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+                            </td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="9">No users found</td></tr>';
+
+                    tbody.querySelectorAll('.edit').forEach(btn => {
+                        btn.onclick = () => {
+                            const row = data.rows.find(x => x.id === parseInt(btn.dataset.id));
+                            handleUpsertUser(row);
+                        };
+                    });
+                    tbody.querySelectorAll('.delete').forEach(btn => {
+                        btn.onclick = () => {
+                            if (confirm('Delete this user?')) {
+                                fetch(`/api/users/${btn.dataset.id}`, { method: 'DELETE' })
+                                    .then(res => res.json()).then(() => loadUsersLocal());
+                            }
+                        };
+                    });
+                }
+            });
+    };
+
+    loadLeads();
+    loadUsersLocal();
+    qs('apply-filters').onclick = loadUsersLocal;
+    document.getElementById('refresh-btn').onclick = loadUsersLocal;
+    qs('user-create-btn').onclick = () => handleUpsertUser();
+});
+</script>
+<style>
+.badge.type-tech { background: #e0f2fe; color: #0369a1; }
+.badge.type-support { background: #dcfce7; color: #166534; }
+</style>
+{% endblock %}

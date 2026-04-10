@@ -1,54 +1,49 @@
 ﻿from __future__ import annotations
 
-import csv
 import json
 import logging
+import os
 import re
 import socket
 import subprocess
 import sys
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
-from openpyxl import Workbook, load_workbook
+from werkzeug.serving import make_server
 
 from app.config import AppConfig
-from app.db import create_session_factory
 from app.modules.ricoh.service import RicohService
-from app.services.config_store import ConfigStore
 from app.services.api_client import APIClient, Printer
 from app.services.polling_bridge import PollingBridge
+from app.services.scan_drop import build_drop_folder_metadata
 from app.services.updater import AutoUpdater
-from app.services.ws_client import WSClient
+from app.services.runtime import default_ftp_root, get_machine_agent_uid, no_window_subprocess_kwargs
 from app.utils.scanner import SubnetScanner
 
 
 LOGGER = logging.getLogger(__name__)
-HISTORY_FILE = Path("storage/data/live_overview_history.csv")
-COUNTER_LOG_FILE = Path("storage/data/log_counter.csv")
-STATUS_LOG_FILE = Path("storage/data/log_status.csv")
-COUNTER_LOG_XLSX_FILE = Path("storage/data/log_counter.xlsx")
-STATUS_LOG_XLSX_FILE = Path("storage/data/log_status.xlsx")
-DEVICES_CACHE_FILE = Path("storage/data/devices_cache.json")
+DEFAULT_WEB_PORT = 9173
 CACHE_TTL_SECONDS = 300
-SCAN_PROTOCOL_PREFS_FILE = Path("storage/data/scan_protocol_prefs.json")
+_LIVE_HISTORY: deque[tuple[str, int, int, int]] = deque(maxlen=7)
+_DEVICES_CACHE: dict[str, Any] = {"cached_at": "", "devices": []}
+_SCAN_PROTOCOL_PREFS: dict[str, str] = {}
+DEFAULT_IGNORE_PREFIXES = ["RustDesk", "RuskDesk", "Microsoft", "Fax", "AnyDesk", "Foxit"]
 
 
 def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
     return {
+        "APP_VERSION": str(updater.status().get("current_version", "") or ""),
         "API_URL": config.api_url,
         "USER_TOKEN": config.user_token,
-        "DATABASE_URL": config.database_url,
-        "WS_URL": config.get_string("ws.url"),
-        "WS_AUTO_CONNECT": str(config.get_bool("ws.auto_connect", False)).lower(),
         "UPDATE_AUTO_APPLY": str(updater.auto_apply).lower(),
         "UPDATE_DEFAULT_COMMAND": updater.default_command,
         "WEBHOOK_MODE": config.get_string("webhook.mode", "listen") or "listen",
         "WEBHOOK_LISTEN_PATH": config.get_string("webhook.listen_path", "/api/update/receive-text") or "/api/update/receive-text",
-        "UPDATE_WEBHOOK_TOKEN_SET": "yes" if bool(updater.webhook_token) else "no",
         "TEST_IP": config.get_string("test.ip"),
         "TEST_USER": config.get_string("test.user"),
         "POLLING_ENABLED": str(config.get_bool("polling.enabled", False)).lower(),
@@ -57,7 +52,7 @@ def _env_snapshot(config: AppConfig, updater: AutoUpdater) -> dict[str, str]:
         "POLLING_TOKEN": config.get_string("polling.token"),
         "POLLING_INTERVAL_SECONDS": config.get_string("polling.interval_seconds", "300"),
         "POLLING_LAN_UID": config.get_string("polling.lan_uid"),
-        "POLLING_AGENT_UID": config.get_string("polling.agent_uid"),
+        "POLLING_AGENT_UID": get_machine_agent_uid(config.get_string("polling.agent_uid")),
         "POLLING_SCAN_ENABLED": str(config.get_bool("polling.scan_enabled", True)).lower(),
         "POLLING_SCAN_INTERVAL_SECONDS": config.get_string("polling.scan_interval_seconds", "1"),
         "POLLING_SCAN_DIRS": config.get_string("polling.scan_dirs", "storage/scans/inbox"),
@@ -134,26 +129,16 @@ def _normalize_mac(value: str) -> str:
 
 
 def _load_scan_protocol_prefs() -> dict[str, str]:
-    try:
-        if not SCAN_PROTOCOL_PREFS_FILE.exists():
-            return {}
-        data = json.loads(SCAN_PROTOCOL_PREFS_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {}
-        normalized: dict[str, str] = {}
-        for k, v in data.items():
-            ip = _normalize_ipv4(str(k or "").strip())
-            protocol = str(v or "").strip()
-            if ip and protocol:
-                normalized[ip] = protocol
-        return normalized
-    except Exception:  # noqa: BLE001
-        return {}
+    return dict(_SCAN_PROTOCOL_PREFS)
 
 
 def _save_scan_protocol_prefs(prefs: dict[str, str]) -> None:
-    SCAN_PROTOCOL_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SCAN_PROTOCOL_PREFS_FILE.write_text(json.dumps(prefs, ensure_ascii=True, indent=2), encoding="utf-8")
+    _SCAN_PROTOCOL_PREFS.clear()
+    for k, v in (prefs or {}).items():
+        ip = _normalize_ipv4(str(k or "").strip())
+        protocol = str(v or "").strip()
+        if ip and protocol:
+            _SCAN_PROTOCOL_PREFS[ip] = protocol
 
 
 def _normalize_scan_protocol(value: str) -> str:
@@ -171,6 +156,14 @@ def _sanitize_ftp_name(value: str) -> str:
     text = str(value or "").strip().replace(" ", "_")
     text = re.sub(r"[^A-Za-z0-9_-]", "", text)
     return text[:48]
+
+
+def _register_scan_root(config: AppConfig, scan_root: str | Path) -> dict[str, Any]:
+    added, scan_dirs = config.ensure_scan_dir(scan_root)
+    return {
+        "scan_dir_added": added,
+        "scan_dirs": scan_dirs,
+    }
 
 
 def _detect_scan_protocol_from_html(html: str) -> str:
@@ -201,6 +194,7 @@ Get-NetNeighbor -AddressFamily IPv4 |
             text=True,
             timeout=8,
             check=True,
+            **no_window_subprocess_kwargs(),
         )
         payload = _safe_json_load(result.stdout)
         if isinstance(payload, dict):
@@ -226,6 +220,7 @@ Get-NetNeighbor -AddressFamily IPv4 |
             text=True,
             timeout=8,
             check=True,
+            **no_window_subprocess_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.debug("arp lookup failed: %s", exc)
@@ -274,25 +269,13 @@ def _resolve_device_machine_ids(
 
 
 def _save_devices_cache(devices: list[dict[str, Any]]) -> None:
-    _ensure_parent(DEVICES_CACHE_FILE)
-    payload = {
-        "cached_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "devices": devices,
-    }
-    DEVICES_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    _DEVICES_CACHE["cached_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _DEVICES_CACHE["devices"] = list(devices or [])
 
 
 def _load_devices_cache() -> tuple[list[dict[str, Any]], str]:
-    if not DEVICES_CACHE_FILE.exists():
-        return [], ""
-    try:
-        payload = json.loads(DEVICES_CACHE_FILE.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return [], ""
-    if not isinstance(payload, dict):
-        return [], ""
-    cached_devices = payload.get("devices", [])
-    cached_at = str(payload.get("cached_at", "") or "")
+    cached_devices = _DEVICES_CACHE.get("devices", [])
+    cached_at = str(_DEVICES_CACHE.get("cached_at", "") or "")
     if isinstance(cached_devices, list):
         return cached_devices, cached_at
     return [], ""
@@ -327,6 +310,7 @@ $ports = Get-PrinterPort | Select-Object Name,PrinterHostAddress,PortMonitor
             text=True,
             timeout=20,
             check=True,
+            **no_window_subprocess_kwargs(),
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("Cannot read local Windows printers: %s", exc)
@@ -551,25 +535,15 @@ def _ensure_parent(path: Path) -> None:
 
 
 def _append_history(copier: int, printer: int, scanner: int, active: int, offline: int, total: int) -> None:
-    _ensure_parent(HISTORY_FILE)
-    new_file = not HISTORY_FILE.exists()
-    with HISTORY_FILE.open("a", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        if new_file:
-            writer.writerow(["timestamp", "copier_pages", "print_pages", "scan_pages", "active", "offline", "total"])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), copier, printer, scanner, active, offline, total])
+    _LIVE_HISTORY.append((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), copier, printer, scanner))
 
 
 def _read_history(limit: int = 7) -> tuple[list[str], list[int], list[int], list[int]]:
-    if not HISTORY_FILE.exists():
-        return ([], [], [], [])
-    with HISTORY_FILE.open("r", newline="", encoding="utf-8") as fp:
-        rows = list(csv.DictReader(fp))
-    rows = rows[-limit:]
-    labels = [r["timestamp"][5:16] for r in rows]
-    copier = [_to_int(r.get("copier_pages")) for r in rows]
-    printer = [_to_int(r.get("print_pages")) for r in rows]
-    scanner = [_to_int(r.get("scan_pages")) for r in rows]
+    rows = list(_LIVE_HISTORY)[-limit:]
+    labels = [r[0][5:16] for r in rows]
+    copier = [int(r[1]) for r in rows]
+    printer = [int(r[2]) for r in rows]
+    scanner = [int(r[3]) for r in rows]
     return labels, copier, printer, scanner
 
 
@@ -651,113 +625,21 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
 
 
 def _counter_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
-    _ensure_parent(COUNTER_LOG_FILE)
-    new_file = not COUNTER_LOG_FILE.exists()
-    counter_header = [
-        "timestamp",
-        "printer_name",
-        "printer_ip",
-        "total",
-        "copier_bw",
-        "printer_bw",
-        "scanner_send_bw",
-        "scanner_send_color",
-    ]
-    with COUNTER_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        if new_file:
-            writer.writerow(counter_header)
-        while not stop_event.is_set():
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                parsed = service.parse_counter(service.read_counter(printer))
-                row = [
-                    now,
-                    printer.name,
-                    printer.ip,
-                    parsed.get("total", ""),
-                    parsed.get("copier_bw", ""),
-                    parsed.get("printer_bw", ""),
-                    parsed.get("scanner_send_bw", ""),
-                    parsed.get("scanner_send_color", ""),
-                ]
-                writer.writerow(row)
-                _append_xlsx_row(COUNTER_LOG_XLSX_FILE, counter_header, row)
-            except Exception as exc:  # noqa: BLE001
-                row = [now, printer.name, printer.ip, "ERROR", str(exc), "", "", ""]
-                writer.writerow(row)
-                _append_xlsx_row(COUNTER_LOG_XLSX_FILE, counter_header, row)
-            fp.flush()
-            stop_event.wait(60)
+    while not stop_event.is_set():
+        try:
+            service.process_counter(printer, should_post=True)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Counter push failed: ip=%s error=%s", printer.ip, exc)
+        stop_event.wait(60)
 
 
 def _status_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
-    _ensure_parent(STATUS_LOG_FILE)
-    new_file = not STATUS_LOG_FILE.exists()
-    status_header = [
-        "timestamp",
-        "printer_name",
-        "printer_ip",
-        "system_status",
-        "printer_status",
-        "printer_alerts",
-        "copier_status",
-        "copier_alerts",
-        "scanner_status",
-        "scanner_alerts",
-        "toner_black",
-        "tray_1_status",
-        "tray_2_status",
-        "tray_3_status",
-        "bypass_tray_status",
-        "other_info",
-    ]
-    with STATUS_LOG_FILE.open("a", newline="", encoding="utf-8") as fp:
-        writer = csv.writer(fp)
-        if new_file:
-            writer.writerow(status_header)
-        while not stop_event.is_set():
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                status_data = service.parse_status(service.read_status(printer))
-                row = service._prepare_csv_row(now, printer, status_data)
-                writer.writerow(row)
-                _append_xlsx_row(STATUS_LOG_XLSX_FILE, status_header, row)
-            except Exception as exc:  # noqa: BLE001
-                row = [now, printer.name, printer.ip, "ERROR", str(exc), "", "", "", "", "", "", "", "", "", "", ""]
-                writer.writerow(row)
-                _append_xlsx_row(STATUS_LOG_XLSX_FILE, status_header, row)
-            fp.flush()
-            stop_event.wait(30)
-
-
-def _append_xlsx_row(path: Path, header: list[str], row: list[Any]) -> None:
-    _ensure_parent(path)
-    if path.exists():
-        wb = load_workbook(path)
-        ws = wb.active
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Data"
-        ws.append(header)
-        ws.row_dimensions[1].height = 30
-        for col_idx in range(1, len(header) + 1):
-            col_letter = ws.cell(row=1, column=col_idx).column_letter
-            dim = ws.column_dimensions[col_letter]
-            current_width = float(dim.width) if dim.width else 8.43
-            # Keep existing font unchanged; only enlarge width to ~2x default.
-            dim.width = max(current_width, 16.86)
-
-    ws.append(row)
-    ws.row_dimensions[ws.max_row].height = 30
-    # Ensure all used columns are at least 2x default width.
-    for col_idx in range(1, len(header) + 1):
-        col_letter = ws.cell(row=1, column=col_idx).column_letter
-        dim = ws.column_dimensions[col_letter]
-        current_width = float(dim.width) if dim.width else 8.43
-        dim.width = max(current_width, 16.86)
-    wb.save(path)
+    while not stop_event.is_set():
+        try:
+            service.process_status(printer, should_post=True)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Status push failed: ip=%s error=%s", printer.ip, exc)
+        stop_event.wait(30)
 
 
 def _start_job(jobs: dict[str, dict[str, Any]], key: str, target: Any) -> tuple[bool, str]:
@@ -779,167 +661,77 @@ def _stop_job(jobs: dict[str, dict[str, Any]], key: str) -> tuple[bool, str]:
     return True, "Stopped"
 
 
-def create_app(config_path: str = "config.yaml") -> Flask:
+def _emit_ui_event(_event: str, _payload: dict[str, Any]) -> None:
+    return
+
+
+def create_app(
+    current_args: list[str] | None = None,
+    shutdown_event: threading.Event | None = None,
+) -> Flask:
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    template_dir = bundle_root / "app" / "templates"
-    if not template_dir.exists():
-        template_dir = Path(__file__).resolve().parent / "templates"
-    static_dir = bundle_root / "app" / "static"
-    if not static_dir.exists():
-        static_dir = Path(__file__).resolve().parent / "static"
+    template_candidates = [
+        bundle_root / "app" / "templates",
+        bundle_root / "templates",
+        Path(__file__).resolve().parent / "templates",
+    ]
+    template_dir = next((path for path in template_candidates if path.exists()), template_candidates[-1])
+    static_candidates = [
+        bundle_root / "app" / "static",
+        bundle_root / "static",
+        Path(__file__).resolve().parent / "static",
+    ]
+    static_dir = next((path for path in static_candidates if path.exists()), static_candidates[-1])
     app = Flask(__name__, template_folder=str(template_dir), static_folder=str(static_dir))
-    config = AppConfig.load(config_path)
-    session_factory = create_session_factory(config.database_url)
-    config_store = ConfigStore(session_factory)
-    config_store.create_tables()
+    config = AppConfig.load()
     api_client = APIClient(config)
-    ricoh_service = RicohService(api_client)
-    polling_bridge = PollingBridge(config, api_client, ricoh_service)
-    updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1])
-
-    def _on_ws_message(message: str) -> None:
-        ok, note = updater.handle_text_message(message, source="ws")
-        if ok:
-            LOGGER.info("Updater signal handled from ws: %s", note)
-        else:
-            LOGGER.warning("Updater signal failed from ws: %s", note)
-
-    ws_client = WSClient(
-        url=config.get_string("ws.url"),
-        token=config.get_string("ws.token"),
-        on_message_callback=_on_ws_message,
+    ricoh_service = RicohService(api_client, config=config)
+    updater_args = list(current_args or ["--mode", "web"])
+    updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1], current_args=updater_args)
+    web_port = int(str(os.getenv("APP_WEB_PORT", os.getenv("FLASK_PORT", str(DEFAULT_WEB_PORT))) or str(DEFAULT_WEB_PORT)))
+    polling_bridge = PollingBridge(
+        config,
+        api_client,
+        ricoh_service,
+        updater=updater,
+        run_mode="web",
+        web_port=web_port,
+        restart_callback=(shutdown_event.set if shutdown_event is not None else None),
     )
 
     app.config["APP_CONFIG"] = config
     app.config["API_CLIENT"] = api_client
     app.config["RICOH_SERVICE"] = ricoh_service
     app.config["POLLING_BRIDGE"] = polling_bridge
-    app.config["WS_CLIENT"] = ws_client
     app.config["UPDATER"] = updater
-    app.config["CONFIG_STORE"] = config_store
     app.config["LOG_JOBS"] = {"counter": {}, "status": {}}
-
-    if config.get_bool("ws.auto_connect", False) and ws_client.is_configured():
-        ok, msg = ws_client.connect()
-        LOGGER.info("WebSocket auto-connect: %s (%s)", ok, msg)
 
     p_ok, p_msg = polling_bridge.start()
     LOGGER.info("Polling bridge: %s (%s)", p_ok, p_msg)
 
     @app.get("/")
     def index() -> Any:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("devices"))
 
     @app.get("/dashboard")
     def dashboard() -> Any:
-        return render_template("dashboard.html", active_tab="dashboard", page_title="Config")
+        return redirect(url_for("devices"))
 
     @app.get("/api/dashboard/config")
     def api_dashboard_config() -> Any:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        app_cfg: AppConfig = app.config["APP_CONFIG"]
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
-        
-        # Get LAN UID for display
         hostname = socket.gethostname()
         local_ip = bridge._resolve_local_ip()
         lan_uid, fingerprint = bridge._resolve_lan_info(hostname, local_ip)
-        
-        payload = store.get_dashboard_payload()
-        env_payload = _merge_env_overrides(_env_snapshot(app_cfg, updater), payload.env_overrides)
         return jsonify(
             {
-                "env": env_payload,
-                "network": payload.network,
-                "computers": payload.computers,
-                "printers": payload.printers,
-                "links": payload.links,
-                "env_overrides": payload.env_overrides,
-                "device_filters": payload.device_filters,
                 "lan_uid": lan_uid,
                 "fingerprint": fingerprint,
+                "env": _env_snapshot(app.config["APP_CONFIG"], updater),
             }
         )
-
-    @app.post("/api/dashboard/env")
-    def api_dashboard_env() -> Any:
-        body = request.get_json(silent=True) or {}
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        saved = store.save_env_overrides(body)
-        return jsonify({"ok": True, "env_overrides": saved})
-
-    @app.post("/api/dashboard/device-filters")
-    def api_dashboard_device_filters() -> Any:
-        body = request.get_json(silent=True) or {}
-        prefixes = str(body.get("ignore_printer_prefixes", "") or "")
-        filter_mode = str(body.get("filter_mode", "all") or "all")
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        saved = store.save_ignore_printer_prefixes(prefixes)
-        mode_saved = store.save_device_filter_mode(filter_mode)
-        if DEVICES_CACHE_FILE.exists():
-            DEVICES_CACHE_FILE.unlink(missing_ok=True)
-        return jsonify(
-            {
-                "ok": True,
-                "device_filters": {
-                    "ignore_printer_prefixes": saved,
-                    "filter_mode": mode_saved,
-                },
-            }
-        )
-
-    @app.post("/api/dashboard/network")
-    def api_dashboard_network() -> Any:
-        body = request.get_json(silent=True) or {}
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        store.save_network(body)
-        return jsonify({"ok": True})
-
-    @app.post("/api/dashboard/computers")
-    def api_dashboard_add_computer() -> Any:
-        body = request.get_json(silent=True) or {}
-        if not str(body.get("name", "")).strip():
-            return jsonify({"ok": False, "error": "Missing computer name"}), 400
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        row = store.add_computer(body)
-        return jsonify({"ok": True, "computer": row})
-
-    @app.delete("/api/dashboard/computers/<int:computer_id>")
-    def api_dashboard_remove_computer(computer_id: int) -> Any:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        if not store.remove_computer(computer_id):
-            return jsonify({"ok": False, "error": "Computer not found"}), 404
-        return jsonify({"ok": True})
-
-    @app.post("/api/dashboard/printers")
-    def api_dashboard_add_printer() -> Any:
-        body = request.get_json(silent=True) or {}
-        if not str(body.get("name", "")).strip():
-            return jsonify({"ok": False, "error": "Missing printer name"}), 400
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        row = store.add_printer(body)
-        return jsonify({"ok": True, "printer": row})
-
-    @app.delete("/api/dashboard/printers/<int:printer_id>")
-    def api_dashboard_remove_printer(printer_id: int) -> Any:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        if not store.remove_printer(printer_id):
-            return jsonify({"ok": False, "error": "Printer not found"}), 404
-        return jsonify({"ok": True})
-
-    @app.put("/api/dashboard/links")
-    def api_dashboard_replace_links() -> Any:
-        body = request.get_json(silent=True) or {}
-        links = body.get("links", [])
-        if not isinstance(links, list):
-            return jsonify({"ok": False, "error": "links must be a list"}), 400
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        total = store.replace_links(links)
-        return jsonify({"ok": True, "total_links": total})
 
     def _ftp_pc_candidates() -> list[dict[str, Any]]:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        payload = store.get_dashboard_payload()
         candidates: list[dict[str, Any]] = []
         local_host = str(socket.gethostname() or "").strip() or "localhost"
         local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
@@ -953,40 +745,38 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 "is_local": True,
             }
         )
-        for row in payload.computers:
-            cid = str(row.get("id", "")).strip()
-            if not cid:
-                continue
-            ip = _normalize_ipv4(str(row.get("ip", "")).strip())
-            is_local = bool(ip and ip == local_ip)
-            candidates.append(
-                {
-                    "id": cid,
-                    "name": str(row.get("name", "")).strip() or f"PC-{cid}",
-                    "ip": ip,
-                    "department": str(row.get("department", "")).strip(),
-                    "source": "dashboard",
-                    "is_local": is_local,
-                }
-            )
         return candidates
 
-    def _create_local_ftp_for_address(address_name: str) -> dict[str, Any]:
-        local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
+    def _create_local_ftp_for_address(address_name: str, printer_ip: str = "") -> dict[str, Any]:
+        ftp_host_info = ricoh_service.resolve_ftp_host_ip(printer_ip)
+        local_ip = _normalize_ipv4(str(ftp_host_info.get("ip", "") or "")) or "127.0.0.1"
         seed_name = _sanitize_ftp_name(address_name) or "scan"
         ftp_name = _sanitize_ftp_name(f"ftp_{seed_name}") or "ftp_scan"
-        ftp_root = Path("storage/ftp") / ftp_name
+        ftp_root = default_ftp_root(ftp_name)
         result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root, port=2121)
         ftp_ok = bool(result.get("ok"))
         ftp_port = int(result.get("port") or 2121)
         ftp_url = f"ftp://{local_ip}:{ftp_port}/"
+        drop_folder = build_drop_folder_metadata(ftp_root, base_url=ftp_url)
+        scan_sync: dict[str, Any] = {}
+        if ftp_ok:
+            scan_sync = _register_scan_root(config, ftp_root)
         return {
             "ok": ftp_ok,
             "ftp_name": ftp_name,
             "ftp_root": str(ftp_root),
             "ftp_url": ftp_url,
+            "upload_url": str(drop_folder.get("upload_url", "") or ftp_url),
+            "upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+            "drop_folder_name": str(drop_folder.get("drop_folder_name", "") or ""),
+            "drop_relative_path": str(drop_folder.get("drop_relative_path", "") or ""),
             "local_ip": local_ip,
+            "ftp_host_ip": local_ip,
+            "ftp_ip_candidates": list(ftp_host_info.get("candidates", []) or []),
+            "ftp_ip_strategy": str(ftp_host_info.get("strategy", "") or ""),
+            "warning": str(ftp_host_info.get("warning", "") or "").strip(),
             "result": result,
+            **scan_sync,
         }
 
     @app.get("/api/ftp/pcs")
@@ -996,9 +786,16 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     @app.post("/api/ftp/create")
     def api_ftp_create() -> Any:
         body = request.get_json(silent=True) or {}
+        local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
         computer_id = str(body.get("computer_id", "")).strip()
         ftp_name_raw = str(body.get("ftp_name", "")).strip()
         ftp_name = re.sub(r"[^A-Za-z0-9_-]", "", ftp_name_raw.replace(" ", "_"))[:48]
+        ftp_path_raw = str(body.get("ftp_path", "")).strip()
+        ftp_port = 0
+        try:
+            ftp_port = int(body.get("port") or 0)
+        except Exception:  # noqa: BLE001
+            ftp_port = 0
         if not computer_id:
             return jsonify({"ok": False, "error": "Missing computer_id"})
 
@@ -1020,16 +817,35 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 }
             )
 
-        ftp_root = Path("storage/ftp") / ftp_name
-        result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root)
+        ftp_root = Path(ftp_path_raw).expanduser() if ftp_path_raw else default_ftp_root(ftp_name)
+        result = ricoh_service.share_manager.create_ftp_site(site_name=ftp_name, local_path=ftp_root, port=ftp_port or 2121)
+        ftp_port_value = int(result.get("port") or ftp_port or 2121)
+        ftp_url = f"ftp://{local_ip}:{ftp_port_value}/"
+        drop_folder = build_drop_folder_metadata(ftp_root, base_url=ftp_url)
+        scan_sync: dict[str, Any] = {}
+        if bool(result.get("ok")):
+            scan_sync = _register_scan_root(config, ftp_root)
         response = {
             "ok": bool(result.get("ok")),
             "target": selected,
             "ftp_name": ftp_name,
             "ftp_root": str(ftp_root),
+            "ftp_url": ftp_url,
+            "upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+            "upload_url": str(drop_folder.get("upload_url", "") or ftp_url),
+            "drop_folder_name": str(drop_folder.get("drop_folder_name", "") or ""),
+            "drop_relative_path": str(drop_folder.get("drop_relative_path", "") or ""),
             "result": result,
-            "hint": "FTP runs inside agent process. If creation fails, install dependency: pip install pyftpdlib.",
+            "hint": "FTP is managed by the Windows FTP worker. The agent only writes config and reports status.",
+            **scan_sync,
         }
+        warnings = [str(item or "").strip() for item in result.get("warnings", []) if str(item or "").strip()]
+        if warnings:
+            response["warnings"] = warnings
+            response["hint"] = (
+                "FTP site is running, but Windows Firewall was not updated. "
+                "Run PrintAgent as Administrator or open TCP ports manually."
+            )
         LOGGER.info(
             "FTP create result: target=%s ip=%s ftp_name=%s ok=%s error=%s",
             selected.get("name", ""),
@@ -1039,6 +855,66 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             str(result.get("error", "") or ""),
         )
         return jsonify(response)
+
+    @app.get("/api/ftp/sites")
+    def api_ftp_sites() -> Any:
+        local_ip = _normalize_ipv4(PollingBridge._resolve_local_ip()) or "127.0.0.1"
+        sites = ricoh_service.share_manager.list_ftp_sites()
+        rows: list[dict[str, Any]] = []
+        for site in sites:
+            port = int(site.get("port", 0) or 0)
+            ftp_url = f"ftp://{local_ip}:{port}/" if port > 0 else str(site.get("ftp_url", "") or "")
+            drop_folder = build_drop_folder_metadata(str(site.get("path", "") or ""), base_url=ftp_url)
+            rows.append(
+                {
+                    "name": str(site.get("name", "") or ""),
+                    "path": str(site.get("path", "") or ""),
+                    "port": port,
+                    "ftp_url": ftp_url,
+                    "upload_path": str(drop_folder.get("drop_folder_path", "") or ""),
+                    "upload_url": str(drop_folder.get("upload_url", "") or ftp_url),
+                    "ftp_user": str(site.get("ftp_user", "") or ""),
+                    "ftp_password": str(site.get("ftp_password", "") or ""),
+                }
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "sites": rows,
+            }
+        )
+
+    @app.post("/api/ftp/update")
+    def api_ftp_update() -> Any:
+        body = request.get_json(silent=True) or {}
+        site_name = _sanitize_ftp_name(str(body.get("site_name", "")).strip())
+        new_site_name = _sanitize_ftp_name(str(body.get("new_site_name", "")).strip()) if body.get("new_site_name") is not None else None
+        local_path_raw = str(body.get("local_path", "")).strip()
+        try:
+            port = int(body.get("port") or 0)
+        except Exception:  # noqa: BLE001
+            port = 0
+        if not site_name:
+            return jsonify({"ok": False, "error": "Missing site_name"}), 400
+        result = ricoh_service.share_manager.update_ftp_site(
+            site_name,
+            new_site_name=new_site_name,
+            local_path=local_path_raw or None,
+            port=port or None,
+        )
+        if bool(result.get("ok")):
+            physical_path = str(result.get("physical_path", "") or local_path_raw or "").strip()
+            if physical_path:
+                result.update(_register_scan_root(config, physical_path))
+        return jsonify(result), 200 if result.get("ok") else 400
+
+    @app.delete("/api/ftp/sites/<path:site_name>")
+    def api_ftp_delete(site_name: str) -> Any:
+        safe_name = _sanitize_ftp_name(site_name)
+        if not safe_name:
+            return jsonify({"ok": False, "error": "Invalid site_name"}), 400
+        result = ricoh_service.share_manager.delete_ftp_site(safe_name)
+        return jsonify(result), 200 if result.get("ok") else 404
 
     @app.get("/devices")
     def devices() -> Any:
@@ -1062,7 +938,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.get("/settings")
     def settings() -> Any:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("devices"))
 
     def _resolve_target_printer(ip: str, user: str = "", password: str = "") -> Printer:
         devices = _load_printers(api_client)
@@ -1321,13 +1197,13 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             ftp_payload: dict[str, Any] | None = None
             folder_final = folder
             if selected_protocol == "FTP":
-                ftp_payload = _create_local_ftp_for_address(name)
+                ftp_payload = _create_local_ftp_for_address(name, printer_ip=ip)
                 LOGGER.info(
                     "Scan address create FTP step: trace_id=%s ip=%s ftp_name=%s ftp_url=%s ftp_ok=%s",
                     trace_id,
                     ip,
                     str(ftp_payload.get("ftp_name", "")).strip(),
-                    str(ftp_payload.get("ftp_url", "")).strip(),
+                    str(ftp_payload.get("upload_url", "") or ftp_payload.get("ftp_url", "")).strip(),
                     bool(ftp_payload.get("ok", False)),
                 )
                 if not bool(ftp_payload.get("ok", False)):
@@ -1347,13 +1223,21 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                             "ftp": ftp_payload,
                         }
                     ), 500
-                folder_final = str(ftp_payload.get("ftp_url", "")).strip() or folder_final
+                folder_final = str(ftp_payload.get("upload_url", "") or ftp_payload.get("ftp_url", "")).strip() or folder_final
                 LOGGER.info(
                     "Scan address create folder overridden by FTP: trace_id=%s ip=%s folder=%s",
                     trace_id,
                     ip,
                     folder_final,
                 )
+                ftp_warning = str(ftp_payload.get("warning", "") or "").strip()
+                if ftp_warning:
+                    LOGGER.warning(
+                        "Scan address create FTP warning: trace_id=%s ip=%s warning=%s",
+                        trace_id,
+                        ip,
+                        ftp_warning,
+                    )
             merged_fields: dict[str, Any] = {"entryTypeIn": "1"}
             if isinstance(fields, dict):
                 merged_fields.update(fields)
@@ -1637,13 +1521,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     def api_overview() -> Any:
         devices = _load_printers(api_client)
         overview = _build_live_overview(ricoh_service, devices)
-        ws_client.send("overview_updated", overview)
+        _emit_ui_event("overview_updated", overview)
         return jsonify(overview)
 
     @app.get("/api/devices")
     def api_devices() -> Any:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        ignored_prefixes = store.get_ignore_printer_prefixes()
+        ignored_prefixes = list(DEFAULT_IGNORE_PREFIXES)
         refresh_arg = str(request.args.get("refresh", "") or "").strip().lower()
         force_refresh = refresh_arg in {"1", "true", "yes", "y"}
         mode = "valid_only"
@@ -1679,8 +1562,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     @app.post("/api/devices/refresh")
     def api_devices_refresh() -> Any:
-        store: ConfigStore = app.config["CONFIG_STORE"]
-        ignored_prefixes = store.get_ignore_printer_prefixes()
+        ignored_prefixes = list(DEFAULT_IGNORE_PREFIXES)
         mode = "valid_only"
         # Button refresh always forces a full subnet scan to populate ARP cache.
         payload = _scan_devices_payload(config, api_client, ricoh_service, ignored_prefixes, mode, force_refresh=True)
@@ -1708,15 +1590,15 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         try:
             if action == "status":
                 payload = ricoh_service.process_status(target, should_post=False)
-                ws_client.send("device_status", payload)
+                _emit_ui_event("device_status", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "counter":
                 payload = ricoh_service.process_counter(target, should_post=False)
-                ws_client.send("device_counter", payload)
+                _emit_ui_event("device_counter", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "device_info":
                 payload = ricoh_service.process_device_info(target, should_post=False)
-                ws_client.send("device_info", payload)
+                _emit_ui_event("device_info", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "enable_machine":
                 if not str(target.user or "").strip():
@@ -1733,7 +1615,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 )
                 ricoh_service.enable_machine(target)
                 LOGGER.info("Device action success: trace_id=%s ip=%s action=%s", trace_id, ip, action)
-                ws_client.send("machine_enabled", {"ip": target.ip, "name": target.name})
+                _emit_ui_event("machine_enabled", {"ip": target.ip, "name": target.name})
                 return jsonify({"ok": True, "action": action, "message": "Machine enabled successfully (EasySecurity OFF)"})
             if action in {"lock_machine", "disable_machine"}:
                 if not str(target.user or "").strip():
@@ -1750,8 +1632,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                 )
                 ricoh_service.disable_machine(target)
                 LOGGER.info("Device action success: trace_id=%s ip=%s action=%s", trace_id, ip, action)
-                ws_client.send("machine_locked", {"ip": target.ip, "name": target.name})
-                ws_client.send("machine_disabled", {"ip": target.ip, "name": target.name})
+                _emit_ui_event("machine_locked", {"ip": target.ip, "name": target.name})
+                _emit_ui_event("machine_disabled", {"ip": target.ip, "name": target.name})
                 return jsonify({"ok": True, "action": action, "message": "Machine disabled successfully (UserCode profile applied)"})
             if action == "address_list":
                 trace_id = f"action-scan-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
@@ -1760,7 +1642,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     payload.setdefault("debug", {})
                     if isinstance(payload["debug"], dict):
                         payload["debug"]["trace_id"] = trace_id
-                ws_client.send("address_list", payload)
+                _emit_ui_event("address_list", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "address_create":
                 name = str(request_data.get("name", "")).strip()
@@ -1780,7 +1662,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     user_code=user_code,
                     fields=fields if isinstance(fields, dict) else None,
                 )
-                ws_client.send("address_create", payload)
+                _emit_ui_event("address_create", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "address_modify":
                 registration_no = str(request_data.get("registration_no", "")).strip()
@@ -1802,7 +1684,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     user_code=user_code,
                     fields=fields if isinstance(fields, dict) else None,
                 )
-                ws_client.send("address_modify", payload)
+                _emit_ui_event("address_modify", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "log_counter_start":
                 ok, message = _start_job(
@@ -1810,11 +1692,11 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     ip,
                     lambda stop_event: _counter_worker(ricoh_service, target, stop_event),
                 )
-                ws_client.send("counter_log_start", {"ip": ip, "ok": ok, "message": message})
+                _emit_ui_event("counter_log_start", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message, "job": counter_jobs.get(ip, {})})
             if action == "log_counter_stop":
                 ok, message = _stop_job(counter_jobs, ip)
-                ws_client.send("counter_log_stop", {"ip": ip, "ok": ok, "message": message})
+                _emit_ui_event("counter_log_stop", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message})
             if action == "log_status_start":
                 ok, message = _start_job(
@@ -1822,19 +1704,19 @@ def create_app(config_path: str = "config.yaml") -> Flask:
                     ip,
                     lambda stop_event: _status_worker(ricoh_service, target, stop_event),
                 )
-                ws_client.send("status_log_start", {"ip": ip, "ok": ok, "message": message})
+                _emit_ui_event("status_log_start", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message, "job": status_jobs.get(ip, {})})
             if action == "log_status_stop":
                 ok, message = _stop_job(status_jobs, ip)
-                ws_client.send("status_log_stop", {"ip": ip, "ok": ok, "message": message})
+                _emit_ui_event("status_log_stop", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message})
             if action == "exit":
                 c_ok, c_message = _stop_job(counter_jobs, ip)
                 s_ok, s_message = _stop_job(status_jobs, ip)
                 if not c_ok and not s_ok:
-                    ws_client.send("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
+                    _emit_ui_event("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
                     return jsonify({"ok": True, "action": action, "message": "No running log jobs"})
-                ws_client.send("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
+                _emit_ui_event("log_stop_all", {"ip": ip, "counter": c_message, "status": s_message})
                 return jsonify(
                     {
                         "ok": True,
@@ -2090,10 +1972,6 @@ def create_app(config_path: str = "config.yaml") -> Flask:
             }
         )
 
-    @app.get("/api/ws/status")
-    def api_ws_status() -> Any:
-        return jsonify(ws_client.status())
-
     @app.get("/api/polling/status")
     def api_polling_status() -> Any:
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
@@ -2112,10 +1990,8 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
         app_cfg: AppConfig = app.config["APP_CONFIG"]
         bridge: PollingBridge = app.config["POLLING_BRIDGE"]
-        store: ConfigStore = app.config["CONFIG_STORE"]
 
         app_cfg.set_value("polling.enabled", enabled)
-        store.save_env_overrides({"POLLING_ENABLED": "true" if enabled else "false"})
 
         if enabled:
             ok, message = bridge.start()
@@ -2129,26 +2005,6 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         ok, message = bridge.trigger_once()
         code = 200 if ok else 400
         return jsonify({"ok": ok, "message": message, "status": bridge.status()}), code
-
-    @app.post("/api/ws/connect")
-    def api_ws_connect() -> Any:
-        ok, message = ws_client.connect()
-        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
-
-    @app.post("/api/ws/disconnect")
-    def api_ws_disconnect() -> Any:
-        ok, message = ws_client.disconnect()
-        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
-
-    @app.post("/api/ws/send")
-    def api_ws_send() -> Any:
-        body = request.get_json(silent=True) or {}
-        event = str(body.get("event", "manual_event")).strip()
-        payload = body.get("payload", {})
-        if not isinstance(payload, dict):
-            return jsonify({"ok": False, "error": "payload must be an object"}), 400
-        ok, message = ws_client.send(event, payload)
-        return jsonify({"ok": ok, "message": message, "status": ws_client.status()})
 
     @app.get("/api/update/status")
     def api_update_status() -> Any:
@@ -2194,4 +2050,21 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         return jsonify({"ok": ok, "message": message, "status": updater.status()})
 
     return app
+
+
+def run_web_server(app: Flask, host: str, port: int) -> tuple[Any, threading.Thread]:
+    server = make_server(host, port, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="agent-web-server")
+    thread.start()
+    LOGGER.info("Web server started on http://%s:%s", host, port)
+    return server, thread
+
+
+def shutdown_app_resources(app: Flask) -> None:
+    bridge = app.config.get("POLLING_BRIDGE")
+    if bridge is not None:
+        try:
+            bridge.stop()
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("Polling bridge stop failed", exc_info=True)
 

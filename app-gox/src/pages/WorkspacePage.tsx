@@ -35,8 +35,8 @@ export function WorkspacePage() {
   }, [isAuthenticated, navigate]);
 
   useEffect(() => {
-    if (user?.workspaceIds?.length) {
-      fetchWorkspaces(user.workspaceIds);
+    if (user) {
+      fetchWorkspaces(user.workspaceIds || []);
     }
   }, [user, fetchWorkspaces]);
 

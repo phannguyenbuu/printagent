@@ -1,0 +1,51 @@
+# Git / editor
+.git
+.github
+.vscode
+.idea
+
+# Python caches / envs
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.venv/
+venv/
+.build-venv/
+backend/venv/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Frontend dependencies / build
+app-gox/node_modules/
+app-gox/dist/
+
+# Runtime data / logs / uploads
+storage/
+backend/storage/uploads/
+backend/storage/logs/
+agent/storage/
+
+# Temporary / scratch
+temp/
+tmp/
+backup/
+*.log
+*.tmp
+*.bak
+
+# Infra / references
+ref/
+nginx/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+
+.agent/

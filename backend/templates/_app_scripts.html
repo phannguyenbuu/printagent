@@ -1,0 +1,2368 @@
+<script>
+async function jget(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+function qs(id) { return document.getElementById(id); }
+const DEFAULT_API_TEST_TOKEN = "change-me";
+function getApiTokenValue(fallback = DEFAULT_API_TEST_TOKEN) {
+  let storedValue = "";
+  try {
+    storedValue = String(localStorage.getItem("goprinx_api_token") || localStorage.getItem("goprinx_lead_token") || "").trim();
+  } catch (_) {}
+  const token = storedValue || String(fallback || DEFAULT_API_TEST_TOKEN).trim();
+  if (token) {
+    try { localStorage.setItem("goprinx_api_token", token); } catch (_) {}
+  }
+  return token;
+}
+function getGlobalFilters() {
+  return {
+    lead: (qs("global-filter-lead")?.value || "").trim(),
+    printer_name: (qs("global-filter-printer-name")?.value || "").trim(),
+    printer_type: (qs("global-filter-printer-type")?.value || "").trim(),
+    favorite: (qs("global-filter-favorite")?.value || "").trim(),
+    time_scope: (qs("global-filter-time-scope")?.value || "").trim(),
+    datetime_from: (qs("global-filter-datetime-from")?.value || "").trim(),
+    datetime_to: (qs("global-filter-datetime-to")?.value || "").trim(),
+  };
+}
+function saveGlobalFilters() {
+  try { localStorage.setItem("goprinx_filters", JSON.stringify(getGlobalFilters())); } catch (_) {}
+}
+function restoreGlobalFilters() {
+  try {
+    const raw = localStorage.getItem("goprinx_filters");
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return;
+    if (qs("global-filter-lead")) qs("global-filter-lead").value = data.lead || "default";
+    if (qs("global-filter-printer-name")) qs("global-filter-printer-name").value = data.printer_name || "";
+    if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = data.printer_type || "";
+    if (qs("global-filter-favorite")) qs("global-filter-favorite").value = data.favorite || "";
+    if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = data.time_scope || "month";
+    if (qs("global-filter-datetime-from")) qs("global-filter-datetime-from").value = data.datetime_from || "";
+    if (qs("global-filter-datetime-to")) qs("global-filter-datetime-to").value = data.datetime_to || "";
+  } catch (_) {}
+}
+
+function updateSpecifiedRangeVisibility() {
+  const scope = (qs("global-filter-time-scope")?.value || "").trim();
+  const isSpecified = scope === "specified";
+  const fromWrap = qs("global-filter-datetime-from-wrap");
+  const toWrap = qs("global-filter-datetime-to-wrap");
+  if (fromWrap) fromWrap.hidden = !isSpecified;
+  if (toWrap) toWrap.hidden = !isSpecified;
+}
+
+async function loadLeadOptions(preferredLead = "") {
+  const select = qs("global-filter-lead");
+  if (!select) return;
+  let dbLeads = [];
+  try {
+    const data = await jget("/api/leads");
+    if (data && Array.isArray(data.leads)) dbLeads = data.leads;
+  } catch (_) {
+    dbLeads = [];
+  }
+  const uniqueLeads = Array.from(
+    new Set(
+      dbLeads
+        .map((x) => String(x || "").trim())
+        .filter((x) => Boolean(x))
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const finalLeads = ["default", ...uniqueLeads.filter((x) => x !== "default")];
+  select.innerHTML = "";
+  finalLeads.forEach((lead) => {
+    const option = document.createElement("option");
+    option.value = lead;
+    option.textContent = lead;
+    select.appendChild(option);
+  });
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "all";
+  select.appendChild(allOption);
+
+  const preferred = String(preferredLead || "").trim();
+  if (preferred === "" || finalLeads.includes(preferred)) {
+    select.value = preferred;
+  } else {
+    select.value = "default";
+  }
+}
+function defaultUiConfig() {
+  return { chart_columns: 2, card_columns: 5, card_rows: 4, pages_window: 30, paging_per_day: 1, auto_refresh_seconds: 60 };
+}
+function loadUiConfig() {
+  try {
+    const raw = localStorage.getItem("goprinx_ui_config");
+    if (!raw) return defaultUiConfig();
+    return { ...defaultUiConfig(), ...JSON.parse(raw) };
+  } catch (_) {
+    return defaultUiConfig();
+  }
+}
+function saveUiConfig(cfg) {
+  localStorage.setItem("goprinx_ui_config", JSON.stringify(cfg));
+}
+function applyUiConfig(cfg) {
+  document.documentElement.style.setProperty("--chart-columns", String(cfg.chart_columns || 2));
+  document.documentElement.style.setProperty("--timelapse-card-columns", String(cfg.card_columns || 5));
+  state.autoRefresh.intervalMs = Math.max(5000, Number(cfg.auto_refresh_seconds || 60) * 1000);
+}
+function fmtNumber(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toLocaleString("en-US");
+}
+function fmtTimestampGmt7(value) {
+  if (!value) return "-";
+  if (String(value).length === 10) return value; // Already YYYY-MM-DD
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  const shifted = new Date(dt.getTime() + 7 * 60 * 60 * 1000);
+  const iso = shifted.toISOString().replace("T", " ");
+  return `${iso.slice(0, 19)} GMT+7`;
+}
+
+function fmtDateGmt7(value) {
+  if (!value) return "-";
+  if (String(value).length === 10) return value;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  const shifted = new Date(dt.getTime() + 7 * 60 * 60 * 1000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function startOfTodayGmt7Ms() {
+  const offsetMs = 7 * 60 * 60 * 1000;
+  const now = Date.now();
+  const shifted = new Date(now + offsetMs);
+  const y = shifted.getUTCFullYear();
+  const m = shifted.getUTCMonth();
+  const d = shifted.getUTCDate();
+  return Date.UTC(y, m, d, 0, 0, 0, 0) - offsetMs;
+}
+
+function inforRowTimeMs(row) {
+  const raw = row?.updated_at || row?.last_counter_at || row?.createAt || row?.created_at || "";
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function inforRowCounterTotal(row) {
+  const counter = row?.counter_data && typeof row.counter_data === "object"
+    ? row.counter_data
+    : (row?.counter && typeof row.counter === "object" ? row.counter : {});
+  const n = Number(row?.counter_total ?? counter?.total ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildPrintedPaperBaseline(rows) {
+  const startMs = startOfTodayGmt7Ms();
+  const baseline = {};
+  for (const row of rows || []) {
+    const lan = String(row?.lan_uid || "").trim();
+    const mac = String(row?.mac_id || "").trim().toUpperCase();
+    if (!lan || !mac || mac === "UNKNOWN" || mac === "-") continue;
+    const t = inforRowTimeMs(row);
+    if (!t || t < startMs) continue;
+    const total = inforRowCounterTotal(row);
+    const key = `${lan}||${mac}`;
+    const cur = baseline[key];
+    if (!cur || t < cur.t) baseline[key] = { t, total };
+  }
+  return baseline;
+}
+
+function fmtCompact(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? "");
+  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n)}`;
+}
+
+function iconStarSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 14.75 8.82 21 9.72l-4.52 4.42 1.07 6.25L12 17.45 6.45 20.39l1.07-6.25L3 9.72l6.25-.9z"></path></svg>';
+}
+
+function iconCloseSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18"></path></svg>';
+}
+
+function iconTrashSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7.2h15M9.2 7.2V5.5h5.6v1.7M8 10v7.5M12 10v7.5M16 10v7.5M6.6 7.2l.8 12.3h9.2l.8-12.3"></path></svg>';
+}
+
+function iconInfoSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 10.2v6.4M12 7.3h.01"></path></svg>';
+}
+
+function iconPencilSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"></path></svg>';
+}
+
+function openUpsertModal(title, fields, onSave, initialData = null) {
+  const modal = qs("upsert-modal");
+  const titleEl = qs("upsert-title");
+  const bodyEl = qs("upsert-form-body");
+  if (!modal || !bodyEl) return;
+
+  titleEl.textContent = title;
+  bodyEl.innerHTML = fields.map(f => {
+    const val = initialData ? (initialData[f.name] ?? "") : (f.default ?? "");
+    let inputHtml = "";
+    if (f.type === "select") {
+      inputHtml = `<select name="${f.name}">${f.options.map(opt => `<option value="${opt.value}" ${String(opt.value) === String(val) ? "selected" : ""}>${opt.label}</option>`).join("")}</select>`;
+    } else if (f.type === "textarea") {
+      inputHtml = `<textarea name="${f.name}" rows="3">${escapeHtml(val)}</textarea>`;
+    } else if (f.type === "checkbox") {
+      inputHtml = `<input type="checkbox" name="${f.name}" ${val ? "checked" : ""} style="width: auto;">`;
+    } else {
+      inputHtml = `<input type="${f.type || "text"}" name="${f.name}" value="${escapeHtml(val)}">`;
+    }
+    return `<label class="upsert-field"><span>${f.label}</span>${inputHtml}</label>`;
+  }).join("");
+
+  modal.hidden = false;
+  
+  const okBtn = qs("upsert-ok");
+  const cancelBtn = qs("upsert-cancel");
+  
+  const handleSave = async () => {
+    const data = {};
+    bodyEl.querySelectorAll("input, select, textarea").forEach(el => {
+      if (el.type === "checkbox") data[el.name] = el.checked;
+      else data[el.name] = el.value;
+    });
+    okBtn.disabled = true;
+    try {
+      await onSave(data);
+      closeUpsertModal();
+    } catch (err) {
+      window.alert(err.message || "Save failed");
+    } finally {
+      okBtn.disabled = false;
+    }
+  };
+
+  okBtn.onclick = handleSave;
+  cancelBtn.onclick = closeUpsertModal;
+}
+
+function closeUpsertModal() {
+  const modal = qs("upsert-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function loadUsers() {
+  const data = await jget("/api/users");
+  const tbody = qs("users-tbody");
+  if (!tbody) return;
+  state.usersRows = data.rows || [];
+  tbody.innerHTML = state.usersRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.username)}</td>
+      <td>${escapeHtml(r.full_name)}</td>
+      <td>${escapeHtml(r.type || r.role || "support")}</td>
+      <td>${r.is_active ? "✅" : "❌"}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="7">No users found</td></tr>';
+}
+
+function handleUpsertUser(user = null) {
+  const fields = [
+    { name: "username", label: "Username" },
+    { name: "full_name", label: "Full Name" },
+    { name: "email", label: "Email", type: "email" },
+    { name: "password", label: "Password" },
+    { name: "phone_number", label: "Phone" },
+    { name: "type", label: "Type", type: "select", options: [
+      { value: "tech", label: "Tech" },
+      { value: "support", label: "Support" },
+    ], default: "support" },
+    { name: "workspaceIds", label: "Workspace IDs", type: "textarea", placeholder: "ws-1, ws-2" },
+    { name: "is_active", label: "Active", type: "checkbox", default: true },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(user ? "Edit User" : "Create User", fields, async (data) => {
+    const method = user ? "PATCH" : "POST";
+    const url = user ? `/api/users/${user.id}` : "/api/users";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save user");
+    await loadUsers();
+  }, user);
+}
+
+async function loadNetworks() {
+  const data = await jget("/api/networks");
+  const tbody = qs("networks-tbody");
+  if (!tbody) return;
+  state.networksRows = data.rows || [];
+  tbody.innerHTML = state.networksRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.lan_uid)}</td>
+      <td>${escapeHtml(r.network_name)}</td>
+      <td>${escapeHtml(r.office_name)}</td>
+      <td>${escapeHtml(r.real_address)}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="7">No companies found</td></tr>';
+}
+
+function handleUpsertNetwork(net = null) {
+  const fields = [
+    { name: "lan_uid", label: "LAN UID" },
+    { name: "network_id", label: "Network ID" },
+    { name: "network_name", label: "Network Name" },
+    { name: "office_name", label: "Office Name" },
+    { name: "real_address", label: "Address" },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(net ? "Edit Company" : "Create Company", fields, async (data) => {
+    const method = net ? "PATCH" : "POST";
+    const url = net ? `/api/networks/${net.id}` : "/api/networks";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save company");
+    await loadNetworks();
+  }, net);
+}
+
+async function loadTasks() {
+  const headers = {};
+  const token = getApiTokenValue("");
+  if (token) headers["X-API-Token"] = token;
+  const res = await fetch("/api/tasks", { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const tbody = qs("tasks-tbody");
+  if (!tbody) return;
+  state.tasksRows = data.rows || [];
+  tbody.innerHTML = state.tasksRows.map(r => `
+    <tr>
+      <td>${r.id}</td>
+      <td>${escapeHtml(r.lead)}</td>
+      <td>${escapeHtml(r.machine_name || r.mac_id || "-")}</td>
+      <td>${escapeHtml(r.title)}</td>
+      <td><span class="status-tag ${r.status}">${escapeHtml(r.status)}</span></td>
+      <td>${escapeHtml(r.priority)}</td>
+      <td>${escapeHtml(r.assignee_name || "-")}</td>
+      <td class="action-cell">
+        <button class="icon-btn edit" data-id="${r.id}" title="Edit">${iconPencilSvg()}</button>
+        <button class="icon-btn delete" data-id="${r.id}" title="Delete">${iconTrashSvg()}</button>
+      </td>
+    </tr>
+  `).join("") || '<tr><td colspan="8">No tasks found</td></tr>';
+  tbody.querySelectorAll(".edit").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const rowId = Number(btn.dataset.id || 0);
+      const row = state.tasksRows.find((item) => Number(item.id || 0) === rowId);
+      if (row) handleUpsertTask(row);
+    });
+  });
+  tbody.querySelectorAll(".delete").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const rowId = Number(btn.dataset.id || 0);
+      if (!rowId) return;
+      openDeleteConfirm(async () => {
+        const headers = {};
+        const token = getApiTokenValue("");
+        if (token) headers["X-API-Token"] = token;
+        const deleteRes = await fetch(`/api/tasks/${rowId}`, { method: "DELETE", headers });
+        if (!deleteRes.ok) throw new Error(`HTTP ${deleteRes.status}`);
+        closeDeleteConfirm();
+        await loadTasks();
+      });
+    });
+  });
+}
+
+function handleUpsertTask(task = null) {
+  const fields = [
+    { name: "lan_uid", label: "LAN UID" },
+    { name: "mac_id", label: "MAC ID" },
+    { name: "machine_name", label: "Machine Name" },
+    { name: "title", label: "Title" },
+    { name: "description", label: "Description", type: "textarea" },
+    { name: "status", label: "Status", type: "select", options: [
+      { value: "pending", label: "Pending" },
+      { value: "assigned", label: "Assigned" },
+      { value: "in_progress", label: "In Progress" },
+      { value: "on_hold", label: "On Hold" },
+      { value: "completed", label: "Completed" },
+      { value: "cancelled", label: "Cancelled" },
+    ], default: "pending" },
+    { name: "priority", label: "Priority", type: "select", options: [
+      { value: "low", label: "Low" },
+      { value: "medium", label: "Medium" },
+      { value: "high", label: "High" },
+      { value: "urgent", label: "Urgent" },
+    ], default: "medium" },
+  ];
+  openUpsertModal(task ? "Edit Task" : "Create Task", fields, async (data) => {
+    const method = task ? "PATCH" : "POST";
+    const url = task ? `/api/tasks/${task.id}` : "/api/tasks";
+    const headers = { "Content-Type": "application/json" };
+    const token = getApiTokenValue("");
+    if (token) headers["X-API-Token"] = token;
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save task");
+    await loadTasks();
+  }, task);
+}
+
+function handleUpsertLead(lead = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "email", label: "Email", type: "email" },
+    { name: "phone", label: "Phone" },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+  openUpsertModal(lead ? "Edit Lead" : "Create Lead", fields, async (data) => {
+    const method = lead ? "PATCH" : "POST";
+    const url = lead ? `/api/leads/${lead.id}` : "/api/leads";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save lead");
+    // Reload if on leads page
+    if (typeof loadLeadsLocal === 'function') loadLeadsLocal();
+  }, lead);
+}
+
+function handleUpsertWorkspace(ws = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "logo", label: "Logo (Emoji or Emoji Char)" },
+    { name: "color", label: "Color (Hex)", type: "color" },
+    { name: "address", label: "Address" },
+    { name: "userIds", label: "User IDs", type: "textarea", placeholder: "1, 2, 3" },
+  ];
+  openUpsertModal(ws ? "Edit Workspace" : "Create Workspace", fields, async (data) => {
+    const method = ws ? "PATCH" : "POST";
+    const url = ws ? `/api/workspaces/${ws.id}` : "/api/workspaces";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save workspace");
+    if (typeof loadWorkspaces === 'function') loadWorkspaces();
+  }, ws);
+}
+
+function handleUpsertLocation(loc = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "name", label: "Name" },
+    { name: "address", label: "Address" },
+    { name: "room", label: "Room" },
+    { name: "phone", label: "Phone" },
+    { name: "machine_count", label: "Machine Count", type: "number" },
+    { name: "workspace_id", label: "Workspace ID" },
+  ];
+  openUpsertModal(loc ? "Edit Location" : "Create Location", fields, async (data) => {
+    const method = loc ? "PATCH" : "POST";
+    const url = loc ? `/api/locations/${loc.id}` : "/api/locations";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save location");
+    if (typeof loadLocations === 'function') loadLocations();
+  }, loc);
+}
+
+function handleUpsertMaterial(mat = null) {
+  const fields = [
+    { name: "id", label: "ID (optional for create)" },
+    { name: "repair_request_id", label: "Repair ID" },
+    { name: "name", label: "Material Name" },
+    { name: "quantity", label: "Quantity", type: "number" },
+    { name: "unit_price", label: "Unit Price", type: "number" },
+    { name: "total_price", label: "Total Price (optional)", type: "number" },
+  ];
+  openUpsertModal(mat ? "Edit Material" : "Create Material", fields, async (data) => {
+    const method = mat ? "PATCH" : "POST";
+    const url = mat ? `/api/materials/${mat.id}` : "/api/materials";
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error("Failed to save material");
+    if (typeof loadMaterials === 'function') loadMaterials();
+  }, mat);
+}
+
+function setFavoriteButtonState(btn, isActive) {
+  btn.dataset.active = isActive ? "1" : "0";
+  btn.classList.toggle("active", isActive);
+}
+
+const CHART_THEME = {
+  text: "#f3f7ff",
+  mutedText: "#cedcff",
+  grid: "rgba(123, 158, 243, 0.28)",
+  tooltipBg: "rgba(8, 14, 36, 0.96)",
+  lineA: "#22e8ff",
+  lineAFill: "rgba(34, 232, 255, 0.24)",
+  lineB: "#ff37c7",
+  lineBFill: "rgba(255, 55, 199, 0.18)",
+  barA: "#1ee7ff",
+  barB: "#8756ff",
+  barC: "#ff7a1f",
+  pieA: "#33e9ff",
+  pieB: "#ff43cc",
+  pieC: "#9d7bff",
+  pieD: "#ff8c2a",
+  radarBorder: "#9a5dff",
+  radarFill: "rgba(154, 93, 255, 0.24)",
+  radarPoint: "#f8fbff",
+  neonSeries: ["#1ee7ff", "#ff43cc", "#9d7bff", "#ff8c2a", "#31ffa4"],
+};
+
+function upsertChart(id, type, data, options) {
+  const canvas = qs(id);
+  if (!canvas || typeof Chart === "undefined") return;
+  if (state.charts[id]) state.charts[id].destroy();
+  const isCircle = type === "pie" || type === "doughnut" || type === "polarArea" || type === "radar";
+  canvas.classList.toggle("chart-circle", isCircle);
+  canvas.classList.toggle("chart-rect", !isCircle);
+  const baseOptions = {
+    maintainAspectRatio: isCircle,
+    aspectRatio: isCircle ? 1 : 2,
+    plugins: {
+      legend: { labels: { color: CHART_THEME.text, font: { size: 10 } } },
+      tooltip: {
+        enabled: true,
+        backgroundColor: CHART_THEME.tooltipBg,
+        titleColor: CHART_THEME.text,
+        bodyColor: CHART_THEME.mutedText,
+        borderColor: "rgba(132, 163, 240, 0.55)",
+        borderWidth: 1,
+      },
+    },
+    elements: {
+      line: { borderWidth: 2.4 },
+      point: { radius: 2.4, hoverRadius: 4.5 },
+      arc: { borderWidth: 0 },
+    },
+  };
+  if (type === "radar") {
+    baseOptions.scales = {
+      r: {
+        ticks: { color: CHART_THEME.mutedText, backdropColor: "rgba(0, 0, 0, 0)", callback: (v) => fmtCompact(v) },
+        angleLines: { color: CHART_THEME.grid },
+        grid: { color: CHART_THEME.grid },
+        pointLabels: { color: CHART_THEME.text, font: { size: 10 } },
+      },
+    };
+  } else if (!isCircle) {
+    baseOptions.scales = {
+      x: { ticks: { color: CHART_THEME.text, font: { size: 10 }, maxRotation: 0, autoSkip: true }, grid: { color: CHART_THEME.grid } },
+      y: { ticks: { color: CHART_THEME.text, font: { size: 10 }, callback: (v) => fmtCompact(v), maxTicksLimit: 7 }, grid: { color: CHART_THEME.grid } },
+    };
+  }
+  state.charts[id] = new Chart(canvas, { type, data, options: { ...baseOptions, ...(options || {}) }, plugins: [valueLabelPlugin] });
+}
+
+const valueLabelPlugin = {
+  id: "valueLabelPlugin",
+  afterDatasetsDraw(chart) {
+    if (chart.config.type === "radar" || chart.config.type === "polarArea") return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.fillStyle = "#eefdff";
+    ctx.font = "10px Arial";
+    chart.data.datasets.forEach((dataset, i) => {
+      const meta = chart.getDatasetMeta(i);
+      if (!meta || meta.hidden) return;
+      meta.data.forEach((elem, idx) => {
+        const value = dataset.data[idx];
+        if (value === null || value === undefined) return;
+        const pos = elem.tooltipPosition();
+        ctx.textAlign = "center";
+        ctx.fillText(fmtNumber(value), pos.x, pos.y - 8);
+      });
+    });
+    ctx.restore();
+  },
+};
+
+async function loadSummary() {
+  const query = new URLSearchParams(getGlobalFilters());
+  const data = await jget(`/api/dashboard/summary?${query.toString()}`);
+  qs("summary-cards").innerHTML = `
+    <div class="card"><div>Counter Rows</div><h3>${fmtNumber(data.counter_rows)}</h3></div>
+    <div class="card"><div>Status Rows</div><h3>${fmtNumber(data.status_rows)}</h3></div>
+    <div class="card"><div>Printers / Leads</div><h3>${fmtNumber(data.printers)} / ${fmtNumber(data.leads)}</h3></div>
+    <div class="card"><div>Latest Counter Time</div><div>${fmtTimestampGmt7(data.latest_counter_at)}</div></div>
+    <div class="card"><div>Latest Status Time</div><div>${fmtTimestampGmt7(data.latest_status_at)}</div></div>
+    <div class="card"><div>Latest Total</div><h3>${fmtNumber(data.latest_totals?.total || 0)}</h3></div>
+    <div class="card"><div>Latest Copier</div><h3>${fmtNumber(data.latest_totals?.copier_bw || 0)}</h3></div>
+    <div class="card"><div>Latest Printer</div><h3>${fmtNumber(data.latest_totals?.printer_bw || 0)}</h3></div>
+    <div class="card"><div>Latest Scan BW/Color</div><h3>${fmtNumber(data.latest_totals?.scanner_send_bw || 0)} / ${fmtNumber(data.latest_totals?.scanner_send_color || 0)}</h3></div>
+  `;
+  if (qs("last-counter-info")) {
+    const c = data.latest_counter_info || {};
+    qs("last-counter-info").textContent = `${c.printer_name || "-"} | ${c.ip || "-"} | ${fmtTimestampGmt7(c.timestamp)} | begin_id=${c.begin_record_id ?? "-"}`;
+  }
+  if (qs("last-status-info")) {
+    const s = data.latest_status_info || {};
+    qs("last-status-info").textContent = `${s.printer_name || "-"} | ${s.ip || "-"} | ${fmtTimestampGmt7(s.timestamp)} | ${s.system_status || "-"} | begin_id=${s.begin_record_id ?? "-"}`;
+  }
+  const charts = data.charts || {};
+  const lineStyle = { borderWidth: 2.8, pointRadius: 2.4, pointHoverRadius: 4.5 };
+  upsertChart("chart-daily-total", "line", {
+    labels: charts.daily_total_month?.labels || [],
+    datasets: [{ label: "Total", data: charts.daily_total_month?.values || [], borderColor: CHART_THEME.lineA, backgroundColor: CHART_THEME.lineAFill, fill: true, tension: 0.35, ...lineStyle }],
+  });
+  upsertChart("chart-daily-cp", "bar", {
+    labels: charts.daily_copier_printer?.labels || [],
+    datasets: [
+      { label: "Copier", data: charts.daily_copier_printer?.copier || [], backgroundColor: CHART_THEME.barA, borderRadius: 8 },
+      { label: "Printer", data: charts.daily_copier_printer?.printer || [], backgroundColor: CHART_THEME.barB, borderRadius: 8 },
+    ],
+  });
+  upsertChart("chart-a3-a4", "doughnut", {
+    labels: charts.pie_a3_a4?.labels || [],
+    datasets: [{ data: charts.pie_a3_a4?.values || [], backgroundColor: [CHART_THEME.pieA, CHART_THEME.pieB], borderWidth: 0, hoverOffset: 14 }],
+  }, { plugins: { legend: { position: "bottom" } }, cutout: "52%", radius: "84%" });
+  upsertChart("chart-duplex", "pie", {
+    labels: charts.pie_duplex_single?.labels || [],
+    datasets: [{ data: charts.pie_duplex_single?.values || [], backgroundColor: [CHART_THEME.pieC, CHART_THEME.pieD], borderWidth: 0 }],
+  }, { plugins: { legend: { position: "bottom" } }, radius: "84%" });
+  upsertChart("chart-hourly-total", "bar", {
+    labels: charts.hourly_total?.labels || [],
+    datasets: [{
+      label: "Hourly Total",
+      data: charts.hourly_total?.values || [],
+      backgroundColor: (charts.hourly_total?.values || []).map((_, i) => CHART_THEME.neonSeries[i % CHART_THEME.neonSeries.length]),
+      borderRadius: 8,
+    }],
+  });
+  upsertChart("chart-hourly-a3a4", "line", {
+    labels: charts.hourly_a3_a4?.labels || [],
+    datasets: [
+      { label: "A3", data: charts.hourly_a3_a4?.a3 || [], borderColor: CHART_THEME.lineB, backgroundColor: CHART_THEME.lineBFill, fill: true, tension: 0.3, ...lineStyle },
+      { label: "A4", data: charts.hourly_a3_a4?.a4 || [], borderColor: CHART_THEME.lineA, backgroundColor: CHART_THEME.lineAFill, fill: true, tension: 0.3, ...lineStyle },
+    ],
+  });
+  upsertChart("chart-radar", "radar", {
+    labels: charts.average_radar?.labels || [],
+    datasets: [{ label: "Average", data: charts.average_radar?.values || [], borderColor: CHART_THEME.radarBorder, backgroundColor: CHART_THEME.radarFill, pointBackgroundColor: CHART_THEME.radarPoint }],
+  });
+  upsertChart("chart-distribution", "polarArea", {
+    labels: charts.distribution?.labels || [],
+    datasets: [{
+      data: charts.distribution?.values || [],
+      backgroundColor: (charts.distribution?.values || []).map((_, i) => CHART_THEME.neonSeries[i % CHART_THEME.neonSeries.length]),
+    }],
+  });
+}
+
+const state = {
+  counter: { page: 1, totalPages: 1 },
+  status: { page: 1, totalPages: 1 },
+  heatmap: { page: 1, totalPages: 1, mode: "day", hour: 0 },
+  devices: { rows: [], page: 1, totalPages: 1, limit: 50, total: 0 },
+  autoRefresh: { enabled: true, intervalMs: 60000, timerId: null },
+  charts: {},
+  pendingDelete: null,
+  detail: null,
+};
+
+function currentPage() {
+  return document.body.dataset.page;
+}
+
+function renderPager(pageId, currentPageValue, totalPagesValue, onSelectPage) {
+  const host = qs(pageId);
+  if (!host) return;
+  const totalPages = Math.max(1, Number(totalPagesValue || 1));
+  const currentPage = Math.min(totalPages, Math.max(1, Number(currentPageValue || 1)));
+  
+  const buttons = [];
+  const maxVisible = 5; // Number of visible page buttons (excluding first/last and ellipsis)
+
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) buttons.push(i);
+  } else {
+    buttons.push(1);
+    
+    let start = Math.max(2, currentPage - 1);
+    let end = Math.min(totalPages - 1, currentPage + 1);
+
+    if (currentPage <= 3) {
+      end = 4;
+    } else if (currentPage >= totalPages - 2) {
+      start = totalPages - 3;
+    }
+
+    if (start > 2) buttons.push("...");
+    for (let i = start; i <= end; i++) buttons.push(i);
+    if (end < totalPages - 1) buttons.push("...");
+    
+    buttons.push(totalPages);
+  }
+
+  host.innerHTML = buttons
+    .map((p) => {
+      if (p === "...") return `<span class="pager-ellipsis">...</span>`;
+      return `<button type="button" class="pager-page-btn ${p === currentPage ? "active" : ""}" data-page="${p}">${p}</button>`;
+    })
+    .join("");
+
+  host.querySelectorAll(".pager-page-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetPage = Number(btn.dataset.page || 1);
+      if (targetPage === currentPage) return;
+      onSelectPage(targetPage);
+    });
+  });
+}
+
+function refreshCurrentPage() {
+  const page = currentPage();
+  if (page === "dashboard") return loadSummary();
+  if (page === "devices" || page === "infor") return loadDevicesPage();
+  if (page === "api_docs") return initApiTests(false);
+  if (page === "tasks") return loadTasks();
+  if (page === "counter") return loadCounter();
+  if (page === "status") return loadStatus();
+  if (page === "heatmap") return loadHeatmap();
+  return Promise.resolve();
+}
+
+function setApiTestStatus(key, mode, text) {
+  const node = qs(`api-test-status-${key}`);
+  if (!node) return;
+  node.classList.remove("idle", "ok", "fail");
+  node.classList.add(mode);
+  node.textContent = text;
+}
+
+function apiTestInputValue(id, fallback = "") {
+  const node = qs(id);
+  const value = String(node?.value || "").trim();
+  return value || fallback;
+}
+
+function buildApiTestHeaders(ctx, includeJson = false, includeApiToken = false) {
+  const headers = {};
+  if (includeJson) headers["Content-Type"] = "application/json";
+  if (includeApiToken) {
+    const token = String(ctx?.api_token || getApiTokenValue("change-me")).trim();
+    if (token) headers["X-API-Token"] = token;
+  }
+  return headers;
+}
+
+function buildTaskApiTestPayload(ctx, overrides = {}) {
+  return {
+    lan_uid: String(ctx?.lan_uid || "").trim() || "api-docs-test-lan",
+    agent_uid: String(ctx?.agent_uid || "").trim() || "api-docs-test-agent",
+    mac_id: String(ctx?.mac_id || "").trim() || "00:00:00:00:00:01",
+    machine_name: "API Docs Test Machine",
+    title: "API Docs Task",
+    description: "Created by API docs test harness",
+    status: "backlog",
+    priority: "medium",
+    ...overrides,
+  };
+}
+
+function apiDocsUniqueSlug(prefix) {
+  const base = String(prefix || "sample").trim() || "sample";
+  return `${base}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+async function readApiDocsResponse(res) {
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    data = null;
+  }
+  return { text, data };
+}
+
+async function createApiDocsSampleTask(ctx) {
+  const payload = buildTaskApiTestPayload(ctx, {
+    title: `API Docs Sample Task ${Date.now()}`,
+    description: "Temporary task created by the API docs test harness.",
+  });
+  const res = await fetch("/api/tasks", {
+    method: "POST",
+    headers: buildApiTestHeaders(ctx, true, true),
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch (_) {}
+  const task = data && typeof data === "object" ? data.task : null;
+  if (!res.ok || !task || !task.id) {
+    return { ok: false, status: res.status, text, payload };
+  }
+  return { ok: true, status: res.status, text, payload, task };
+}
+
+async function createApiDocsSampleWorkspace() {
+  const slug = apiDocsUniqueSlug("ws");
+  const payload = {
+    id: slug,
+    name: `API Docs Workspace ${slug}`,
+    logo: "W",
+    color: "#0f6cbd",
+    address: "API Docs Workspace Address",
+    userIds: [],
+  };
+  const res = await fetch("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const { text, data } = await readApiDocsResponse(res);
+  const row = data && typeof data === "object" ? data.row : null;
+  if (!res.ok || !row || !row.id) return { ok: false, status: res.status, text, payload };
+  return { ok: true, status: res.status, text, payload, row };
+}
+
+async function createApiDocsSampleLocation() {
+  const slug = apiDocsUniqueSlug("loc");
+  const payload = {
+    id: slug,
+    name: `API Docs Location ${slug}`,
+    address: "API Docs Location Address",
+    room: "Room 101",
+    phone: "0900000000",
+    machine_count: 1,
+  };
+  const res = await fetch("/api/locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const { text, data } = await readApiDocsResponse(res);
+  const row = data && typeof data === "object" ? data.row : null;
+  if (!res.ok || !row || !row.id) return { ok: false, status: res.status, text, payload };
+  return { ok: true, status: res.status, text, payload, row };
+}
+
+async function createApiDocsSampleMaterial() {
+  const slug = apiDocsUniqueSlug("mat");
+  const payload = {
+    id: slug,
+    name: `API Docs Material ${slug}`,
+    quantity: 1,
+    unit_price: 100,
+    total_price: 100,
+  };
+  const res = await fetch("/api/materials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const { text, data } = await readApiDocsResponse(res);
+  const row = data && typeof data === "object" ? data.row : null;
+  if (!res.ok || !row || !row.id) return { ok: false, status: res.status, text, payload };
+  return { ok: true, status: res.status, text, payload, row };
+}
+
+async function createApiDocsSampleUser() {
+  const slug = apiDocsUniqueSlug("apitest-user");
+  const payload = {
+    username: slug,
+    full_name: `API Docs User ${slug}`,
+    email: `${slug}@example.com`,
+    password: "TestUser!1",
+    phone_number: "0900000000",
+    type: "tech",
+    is_active: true,
+    notes: "Created by API docs test",
+    workspaceIds: [],
+  };
+  const res = await fetch("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const { text, data } = await readApiDocsResponse(res);
+  const user = data && typeof data === "object" ? data.user : null;
+  if (!res.ok || !user || !user.id) return { ok: false, status: res.status, text, payload };
+  return { ok: true, status: res.status, text, payload, user };
+}
+
+async function deleteApiDocsSampleTask(taskId, ctx) {
+  const res = await fetch(`/api/tasks/${encodeURIComponent(String(taskId || ""))}`, {
+    method: "DELETE",
+    headers: buildApiTestHeaders(ctx, false, true),
+  });
+  const text = await res.text();
+  return { ok: res.ok, status: res.status, text };
+}
+
+async function deleteApiDocsSampleResource(url) {
+  const res = await fetch(url, { method: "DELETE" });
+  const text = await res.text();
+  return { ok: res.ok, status: res.status, text };
+}
+
+async function loadApiTestContext() {
+  const context = {
+    lead: "",
+    api_token: getApiTokenValue(DEFAULT_API_TEST_TOKEN),
+    lan_uid: "",
+    mac_id: "",
+    user_id: "",
+    agent_id: "",
+    agent_uid: "",
+    ftp_mac_id: "",
+    ftp_site_agent_id: "",
+    ftp_site_mac_id: "",
+    ftp_site_name: "",
+    ftp_site_path: "",
+    ftp_site_port: "",
+    ftp_site_user: "",
+    ftp_site_password: "",
+    device_name: "",
+  };
+  try {
+    const all = await jget("/all/");
+    const rows = Array.isArray(all?.rows) ? all.rows : [];
+    if (rows.length) {
+      const first = rows[0] || {};
+      context.lead = String(first.lead || context.lead).trim() || context.lead;
+      context.lan_uid = String(first.lan_uid || "").trim();
+      const withMac = rows.find((x) => String(x?.mac_id || "").trim() && String(x?.mac_id || "").toLowerCase() !== "unknown");
+      context.mac_id = String((withMac || first).mac_id || "").trim();
+    }
+  } catch (_) {}
+  if (!context.user_id) {
+    try {
+      const users = await jget("/api/users");
+      const rows = Array.isArray(users?.rows) ? users.rows : [];
+      if (rows.length) {
+        context.user_id = String(rows[0].id || "").trim();
+      }
+    } catch (_) {}
+  }
+  if (!context.lan_uid) {
+    try {
+      const net = await jget("/networklist/");
+      const rows = Array.isArray(net?.networks) ? net.networks : [];
+      if (rows.length) {
+        context.lead = String(rows[0].lead || context.lead).trim() || context.lead;
+        context.lan_uid = String(rows[0].lan_uid || "").trim();
+      }
+    } catch (_) {}
+  }
+  if (!context.mac_id) {
+    try {
+      const machines = await jget("/machinelist/");
+      const rows = Array.isArray(machines?.machines) ? machines.machines : [];
+      const withMac = rows.find((x) => String(x?.mac_id || "").trim() && String(x?.mac_id || "").toLowerCase() !== "unknown");
+      if (withMac) context.mac_id = String(withMac.mac_id || "").trim();
+      if (!context.lan_uid && withMac) context.lan_uid = String(withMac.lan_uid || "").trim();
+      if (!context.lead && withMac) context.lead = String(withMac.lead || "").trim() || "default";
+    } catch (_) {}
+  }
+  if (!context.agent_uid) {
+    try {
+      const agents = await jget("/api/agents");
+      const rows = Array.isArray(agents?.rows) ? agents.rows : [];
+      if (rows.length) {
+        const agentWithPrinter =
+          rows.find((row) => Number(row?.id || 0) > 0 && ((Array.isArray(row?.printers) && row.printers.length) || (Array.isArray(row?.lan_printers) && row.lan_printers.length))) ||
+          rows.find((row) => Number(row?.id || 0) > 0) ||
+          null;
+        if (agentWithPrinter) {
+          context.agent_id = String(agentWithPrinter.id || "").trim();
+          context.agent_uid = String(agentWithPrinter.agent_uid || "").trim();
+          if (!context.lan_uid) context.lan_uid = String(agentWithPrinter.lan_uid || "").trim();
+          if (!context.lead) context.lead = String(agentWithPrinter.lead || "").trim() || context.lead;
+          const printers = Array.isArray(agentWithPrinter.printers) && agentWithPrinter.printers.length
+            ? agentWithPrinter.printers
+            : (Array.isArray(agentWithPrinter.lan_printers) ? agentWithPrinter.lan_printers : []);
+          const withMac = printers.find((item) => String(item?.mac_id || "").trim() && String(item?.mac_id || "").toLowerCase() !== "unknown");
+          const chosenMac = String((withMac || printers[0] || {}).mac_id || "").trim();
+          if (!context.mac_id && chosenMac) context.mac_id = chosenMac;
+          context.ftp_mac_id = chosenMac || context.mac_id;
+        }
+        const agentWithFtpSite =
+          rows.find((row) => Number(row?.id || 0) > 0 && Array.isArray(row?.ftp_sites) && row.ftp_sites.length) ||
+          null;
+        if (agentWithFtpSite) {
+          const ftpSite = (Array.isArray(agentWithFtpSite.ftp_sites) ? agentWithFtpSite.ftp_sites : [])[0] || {};
+          const ftpSitePrinters = Array.isArray(agentWithFtpSite.printers) && agentWithFtpSite.printers.length
+            ? agentWithFtpSite.printers
+            : (Array.isArray(agentWithFtpSite.lan_printers) ? agentWithFtpSite.lan_printers : []);
+          const ftpSiteWithMac = ftpSitePrinters.find((item) => String(item?.mac_id || "").trim() && String(item?.mac_id || "").toLowerCase() !== "unknown");
+          const ftpSiteMac = String((ftpSiteWithMac || ftpSitePrinters[0] || {}).mac_id || "").trim();
+          context.ftp_site_agent_id = String(agentWithFtpSite.id || "").trim();
+          context.ftp_site_mac_id = ftpSiteMac;
+          context.ftp_site_name = String(ftpSite.name || "").trim();
+          context.ftp_site_path = String(ftpSite.path || "").trim();
+          context.ftp_site_port = String(ftpSite.port || "").trim();
+          context.ftp_site_user = String(ftpSite.ftp_user || "").trim();
+          context.ftp_site_password = String(ftpSite.ftp_password || "").trim();
+          if (!context.agent_id) context.agent_id = context.ftp_site_agent_id;
+          if (!context.agent_uid) context.agent_uid = String(agentWithFtpSite.agent_uid || "").trim();
+          if (!context.lan_uid) context.lan_uid = String(agentWithFtpSite.lan_uid || "").trim();
+          if (!context.lead) context.lead = String(agentWithFtpSite.lead || "").trim() || context.lead;
+          if (!context.ftp_mac_id && ftpSiteMac) context.ftp_mac_id = ftpSiteMac;
+        }
+      }
+    } catch (_) {}
+  }
+  try {
+    const devices = await jget("/api/devices");
+    const rows = Array.isArray(devices?.rows) ? devices.rows : [];
+    const device =
+      rows.find((row) => String(row?.mac_id || "").trim() && String(row?.ip || "").trim()) ||
+      rows.find((row) => Number(row?.id || 0) > 0 && String(row?.ip || "").trim()) ||
+      null;
+    if (device) {
+      context.device_name = String(device.printer_name || "").trim();
+      if (!context.agent_uid) context.agent_uid = String(device.agent_uid || "").trim();
+      if (!context.lan_uid) context.lan_uid = String(device.lan_uid || "").trim();
+      context.mac_id = String(device.mac_id || "").trim() || context.mac_id;
+      if (!context.lead) context.lead = String(device.lead || "").trim();
+    }
+  } catch (_) {}
+  return context;
+}
+
+function buildApiTestUrl(key, ctx) {
+  const lan = encodeURIComponent(ctx.lan_uid || "");
+  const mac = encodeURIComponent(ctx.mac_id || "");
+  const scanMac = encodeURIComponent(String(ctx.ftp_mac_id || ctx.mac_id || "").trim());
+  const scanSiteMac = encodeURIComponent(String(ctx.ftp_site_mac_id || ctx.ftp_mac_id || ctx.mac_id || "").trim());
+  if (key === "machinelist") return "/machinelist/";
+  if (key === "networklist") return "/networklist/";
+  if (key === "infor") return "/api/infor/list";
+  if (key === "by-mac") return mac ? `/api/public/device/by-mac?mac_id=${mac}` : "";
+  if (key === "by-lan") return lan ? `/api/public/network/by-lan?lan_uid=${lan}` : "";
+  if (key === "all") return "/all/";
+  if (key === "agents-list") return "/api/agents";
+  if (key === "devices-list") return "/api/devices";
+  if (key === "devices-unlock") return mac ? `/api/devices/${mac}/unlock` : "";
+  if (key === "devices-lock") return mac ? `/api/devices/${mac}/lock` : "";
+  if (key === "ftp-queue-create") return scanMac ? `/api/devices/${scanMac}/scan-folder` : "";
+  if (key === "ftp-queue-update") return scanSiteMac ? `/api/devices/${scanSiteMac}/scan-folder` : "";
+  if (key === "ftp-queue-delete") return scanSiteMac ? `/api/devices/${scanSiteMac}/scan-folder` : "";
+  
+  if (key.startsWith("workspaces-")) {
+    if (key === "workspaces-list") return "/api/workspaces";
+    if (key === "workspaces-create") return `/api/workspaces`;
+    if (key === "workspaces-update") return `/api/workspaces/test-ws`;
+    if (key === "workspaces-delete") return `/api/workspaces/test-ws`;
+  }
+  if (key.startsWith("locations-")) {
+    if (key === "locations-list") return "/api/locations";
+    if (key === "locations-create") return `/api/locations`;
+    if (key === "locations-update") return `/api/locations/test-loc`;
+    if (key === "locations-delete") return `/api/locations/test-loc`;
+  }
+  if (key.startsWith("materials-")) {
+    if (key === "materials-list") return "/api/materials";
+    if (key === "materials-create") return `/api/materials`;
+    if (key === "materials-update") return `/api/materials/test-mat`;
+    if (key === "materials-delete") return `/api/materials/test-mat`;
+  }
+  if (key.startsWith("users-")) {
+    if (key === "users-list") return "/api/users";
+    if (key === "users-create") return `/api/users`;
+    if (key === "users-update") return `/api/users/0`;
+    if (key === "users-delete") return `/api/users/0`;
+  }
+  if (key.startsWith("user-workspaces-")) {
+    if (key === "user-workspaces-list") return `/api/user/workspaces?user_id=7`;
+  }
+  if (key.startsWith("workspace-users-")) {
+    if (key === "workspace-users-list") return `/api/workspace/users?workspace_id=ws-1`;
+  }
+  if (key.startsWith("tasks-")) {
+    if (key === "tasks-list") return `/api/tasks`;
+    if (key === "tasks-create") return `/api/tasks`;
+    if (key === "tasks-update") return `/api/tasks/999999`;
+    if (key === "tasks-delete") return `/api/tasks/999999`;
+  }
+  if (key === "lan-sites-list") return "/api/lan-sites";
+
+  if (key === "workspaces") return "/api/workspaces";
+  if (key === "locations") return "/api/locations";
+  if (key === "materials") return "/api/materials";
+  if (key === "users") return "/api/users";
+  if (key === "tasks") return "/api/tasks";
+  return "";
+}
+
+async function runApiTest(key, ctx) {
+  const output = qs("api-test-output");
+  let url = buildApiTestUrl(key, ctx);
+  if (!url) {
+    setApiTestStatus(key, "fail", "FAIL (missing sample)");
+    if (output) output.textContent = `[${key}] Missing sample data (lan_uid/mac_id) to run this API test.`;
+    return false;
+  }
+
+  let method = "GET";
+  let body = null;
+  let headers = {};
+  let cleanupNote = "";
+  let cleanupTaskId = "";
+  let cleanupResourceUrl = "";
+
+  const failSetup = (seeded, label) => {
+    setApiTestStatus(key, "fail", `SETUP FAIL ${seeded?.status || ""}`.trim());
+    if (output) output.textContent = `[${key}] Could not create a sample ${label}\nStatus: ${seeded?.status}\n\n${seeded?.text || ""}`;
+    return false;
+  };
+
+  if (key === "tasks-create") {
+    method = "POST";
+    body = buildTaskApiTestPayload(ctx, {
+      title: `API Docs Create Task ${Date.now()}`,
+      description: "Task created by API docs create test.",
+    });
+    headers = buildApiTestHeaders(ctx, true, true);
+  } else if (key === "devices-unlock" || key === "devices-lock") {
+    if (!String(ctx?.mac_id || "").trim()) {
+      setApiTestStatus(key, "fail", "SETUP FAIL");
+      if (output) output.textContent = `[${key}] Could not find a sample device MAC from /api/devices to test Ricoh machine control.`;
+      return false;
+    }
+    method = "POST";
+    body = null;
+  } else if (key === "ftp-queue-create") {
+    if (!String(ctx?.ftp_mac_id || ctx?.mac_id || "").trim()) {
+      setApiTestStatus(key, "fail", "SETUP FAIL");
+      if (output) output.textContent = `[${key}] Could not find a sample printer MAC to test device scan-folder create.`;
+      return false;
+    }
+    const proceed = window.confirm(`Queue a real scan-folder assignment for printer MAC ${ctx.ftp_mac_id || ctx.mac_id}?`);
+    if (!proceed) {
+      setApiTestStatus(key, "idle", "Cancelled");
+      if (output) output.textContent = `[${key}] Cancelled.`;
+      return false;
+    }
+    const scanPath = String(apiDocsUniqueSlug("scan-api-docs")).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48) || "scan_api_docs";
+    method = "POST";
+    body = {
+      action: "create",
+      mac_id: String(ctx.ftp_mac_id || ctx.mac_id || "").trim(),
+      scan_path: scanPath,
+    };
+  } else if (key === "ftp-queue-update") {
+    if (!String(ctx?.ftp_site_name || "").trim() || !String(ctx?.ftp_site_mac_id || ctx?.ftp_mac_id || ctx?.mac_id || "").trim()) {
+      setApiTestStatus(key, "fail", "SETUP FAIL");
+      if (output) output.textContent = `[${key}] Could not find an existing scan folder plus printer MAC to test device scan-folder update.`;
+      return false;
+    }
+    const proceed = window.confirm(`Queue a real scan-folder update for site ${ctx.ftp_site_name} using printer MAC ${ctx.ftp_site_mac_id || ctx.ftp_mac_id || ctx.mac_id}?`);
+    if (!proceed) {
+      setApiTestStatus(key, "idle", "Cancelled");
+      if (output) output.textContent = `[${key}] Cancelled.`;
+      return false;
+    }
+    method = "POST";
+    body = {
+      action: "update",
+      site_name: String(ctx.ftp_site_name || "").trim(),
+      scan_path: String(ctx.ftp_site_path || "").trim() || String(ctx.ftp_site_name || "").trim(),
+    };
+  } else if (key === "ftp-queue-delete") {
+    if (!String(ctx?.ftp_site_name || "").trim() || !String(ctx?.ftp_site_mac_id || ctx?.ftp_mac_id || ctx?.mac_id || "").trim()) {
+      setApiTestStatus(key, "fail", "SETUP FAIL");
+      if (output) output.textContent = `[${key}] Could not find an existing scan folder plus printer MAC to test device scan-folder delete.`;
+      return false;
+    }
+    const proceed = window.confirm(`Queue a real scan-folder delete for site ${ctx.ftp_site_name} using printer MAC ${ctx.ftp_site_mac_id || ctx.ftp_mac_id || ctx.mac_id}?`);
+    if (!proceed) {
+      setApiTestStatus(key, "idle", "Cancelled");
+      if (output) output.textContent = `[${key}] Cancelled.`;
+      return false;
+    }
+    method = "POST";
+    body = {
+      action: "delete",
+      site_name: String(ctx.ftp_site_name || "").trim(),
+    };
+  } else if (key === "tasks-update") {
+    const seeded = await createApiDocsSampleTask(ctx);
+    if (!seeded.ok) {
+      setApiTestStatus(key, "fail", `SETUP FAIL ${seeded.status || ""}`.trim());
+      if (output) output.textContent = `[${key}] Could not create a sample task for PATCH\nStatus: ${seeded.status}\n\n${seeded.text}`;
+      return false;
+    }
+    url = `/api/tasks/${encodeURIComponent(String(seeded.task.id))}`;
+    method = "PATCH";
+    body = {
+      title: `Updated API Docs Task ${Date.now()}`,
+      description: "Task updated by API docs patch test.",
+      status: "selected",
+      priority: "high",
+    };
+    headers = buildApiTestHeaders(ctx, true, true);
+    cleanupTaskId = String(seeded.task.id || "");
+  } else if (key === "tasks-delete") {
+    const seeded = await createApiDocsSampleTask(ctx);
+    if (!seeded.ok) {
+      setApiTestStatus(key, "fail", `SETUP FAIL ${seeded.status || ""}`.trim());
+      if (output) output.textContent = `[${key}] Could not create a sample task for DELETE\nStatus: ${seeded.status}\n\n${seeded.text}`;
+      return false;
+    }
+    url = `/api/tasks/${encodeURIComponent(String(seeded.task.id))}`;
+    method = "DELETE";
+    headers = buildApiTestHeaders(ctx, false, true);
+  } else if (key === "workspaces-create") {
+    method = "POST";
+    const slug = apiDocsUniqueSlug("ws");
+    body = {
+      id: slug,
+      name: `API Docs Workspace ${slug}`,
+      logo: "W",
+      color: "#0f6cbd",
+      address: "API Docs Workspace Address",
+      userIds: [],
+    };
+  } else if (key === "workspaces-update") {
+    const seeded = await createApiDocsSampleWorkspace();
+    if (!seeded.ok) return failSetup(seeded, "workspace for PATCH");
+    url = `/api/workspaces/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "PATCH";
+    body = {
+      name: `Updated Workspace ${Date.now()}`,
+      address: "Updated workspace address",
+      color: "#14532d",
+      userIds: [],
+    };
+    cleanupResourceUrl = url;
+  } else if (key === "workspaces-delete") {
+    const seeded = await createApiDocsSampleWorkspace();
+    if (!seeded.ok) return failSetup(seeded, "workspace for DELETE");
+    url = `/api/workspaces/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "DELETE";
+  } else if (key === "locations-create") {
+    method = "POST";
+    const slug = apiDocsUniqueSlug("loc");
+    body = {
+      id: slug,
+      name: `API Docs Location ${slug}`,
+      address: "API Docs Location Address",
+      room: "Room 101",
+      phone: "0900000000",
+      machine_count: 1,
+    };
+  } else if (key === "locations-update") {
+    const seeded = await createApiDocsSampleLocation();
+    if (!seeded.ok) return failSetup(seeded, "location for PATCH");
+    url = `/api/locations/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "PATCH";
+    body = {
+      name: `Updated Location ${Date.now()}`,
+      address: "Updated location address",
+      room: "Room 202",
+      phone: "0900000001",
+      machine_count: 2,
+    };
+    cleanupResourceUrl = url;
+  } else if (key === "locations-delete") {
+    const seeded = await createApiDocsSampleLocation();
+    if (!seeded.ok) return failSetup(seeded, "location for DELETE");
+    url = `/api/locations/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "DELETE";
+  } else if (key === "materials-create") {
+    method = "POST";
+    const slug = apiDocsUniqueSlug("mat");
+    body = {
+      id: slug,
+      name: `API Docs Material ${slug}`,
+      quantity: 1,
+      unit_price: 100,
+      total_price: 100,
+    };
+  } else if (key === "materials-update") {
+    const seeded = await createApiDocsSampleMaterial();
+    if (!seeded.ok) return failSetup(seeded, "material for PATCH");
+    url = `/api/materials/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "PATCH";
+    body = {
+      name: `Updated Material ${Date.now()}`,
+      quantity: 2,
+      unit_price: 150,
+      total_price: 300,
+    };
+    cleanupResourceUrl = url;
+  } else if (key === "materials-delete") {
+    const seeded = await createApiDocsSampleMaterial();
+    if (!seeded.ok) return failSetup(seeded, "material for DELETE");
+    url = `/api/materials/${encodeURIComponent(String(seeded.row.id || ""))}`;
+    method = "DELETE";
+  } else if (key === "users-create") {
+    method = "POST";
+    const slug = apiDocsUniqueSlug("apitest-user");
+    body = {
+      username: slug,
+      full_name: `API Docs User ${slug}`,
+      email: `${slug}@example.com`,
+      password: "TestUser!1",
+      phone_number: "0900000000",
+      type: "tech",
+      is_active: true,
+      notes: "Created by API docs test",
+      workspaceIds: [],
+    };
+  } else if (key === "users-update") {
+    const seeded = await createApiDocsSampleUser();
+    if (!seeded.ok) return failSetup(seeded, "user for PATCH");
+    const updatedSlug = apiDocsUniqueSlug("apitest-user-updated");
+    url = `/api/users/${encodeURIComponent(String(seeded.user.id || ""))}`;
+    method = "PATCH";
+    body = {
+      username: updatedSlug,
+      full_name: "Updated API Docs User",
+      email: `${updatedSlug}@example.com`,
+      phone_number: "0900000001",
+      type: "support",
+      is_active: true,
+      notes: "Updated by API docs test",
+      workspaceIds: [],
+    };
+    cleanupResourceUrl = url;
+  } else if (key === "users-delete") {
+    const seeded = await createApiDocsSampleUser();
+    if (!seeded.ok) return failSetup(seeded, "user for DELETE");
+    url = `/api/users/${encodeURIComponent(String(seeded.user.id || ""))}`;
+    method = "DELETE";
+  }
+
+  setApiTestStatus(key, "idle", "Testing...");
+  try {
+    const options = { method };
+    if (headers && Object.keys(headers).length) {
+      options.headers = headers;
+    }
+    if (body) {
+      if (!options.headers) options.headers = {};
+      if (!options.headers["Content-Type"]) options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+
+    const res = await fetch(url, options);
+    const { text, data: responseJson } = await readApiDocsResponse(res);
+    if (key === "tasks-create" && res.ok) {
+      const createdTaskId = responseJson?.task?.id;
+      if (createdTaskId) {
+        const cleanup = await deleteApiDocsSampleTask(createdTaskId, ctx);
+        cleanupNote = cleanup.ok ? "\nCleanup: created task removed." : `\nCleanup: created task still exists (status ${cleanup.status}).`;
+      }
+    } else if (key === "tasks-update" && cleanupTaskId) {
+      const cleanup = await deleteApiDocsSampleTask(cleanupTaskId, ctx);
+      cleanupNote = cleanup.ok ? "\nCleanup: seed task removed." : `\nCleanup: seed task still exists (status ${cleanup.status}).`;
+    } else if (res.ok && key === "workspaces-create") {
+      const createdId = responseJson?.row?.id;
+      if (createdId) {
+        const cleanup = await deleteApiDocsSampleResource(`/api/workspaces/${encodeURIComponent(String(createdId))}`);
+        cleanupNote = cleanup.ok ? "\nCleanup: created workspace removed." : `\nCleanup: created workspace still exists (status ${cleanup.status}).`;
+      }
+    } else if (res.ok && key === "locations-create") {
+      const createdId = responseJson?.row?.id;
+      if (createdId) {
+        const cleanup = await deleteApiDocsSampleResource(`/api/locations/${encodeURIComponent(String(createdId))}`);
+        cleanupNote = cleanup.ok ? "\nCleanup: created location removed." : `\nCleanup: created location still exists (status ${cleanup.status}).`;
+      }
+    } else if (res.ok && key === "materials-create") {
+      const createdId = responseJson?.row?.id;
+      if (createdId) {
+        const cleanup = await deleteApiDocsSampleResource(`/api/materials/${encodeURIComponent(String(createdId))}`);
+        cleanupNote = cleanup.ok ? "\nCleanup: created material removed." : `\nCleanup: created material still exists (status ${cleanup.status}).`;
+      }
+    } else if (res.ok && key === "users-create") {
+      const createdId = responseJson?.user?.id;
+      if (createdId) {
+        const cleanup = await deleteApiDocsSampleResource(`/api/users/${encodeURIComponent(String(createdId))}`);
+        cleanupNote = cleanup.ok ? "\nCleanup: created user removed." : `\nCleanup: created user still exists (status ${cleanup.status}).`;
+      }
+    } else if (cleanupResourceUrl) {
+      const cleanup = await deleteApiDocsSampleResource(cleanupResourceUrl);
+      const noun = key.startsWith("workspaces-") ? "workspace" : key.startsWith("locations-") ? "location" : key.startsWith("materials-") ? "material" : "user";
+      cleanupNote = cleanup.ok ? `\nCleanup: seed ${noun} removed.` : `\nCleanup: seed ${noun} still exists (status ${cleanup.status}).`;
+    }
+    let preview = text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text;
+    if (cleanupNote) preview += cleanupNote;
+    if (!res.ok && key.startsWith("tasks-") && (res.status === 400 || res.status === 401)) {
+      preview += "\n\nHint: protected APIs in this test UI use the server default protected scope.";
+    }
+    if (res.ok) {
+      setApiTestStatus(key, "ok", `${method} OK ${res.status}`);
+      if (output) output.textContent = `[${key}] ${method} ${url}\nStatus: ${res.status}\n\n${preview}`;
+      return true;
+    }
+    setApiTestStatus(key, "fail", `${method} FAIL ${res.status}`);
+    if (output) output.textContent = `[${key}] ${method} ${url}\nStatus: ${res.status}\n\n${preview}`;
+    return false;
+  } catch (err) {
+    const msg = err && err.message ? err.message : "Network error";
+    setApiTestStatus(key, "fail", "FAIL");
+    if (output) output.textContent = `[${key}] ${method} ${url}\nError: ${msg}`;
+    return false;
+  }
+}
+
+async function initApiTests(resetStatuses = true) {
+  const page = currentPage();
+  if (page !== "api_docs") return;
+  const global = qs("api-test-global-status");
+  const output = qs("api-test-output");
+  const buttons = Array.from(document.querySelectorAll(".api-test-btn"));
+  const allBtn = qs("api-test-all-btn");
+  const keys = [
+    "machinelist", "networklist", "infor", "by-mac", "by-lan", "all", "agents-list", "devices-list",
+    "workspaces-list", "workspaces-create", "workspaces-update", "workspaces-delete",
+    "locations-list", "locations-create", "locations-update", "locations-delete",
+    "materials-list", "materials-create", "materials-update", "materials-delete",
+    "users-list", "users-create", "users-update", "users-delete",
+    "user-workspaces-list", "workspace-users-list",
+    "tasks-list", "tasks-create", "tasks-update", "tasks-delete",
+    "lan-sites-list"
+  ];
+  const manualOnlyKeys = ["devices-unlock", "devices-lock", "ftp-queue-create", "ftp-queue-update", "ftp-queue-delete"];
+  if (resetStatuses) {
+    [...keys, ...manualOnlyKeys].forEach((key) => setApiTestStatus(key, "idle", "-"));
+    if (global) {
+      global.classList.remove("ok", "fail");
+      global.classList.add("idle");
+      global.textContent = "Ready";
+    }
+    if (output) output.textContent = "Click Test to run API check...";
+  }
+  const ctx = await loadApiTestContext();
+  if (allBtn && allBtn.dataset.bound !== "1") {
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const key = btn.dataset.apiKey || "";
+        if (!key) return;
+        await runApiTest(key, await loadApiTestContext());
+      });
+    });
+    allBtn.addEventListener("click", async () => {
+      const liveCtx = await loadApiTestContext();
+    if (global) {
+      global.classList.remove("ok", "fail", "idle");
+      global.classList.add("idle");
+      global.textContent = "Running...";
+    }
+    let okCount = 0;
+    for (const key of keys) {
+      const ok = await runApiTest(key, liveCtx);
+      if (ok) okCount += 1;
+    }
+    const allOk = okCount === keys.length;
+    if (global) {
+      global.classList.remove("ok", "fail", "idle");
+      global.classList.add(allOk ? "ok" : "fail");
+      global.textContent = allOk ? `OK (${okCount}/${keys.length})` : `FAIL (${okCount}/${keys.length})`;
+    }
+    });
+    allBtn.dataset.bound = "1";
+  }
+}
+
+function updateAutoRefreshStateText() {
+  const el = qs("auto-refresh-state");
+  if (!el) return;
+  el.textContent = state.autoRefresh.enabled
+    ? `Auto refresh: ON (${Math.round(state.autoRefresh.intervalMs / 1000)}s)`
+    : "Auto refresh: OFF";
+}
+
+function stopAutoRefresh() {
+  if (state.autoRefresh.timerId) {
+    window.clearInterval(state.autoRefresh.timerId);
+    state.autoRefresh.timerId = null;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!state.autoRefresh.enabled) {
+    updateAutoRefreshStateText();
+    return;
+  }
+  state.autoRefresh.timerId = window.setInterval(() => {
+    if (document.hidden) return;
+    refreshCurrentPage().catch(() => {});
+  }, state.autoRefresh.intervalMs);
+  updateAutoRefreshStateText();
+}
+
+function openDeleteConfirm(onYes) {
+  state.pendingDelete = onYes;
+  const modal = qs("confirm-modal");
+  if (modal) modal.hidden = false;
+}
+
+function closeDeleteConfirm() {
+  state.pendingDelete = null;
+  const modal = qs("confirm-modal");
+  if (modal) modal.hidden = true;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function closeDetailModal() {
+  state.detail = null;
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (body) body.innerHTML = "";
+  if (modal) modal.hidden = true;
+}
+
+function devicesPerPage() {
+  const cfg = loadUiConfig();
+  const cols = Math.max(1, Number(cfg.card_columns || 5));
+  const rows = Math.max(1, Number(cfg.card_rows || 4));
+  return cols * rows;
+}
+
+async function toggleDeviceEnabled(row, desiredEnabled, inputNode) {
+  const targetRef = encodeURIComponent(String(row?.mac_id || row?.id || "").trim());
+  if (!targetRef) {
+    if (inputNode) inputNode.checked = !desiredEnabled;
+    window.alert("Missing device MAC ID.");
+    return;
+  }
+  try {
+    const res = await fetch(`/api/devices/${targetRef}/enable`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: desiredEnabled }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${res.status}`);
+    }
+    await loadDevicesPage();
+  } catch (err) {
+    if (inputNode) inputNode.checked = !desiredEnabled;
+    const msg = err && err.message ? err.message : "Enable/Disable failed";
+    window.alert(msg);
+  }
+}
+
+function initDevicesPaging() {
+  const prev = qs("devices-prev");
+  const next = qs("devices-next");
+  const limitSelect = qs("devices-limit");
+  if (prev && !prev.dataset.bound) {
+    prev.addEventListener("click", () => {
+      if (state.devices.page > 1) {
+        state.devices.page -= 1;
+        loadDevicesPage();
+      }
+    });
+    prev.dataset.bound = "1";
+  }
+  if (next && !next.dataset.bound) {
+    next.addEventListener("click", () => {
+      if (state.devices.page < state.devices.totalPages) {
+        state.devices.page += 1;
+        loadDevicesPage();
+      }
+    });
+    next.dataset.bound = "1";
+  }
+  if (limitSelect && !limitSelect.dataset.bound) {
+    limitSelect.value = state.devices.limit;
+    limitSelect.addEventListener("change", () => {
+      state.devices.limit = Number(limitSelect.value);
+      state.devices.page = 1;
+      loadDevicesPage();
+    });
+    limitSelect.dataset.bound = "1";
+  }
+}
+
+function renderDevicesGrid() {
+  const grid = qs("devices-grid");
+  const meta = qs("devices-meta");
+  if (!grid) return;
+  const rows = Array.isArray(state.devices.rows) ? state.devices.rows : [];
+  
+  renderPager("devices-page", state.devices.page, state.devices.totalPages, (targetPage) => {
+    state.devices.page = targetPage;
+    loadDevicesPage();
+  });
+
+  if (!rows.length) {
+    grid.innerHTML = `<div class="counter-card loading">No devices from agent yet.</div>`;
+    if (meta) meta.textContent = "No device";
+    return;
+  }
+
+  const printedBaseline = buildPrintedPaperBaseline(rows);
+  grid.innerHTML = rows
+    .map((r) => {
+      const rowId = Number(r.id || 0);
+      const counter = r.counter_data && typeof r.counter_data === "object"
+        ? r.counter_data
+        : (r.counter && typeof r.counter === "object" ? r.counter : {});
+      const status = r.status_data && typeof r.status_data === "object"
+        ? r.status_data
+        : (r.status && typeof r.status === "object" ? r.status : {});
+      const total = Number(r.counter_total || counter.total || 0);
+      const printedKey = `${String(r.lan_uid || "").trim()}||${String(r.mac_id || "").trim().toUpperCase()}`;
+      const base = printedBaseline[printedKey];
+      const printedPaper = Math.max(0, Math.round(total - Number(base?.total || total)));
+      const systemStatus = String(r.status_system || status.system_status || status.printer_status || "-");
+      const statusLine = systemStatus.length > 140 ? `${systemStatus.slice(0, 140)}...` : systemStatus;
+      const createAt = String(r.createAt || r.created_at || "");
+      const counterPreview = JSON.stringify(counter || {}, null, 2);
+      const statusPreview = JSON.stringify(status || {}, null, 2);
+      const cardStateClass = r.is_latest ? "latest" : "stale";
+      return `<article class="counter-card ${cardStateClass} infor-card" data-kind="infor-card" data-id="${rowId}">
+        <header class="counter-card-head">
+          <button class="card-delete-btn" type="button" data-kind="infor" data-id="${rowId}" aria-label="Delete">${iconTrashSvg()}</button>
+          <div class="counter-card-index">#${rowId}</div>
+          <div class="counter-card-time">${escapeHtml(r.printer_name || "unknown")} ${escapeHtml(r.ip ? `(${r.ip})` : "")}</div>
+        </header>
+        <div class="counter-card-body">
+          <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v">${escapeHtml(r.lan_uid || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">MAC ID</span><span class="counter-v">${escapeHtml(r.mac_id || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">CreateAt</span><span class="counter-v">${escapeHtml(fmtDateGmt7(createAt))}</span></div>
+          <div class="counter-kv"><span class="counter-k">Counter</span><span class="counter-v">${fmtNumber(total)}</span></div>
+          <div class="counter-kv"><span class="counter-k">Printed Paper</span><span class="counter-v">${fmtNumber(printedPaper)}</span></div>
+          <div class="counter-kv"><span class="counter-k">Status</span><span class="counter-v">${escapeHtml(statusLine || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">Updated</span><span class="counter-v">${escapeHtml(fmtTimestampGmt7(r.updated_at || r.last_counter_at || r.last_status_at))}</span></div>
+          <div class="counter-kv"><span class="counter-k">counter_data</span><span class="counter-v"></span></div>
+          <pre class="infor-json-preview">${escapeHtml(counterPreview)}</pre>
+          <div class="counter-kv"><span class="counter-k">status_data</span><span class="counter-v"></span></div>
+          <pre class="infor-json-preview">${escapeHtml(statusPreview)}</pre>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  grid.querySelectorAll('.infor-card').forEach((card) => {
+    card.addEventListener("click", () => {
+      const rowId = Number(card.getAttribute("data-id") || 0);
+      const row = rows.find((x) => Number(x.id || 0) === rowId);
+      if (!row) return;
+      openInforDetailModal(row);
+    });
+  });
+  grid.querySelectorAll('.card-delete-btn[data-kind="infor"]').forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const rowId = Number(btn.dataset.id || 0);
+      openDeleteConfirm(async () => {
+        await fetch(`/api/infor/${rowId}`, { method: "DELETE" });
+        closeDeleteConfirm();
+        await loadDevicesPage();
+      });
+    });
+  });
+
+  if (meta) {
+    meta.textContent = `Showing ${rows.length} of ${state.devices.total} entries (Page ${state.devices.page}/${state.devices.totalPages})`;
+  }
+}
+
+function openInforDetailModal(row) {
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (!modal || !body || !row) return;
+
+  const counter = row.counter_data && typeof row.counter_data === "object"
+    ? row.counter_data
+    : (row.counter && typeof row.counter === "object" ? row.counter : {});
+  const status = row.status_data && typeof row.status_data === "object"
+    ? row.status_data
+    : (row.status && typeof row.status === "object" ? row.status : {});
+
+  const generalPairs = [
+    ["ID", row.id || "-"],
+    ["Lead", row.lead || "-"],
+    ["LAN UID", row.lan_uid || "-"],
+    ["Agent UID", row.agent_uid || "-"],
+    ["Printer", row.printer_name || "-"],
+    ["IP", row.ip || "-"],
+    ["MAC ID", row.mac_id || "-"],
+    ["CreateAt", fmtDateGmt7(row.createAt || row.created_at || "")],
+    ["Updated", fmtTimestampGmt7(row.updated_at || "")],
+    ["Counter Total", fmtNumber(row.counter_total || 0)],
+    ["Printed Paper", (() => {
+      const allRows = Array.isArray(state.devices.rows) ? state.devices.rows : [];
+      const baseline = buildPrintedPaperBaseline(allRows);
+      const total = inforRowCounterTotal(row);
+      const key = `${String(row.lan_uid || "").trim()}||${String(row.mac_id || "").trim().toUpperCase()}`;
+      const base = baseline[key];
+      return fmtNumber(Math.max(0, Math.round(total - Number(base?.total || total))));
+    })()],
+  ];
+  const renderPairs = (pairs) =>
+    pairs
+      .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(String(k))}</span><span class="counter-v">${escapeHtml(String(v ?? "-"))}</span></div>`)
+      .join("");
+
+  body.innerHTML = `
+    <article class="counter-card detail-card">
+      <header class="counter-card-head">
+        <button id="detail-close-btn" class="card-delete-btn" type="button" aria-label="Close">${iconCloseSvg()}</button>
+        <div class="counter-card-index">Infor Detail</div>
+        <div class="counter-card-time">${escapeHtml(row.printer_name || "-")} ${escapeHtml(row.ip ? `(${row.ip})` : "")}</div>
+      </header>
+      <div class="counter-card-body">
+        <section class="detail-section">
+          <h4 class="detail-section-title">General</h4>
+          ${renderPairs(generalPairs)}
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section-title">counter_data</h4>
+          <pre class="detail-json-block">${escapeHtml(JSON.stringify(counter || {}, null, 2))}</pre>
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section-title">status_data</h4>
+          <pre class="detail-json-block">${escapeHtml(JSON.stringify(status || {}, null, 2))}</pre>
+        </section>
+      </div>
+    </article>
+  `;
+  modal.hidden = false;
+  qs("detail-close-btn")?.addEventListener("click", closeDetailModal);
+}
+
+async function loadDevicesPage() {
+  initDevicesPaging();
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const requestedPage = Math.max(1, Number(state.devices.page || 1));
+  const query = new URLSearchParams({ 
+    lead,
+    page: requestedPage,
+    limit: state.devices.limit
+  });
+  const data = await jget(`/api/infor/list?${query.toString()}`);
+  state.devices.rows = Array.isArray(data.rows) ? data.rows : [];
+  state.devices.total = data.total || 0;
+  state.devices.totalPages = data.total_pages || 1;
+  state.devices.page = data.page || 1;
+  if (state.devices.totalPages > 0 && state.devices.page > state.devices.totalPages) {
+    state.devices.page = state.devices.totalPages;
+    return loadDevicesPage();
+  }
+  renderDevicesGrid();
+}
+
+function syncFavoriteButtonOnGrid(kind, rowId, isActive) {
+  const btn = document.querySelector(`.card-fav-btn[data-kind="${kind}-fav"][data-id="${rowId}"]`);
+  if (btn) setFavoriteButtonState(btn, isActive);
+}
+
+async function updateFavorite(kind, rowId, isActive) {
+  const res = await fetch(`/api/${kind}/${rowId}/favorite`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_favorite: isActive }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+function openDetailModal(kind, row) {
+  const modal = qs("detail-modal");
+  const body = qs("detail-modal-body");
+  if (!modal || !body || !row) return;
+  const rowId = Number(row.id || 0);
+  const active = Boolean(row.is_favorite);
+  const generalPairs = [
+    ["Lead", row.lead || "-"],
+    ["Name", row.printer_name || "-"],
+    ["IP", row.ip || "-"],
+    ["Begin ID", row.begin_record_id ?? "-"],
+  ];
+  const sections = kind === "counter"
+    ? [
+        {
+          title: "Counter",
+          pairs: [
+            ["Total", fmtNumber(row.total)],
+            ["Copier", fmtNumber(row.copier_bw)],
+            ["Printer", fmtNumber(row.printer_bw)],
+            ["Fax", fmtNumber(row.fax_bw)],
+            ["Send TX BW", fmtNumber(row.send_tx_total_bw)],
+            ["Send TX Color", fmtNumber(row.send_tx_total_color)],
+            ["Fax TX Total", fmtNumber(row.fax_transmission_total)],
+            ["Scanner BW", fmtNumber(row.scanner_send_bw)],
+            ["Scanner Color", fmtNumber(row.scanner_send_color)],
+            ["A3/DLT", fmtNumber(row.a3_dlt)],
+            ["Duplex", fmtNumber(row.duplex)],
+          ],
+        },
+        {
+          title: "Coverage",
+          pairs: [
+            ["Copier BW %", fmtNumber(row.coverage_copier_bw)],
+            ["Printer BW %", fmtNumber(row.coverage_printer_bw)],
+            ["Fax BW %", fmtNumber(row.coverage_fax_bw)],
+          ],
+        },
+      ]
+    : [
+        {
+          title: "Status",
+          pairs: [
+            ["System", row.system_status || "-"],
+            ["Printer", row.printer_status || "-"],
+            ["Copier", row.copier_status || "-"],
+            ["Scanner", row.scanner_status || "-"],
+            ["Toner Black", row.toner_black || "-"],
+          ],
+        },
+        {
+          title: "Alerts / Trays",
+          pairs: [
+            ["Printer Alerts", row.printer_alerts || "-"],
+            ["Copier Alerts", row.copier_alerts || "-"],
+            ["Scanner Alerts", row.scanner_alerts || "-"],
+            ["Tray 1", row.tray_1_status || "-"],
+            ["Tray 2", row.tray_2_status || "-"],
+            ["Tray 3", row.tray_3_status || "-"],
+            ["Bypass Tray", row.bypass_tray_status || "-"],
+            ["Other Info", row.other_info || "-"],
+          ],
+        },
+      ];
+  const renderPairs = (pairs) =>
+    pairs
+      .map(([k, v]) => `<div class="counter-kv"><span class="counter-k">${escapeHtml(k)}</span><span class="counter-v">${escapeHtml(v)}</span></div>`)
+      .join("");
+  const sectionHtml = sections
+    .map((section) => `<section class="detail-section"><h4 class="detail-section-title">${escapeHtml(section.title)}</h4>${renderPairs(section.pairs)}</section>`)
+    .join("");
+
+  body.innerHTML = `
+    <article class="counter-card detail-card">
+      <header class="counter-card-head">
+        <button id="detail-fav-btn" class="card-fav-btn ${active ? "active" : ""}" type="button" data-active="${active ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+        <button id="detail-close-btn" class="card-delete-btn" type="button" aria-label="Close">${iconCloseSvg()}</button>
+        <div class="counter-card-index">#${rowId}</div>
+        <div class="counter-card-time">${escapeHtml(fmtTimestampGmt7(row.timestamp))}</div>
+      </header>
+      <div class="counter-card-body">
+        <section class="detail-section">
+          <h4 class="detail-section-title">General</h4>
+          ${renderPairs(generalPairs)}
+        </section>
+        <div class="detail-sections">${sectionHtml}</div>
+      </div>
+    </article>
+  `;
+  modal.hidden = false;
+  state.detail = { kind, rowId };
+
+  qs("detail-close-btn")?.addEventListener("click", closeDetailModal);
+  qs("detail-fav-btn")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    const prev = btn.dataset.active === "1";
+    const next = !prev;
+    setFavoriteButtonState(btn, next);
+    syncFavoriteButtonOnGrid(kind, rowId, next);
+    try {
+      await updateFavorite(kind, rowId, next);
+      if (getGlobalFilters().favorite === "1" && !next) {
+        document.querySelector(`.card-delete-btn[data-kind="${kind}"][data-id="${rowId}"]`)?.closest(".counter-card")?.remove();
+        closeDetailModal();
+      }
+    } catch (_) {
+      setFavoriteButtonState(btn, prev);
+      syncFavoriteButtonOnGrid(kind, rowId, prev);
+    }
+  });
+}
+
+async function loadCounter() {
+  const global = getGlobalFilters();
+  const p = state.counter.page;
+  const query = new URLSearchParams({
+    page: String(p),
+    page_size: "120",
+    lead: global.lead,
+    printer_name: global.printer_name,
+    printer_type: global.printer_type,
+    favorite: global.favorite,
+    time_scope: global.time_scope || "month",
+    datetime_from: global.datetime_from || "",
+    datetime_to: global.datetime_to || "",
+  });
+  const data = await jget(`/api/counter/timelapse?${query.toString()}`);
+  state.counter.totalPages = data.total_pages;
+  renderPager("counter-page", data.page, data.total_pages, (targetPage) => {
+    state.counter.page = targetPage;
+    loadCounter().catch(() => {});
+  });
+  const grid = qs("counter-grid");
+  if (grid) {
+    grid.innerHTML = data.rows.length
+      ? data.rows
+          .map((r, idx) => {
+            const beginId = Number(r.begin_record_id || 0);
+            const rowId = Number(r.id || 0);
+            const isLatest = idx === 0;
+            return `<article class="counter-card ${isLatest ? "latest" : ""}">
+              <header class="counter-card-head">
+                <button class="card-info-btn" type="button" data-kind="counter-info" data-id="${rowId}" aria-label="Info">${iconInfoSvg()}</button>
+                <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="counter-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+                <button class="card-delete-btn" type="button" data-kind="counter" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
+                <div class="counter-card-index">#${rowId}</div>
+                <div class="counter-card-time">${fmtTimestampGmt7(r.timestamp)}</div>
+              </header>
+              <div class="counter-card-body">
+                <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Total</span><span class="counter-v">${fmtNumber(r.total)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Copier</span><span class="counter-v">${fmtNumber(r.copier_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${fmtNumber(r.printer_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Scan BW/C</span><span class="counter-v">${fmtNumber(r.scanner_send_bw)} / ${fmtNumber(r.scanner_send_color)}</span></div>
+              </div>
+            </article>`;
+          })
+          .join("")
+      : `<div class="counter-card loading">No data</div>`;
+    grid.querySelectorAll(".card-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        openDeleteConfirm(async () => {
+          await fetch(`/api/counter/${rowId}`, { method: "DELETE" });
+          closeDeleteConfirm();
+          await loadCounter();
+        });
+      });
+    });
+    grid.querySelectorAll(".card-fav-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const prev = btn.dataset.active === "1";
+        const next = !prev;
+        setFavoriteButtonState(btn, next);
+        try {
+          const res = await fetch(`/api/counter/${rowId}/favorite`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_favorite: next }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (getGlobalFilters().favorite === "1" && !next) {
+            btn.closest(".counter-card")?.remove();
+          }
+        } catch (_) {
+          setFavoriteButtonState(btn, prev);
+        }
+      });
+    });
+    grid.querySelectorAll(".card-info-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const row = data.rows.find((x) => Number(x.id || 0) === rowId);
+        if (!row) return;
+        const card = btn.closest(".counter-card");
+        const fav = card?.querySelector(".card-fav-btn")?.dataset.active === "1";
+        openDetailModal("counter", { ...row, is_favorite: fav });
+      });
+    });
+  }
+  const meta = qs("counter-meta");
+  if (meta) {
+    const latest = data.rows.length ? fmtTimestampGmt7(data.rows[0].timestamp) : "-";
+    const dayStart = fmtTimestampGmt7(data.day_start);
+    const dayEnd = fmtTimestampGmt7(data.day_end);
+    const fetchedAt = new Date().toLocaleTimeString();
+    meta.textContent = `Day window: ${dayStart} -> ${dayEnd} | Rows: ${fmtNumber(data.total)} | Latest row: ${latest} | Fetched: ${fetchedAt}`;
+  }
+}
+
+async function loadStatus() {
+  const global = getGlobalFilters();
+  const p = state.status.page;
+  const query = new URLSearchParams({
+    page: String(p),
+    page_size: "120",
+    lead: global.lead,
+    printer_name: global.printer_name,
+    printer_type: global.printer_type,
+    favorite: global.favorite,
+    time_scope: global.time_scope || "month",
+    datetime_from: global.datetime_from || "",
+    datetime_to: global.datetime_to || "",
+  });
+  const data = await jget(`/api/status/timelapse?${query.toString()}`);
+  state.status.totalPages = data.total_pages;
+  renderPager("status-page", data.page, data.total_pages, (targetPage) => {
+    state.status.page = targetPage;
+    loadStatus().catch(() => {});
+  });
+  const grid = qs("status-grid");
+  if (grid) {
+    grid.innerHTML = data.rows.length
+      ? data.rows
+          .map((r, idx) => {
+            const beginId = Number(r.begin_record_id || 0);
+            const rowId = Number(r.id || 0);
+            const isLatest = idx === 0;
+            return `<article class="counter-card ${isLatest ? "latest" : ""}">
+              <header class="counter-card-head">
+                <button class="card-info-btn" type="button" data-kind="status-info" data-id="${rowId}" aria-label="Info">${iconInfoSvg()}</button>
+                <button class="card-fav-btn ${r.is_favorite ? "active" : ""}" type="button" data-kind="status-fav" data-id="${rowId}" data-active="${r.is_favorite ? "1" : "0"}" aria-label="Favorite">${iconStarSvg()}</button>
+                <button class="card-delete-btn" type="button" data-kind="status" data-id="${rowId}" aria-label="Delete">${iconCloseSvg()}</button>
+                <div class="counter-card-index">#${rowId}</div>
+                <div class="counter-card-time">${fmtTimestampGmt7(r.timestamp)}</div>
+              </header>
+              <div class="counter-card-body">
+                <div class="counter-kv"><span class="counter-k">Lead</span><span class="counter-v">${r.lead || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Name</span><span class="counter-v">${r.printer_name || "-"}</span></div>
+                <div class="counter-kv"><span class="counter-k">Total</span><span class="counter-v">${fmtNumber(r.total)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Copier</span><span class="counter-v">${fmtNumber(r.copier_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Printer</span><span class="counter-v">${fmtNumber(r.printer_bw)}</span></div>
+                <div class="counter-kv"><span class="counter-k">A3/DLT</span><span class="counter-v">${fmtNumber(r.a3_dlt)}</span></div>
+                <div class="counter-kv"><span class="counter-k">Duplex</span><span class="counter-v">${fmtNumber(r.duplex)}</span></div>
+              </div>
+            </article>`;
+          })
+          .join("")
+      : `<div class="counter-card loading">No data</div>`;
+    grid.querySelectorAll(".card-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        openDeleteConfirm(async () => {
+          await fetch(`/api/status/${rowId}`, { method: "DELETE" });
+          closeDeleteConfirm();
+          await loadStatus();
+        });
+      });
+    });
+    grid.querySelectorAll(".card-fav-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const prev = btn.dataset.active === "1";
+        const next = !prev;
+        setFavoriteButtonState(btn, next);
+        try {
+          const res = await fetch(`/api/status/${rowId}/favorite`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_favorite: next }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (getGlobalFilters().favorite === "1" && !next) {
+            btn.closest(".counter-card")?.remove();
+          }
+        } catch (_) {
+          setFavoriteButtonState(btn, prev);
+        }
+      });
+    });
+    grid.querySelectorAll(".card-info-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rowId = Number(btn.dataset.id || 0);
+        const row = data.rows.find((x) => Number(x.id || 0) === rowId);
+        if (!row) return;
+        const card = btn.closest(".counter-card");
+        const fav = card?.querySelector(".card-fav-btn")?.dataset.active === "1";
+        openDetailModal("status", { ...row, is_favorite: fav });
+      });
+    });
+  }
+  const meta = qs("status-meta");
+  if (meta) {
+    const latest = data.rows.length ? fmtTimestampGmt7(data.rows[0].timestamp) : "-";
+    const dayStart = fmtTimestampGmt7(data.day_start);
+    const dayEnd = fmtTimestampGmt7(data.day_end);
+    const fetchedAt = new Date().toLocaleTimeString();
+    meta.textContent = `Day window: ${dayStart} -> ${dayEnd} | Rows: ${fmtNumber(data.total)} | Latest row: ${latest} | Fetched: ${fetchedAt}`;
+  }
+}
+
+async function loadHeatmap() {
+  const lead = (qs("global-filter-lead")?.value || "").trim();
+  const mode = (qs("trend-mode")?.value || "day").trim();
+  const dateFrom = (qs("trend-date-from")?.value || "").trim();
+  const dateTo = (qs("trend-date-to")?.value || "").trim();
+  const printerIp = (qs("trend-printer-ip")?.value || "").trim();
+  const query = new URLSearchParams({
+    lead,
+    mode,
+    date_from: dateFrom,
+    date_to: dateTo,
+    ip: printerIp,
+  });
+  const data = await jget(`/api/counter/trend?${query.toString()}`);
+  const labels = Array.isArray(data.labels) ? data.labels : [];
+  const series = Array.isArray(data.series) ? data.series : [];
+
+  const datasets = series.map((row, idx) => ({
+    label: `${row.printer_name || "Unknown"} (${row.ip || "-"})`,
+    data: Array.isArray(row.values) ? row.values : [],
+    borderColor: CHART_THEME.neonSeries[idx % CHART_THEME.neonSeries.length],
+    backgroundColor: "transparent",
+    tension: 0.25,
+    pointRadius: 2,
+    pointHoverRadius: 4,
+    borderWidth: 2,
+    fill: false,
+  }));
+
+  upsertChart("trend-chart", "line", {
+    labels,
+    datasets,
+  }, {
+    maintainAspectRatio: false,
+    scales: {
+      x: { ticks: { color: CHART_THEME.text, font: { size: 10 }, maxRotation: 0 }, grid: { color: CHART_THEME.grid } },
+      y: { ticks: { color: CHART_THEME.text, callback: (v) => fmtCompact(v) }, grid: { color: CHART_THEME.grid } },
+    },
+  });
+
+  const meta = qs("trend-meta");
+  if (meta) {
+    meta.textContent = `Mode: ${String(data.mode || mode).toUpperCase()} | Range: ${data.date_from || "-"} -> ${data.date_to || "-"} | Printers: ${fmtNumber(data.printers || series.length)} | Buckets: ${fmtNumber(labels.length)}`;
+  }
+
+  const tableWrap = qs("trend-table-wrap");
+  if (tableWrap) {
+    if (!series.length) {
+      tableWrap.innerHTML = `<div class="meta-line">No trend data in selected range.</div>`;
+    } else {
+      tableWrap.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Printer</th><th>IP</th><th>Total Printed (range)</th><th>Average / bucket</th></tr>
+          </thead>
+          <tbody>
+            ${series
+              .map((row) => {
+                const values = Array.isArray(row.values) ? row.values : [];
+                const sum = values.reduce((a, b) => a + Number(b || 0), 0);
+                const avg = values.length ? Math.round(sum / values.length) : 0;
+                return `<tr>
+                  <td>${escapeHtml(row.printer_name || "-")}</td>
+                  <td>${escapeHtml(row.ip || "-")}</td>
+                  <td>${fmtNumber(sum)}</td>
+                  <td>${fmtNumber(avg)}</td>
+                </tr>`;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    }
+  }
+}
+
+async function bind() {
+  const page = currentPage();
+  restoreGlobalFilters();
+  updateSpecifiedRangeVisibility();
+  const restoredLead = (qs("global-filter-lead")?.value || "").trim();
+  await loadLeadOptions(restoredLead || "default");
+  const uiConfig = loadUiConfig();
+  applyUiConfig(uiConfig);
+  qs("global-filter-apply")?.addEventListener("click", () => {
+    const scope = (qs("global-filter-time-scope")?.value || "").trim();
+    const fromValue = (qs("global-filter-datetime-from")?.value || "").trim();
+    const toValue = (qs("global-filter-datetime-to")?.value || "").trim();
+    if (scope === "specified") {
+      if (!fromValue || !toValue) {
+        window.alert("Please select both Datetime From and Datetime To.");
+        return;
+      }
+      if (fromValue > toValue) {
+        window.alert("Datetime From must be earlier than Datetime To.");
+        return;
+      }
+    }
+    saveGlobalFilters();
+    if (page === "counter") state.counter.page = 1;
+    if (page === "status") state.status.page = 1;
+    if (page === "heatmap") state.heatmap.page = 1;
+    if (page === "devices" || page === "infor") state.devices.page = 1;
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("global-filter-reset")?.addEventListener("click", () => {
+    if (qs("global-filter-lead")) qs("global-filter-lead").value = "default";
+    if (qs("global-filter-printer-name")) qs("global-filter-printer-name").value = "";
+    if (qs("global-filter-printer-type")) qs("global-filter-printer-type").value = "";
+    if (qs("global-filter-favorite")) qs("global-filter-favorite").value = "";
+    if (qs("global-filter-time-scope")) qs("global-filter-time-scope").value = "month";
+    if (qs("global-filter-datetime-from")) qs("global-filter-datetime-from").value = "";
+    if (qs("global-filter-datetime-to")) qs("global-filter-datetime-to").value = "";
+    updateSpecifiedRangeVisibility();
+    saveGlobalFilters();
+    if (page === "counter") state.counter.page = 1;
+    if (page === "status") state.status.page = 1;
+    if (page === "heatmap") state.heatmap.page = 1;
+    if (page === "devices" || page === "infor") state.devices.page = 1;
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("refresh-btn")?.addEventListener("click", () => {
+    refreshCurrentPage().catch(() => {});
+  });
+  qs("task-create-btn")?.addEventListener("click", () => {
+    handleUpsertTask();
+  });
+  qs("confirm-no")?.addEventListener("click", closeDeleteConfirm);
+  qs("confirm-yes")?.addEventListener("click", async () => {
+    const fn = state.pendingDelete;
+    if (!fn) return closeDeleteConfirm();
+    try {
+      await fn();
+    } catch (_) {
+      closeDeleteConfirm();
+    }
+  });
+  qs("confirm-modal")?.addEventListener("click", (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains("confirm-backdrop")) {
+      closeDeleteConfirm();
+    }
+  });
+  qs("detail-modal")?.addEventListener("click", (event) => {
+    if (event.target && event.target.classList && event.target.classList.contains("detail-backdrop")) {
+      closeDetailModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeDetailModal();
+    }
+  });
+  qs("auto-refresh-toggle")?.addEventListener("change", (event) => {
+    state.autoRefresh.enabled = Boolean(event.target?.checked);
+    startAutoRefresh();
+  });
+  qs("auto-refresh-interval")?.addEventListener("change", (event) => {
+    const raw = Number(event.target?.value || 60000);
+    state.autoRefresh.intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 60000;
+    startAutoRefresh();
+  });
+  qs("global-filter-time-scope")?.addEventListener("change", () => {
+    updateSpecifiedRangeVisibility();
+  });
+
+  if (page === "dashboard") loadSummary().catch(() => {});
+  if (page === "devices" || page === "infor") loadDevicesPage().catch(() => {});
+  if (page === "api_docs") initApiTests(true).catch(() => {});
+  if (page === "devices" || page === "infor") {
+    // initDevicesPaging() is called inside loadDevicesPage()
+  }
+  if (page === "configs") {
+    qs("cfg-chart-columns").value = String(uiConfig.chart_columns);
+    qs("cfg-card-columns").value = String(uiConfig.card_columns);
+    qs("cfg-card-rows").value = String(uiConfig.card_rows);
+    qs("cfg-pages-window").value = String(uiConfig.pages_window);
+    qs("cfg-paging-per-day").value = String(uiConfig.paging_per_day);
+    qs("cfg-auto-refresh").value = String(uiConfig.auto_refresh_seconds);
+    qs("cfg-save")?.addEventListener("click", () => {
+      const next = {
+        chart_columns: Number(qs("cfg-chart-columns")?.value || 2),
+        card_columns: Number(qs("cfg-card-columns")?.value || 5),
+        card_rows: Number(qs("cfg-card-rows")?.value || 4),
+        pages_window: Number(qs("cfg-pages-window")?.value || 30),
+        paging_per_day: Number(qs("cfg-paging-per-day")?.value || 1),
+        auto_refresh_seconds: Number(qs("cfg-auto-refresh")?.value || 60),
+      };
+      saveUiConfig(next);
+      applyUiConfig(next);
+      qs("cfg-note").textContent = "Saved.";
+      startAutoRefresh();
+    });
+    qs("cfg-reset")?.addEventListener("click", () => {
+      const d = defaultUiConfig();
+      saveUiConfig(d);
+      applyUiConfig(d);
+      qs("cfg-chart-columns").value = String(d.chart_columns);
+      qs("cfg-card-columns").value = String(d.card_columns);
+      qs("cfg-card-rows").value = String(d.card_rows);
+      qs("cfg-pages-window").value = String(d.pages_window);
+      qs("cfg-paging-per-day").value = String(d.paging_per_day);
+      qs("cfg-auto-refresh").value = String(d.auto_refresh_seconds);
+      qs("cfg-note").textContent = "Reset to default.";
+      startAutoRefresh();
+    });
+  }
+  if (page === "counter") {
+    qs("counter-prev")?.addEventListener("click", () => { state.counter.page = Math.max(1, state.counter.page - 1); loadCounter(); });
+    qs("counter-next")?.addEventListener("click", () => { state.counter.page = Math.min(state.counter.totalPages, state.counter.page + 1); loadCounter(); });
+    loadCounter().catch(() => {});
+  }
+  if (page === "status") {
+    qs("status-prev")?.addEventListener("click", () => { state.status.page = Math.max(1, state.status.page - 1); loadStatus(); });
+    qs("status-next")?.addEventListener("click", () => { state.status.page = Math.min(state.status.totalPages, state.status.page + 1); loadStatus(); });
+    loadStatus().catch(() => {});
+  }
+  if (page === "heatmap") {
+    const fromInput = qs("trend-date-from");
+    const toInput = qs("trend-date-to");
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    if (toInput && !toInput.value) toInput.value = todayStr;
+    if (fromInput && !fromInput.value) {
+      const from = new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
+      fromInput.value = from.toISOString().slice(0, 10);
+    }
+    qs("trend-apply")?.addEventListener("click", () => { loadHeatmap(); });
+    qs("trend-mode")?.addEventListener("change", () => loadHeatmap());
+    loadHeatmap().catch(() => {});
+  }
+  startAutoRefresh();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  bind().catch(() => {});
+});
+
+</script>

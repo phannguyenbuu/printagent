@@ -1,23 +1,27 @@
-import { useEffect, useMemo, useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useRepairStore } from '../stores/repairStore';
-import { useLocationStore } from '../stores/locationStore';
+import { useNavigate } from 'react-router-dom';
+
+import { PullToRefresh } from '../components/layout/PullToRefresh';
+import { RequestCard } from '../components/requests/RequestCard';
+import { RequestLocationBlock } from '../components/requests/RequestLocationBlock';
+import { AnimatedList } from '../components/ui/AnimatedList';
+import { EmptyState, PageLoading } from '../components/ui/PageState';
+import { GlowCard } from '../components/ui/GlowCard';
 import { filterHistory } from '../services/historyService';
 import { calculateCumulativeCost } from '../services/statsService';
-import { GlowCard } from '../components/ui/GlowCard';
-import { AnimatedList } from '../components/ui/AnimatedList';
-import { LoadingSpinner } from '../components/ui/LoadingSpinner';
-import { PullToRefresh } from '../components/layout/PullToRefresh';
+import { useLocationStore } from '../stores/locationStore';
+import { useRepairStore } from '../stores/repairStore';
 import type { HistoryFilters } from '../types/history';
 
-const STATUS_COLORS = {
-  completed: 'var(--color-success)',
-} as const;
-
-const STATUS_LABELS = {
-  completed: 'Hoàn thành',
-} as const;
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  return new Date(value).toLocaleDateString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
 
 export function RepairHistoryPage() {
   const navigate = useNavigate();
@@ -32,29 +36,30 @@ export function RepairHistoryPage() {
   useEffect(() => {
     fetchRequests();
     fetchLocations();
-  }, [fetchRequests, fetchLocations]);
+  }, [fetchLocations, fetchRequests]);
 
-  // Build history: get all completed requests, then apply filters
+  const locationMap = useMemo(
+    () => new Map(locations.map((location) => [location.id, location])),
+    [locations],
+  );
+
   const filteredHistory = useMemo(() => {
-    // Get all completed requests as history entries
     const allCompleted = requests
-      .filter((r) => r.status === 'completed')
+      .filter((request) => request.status === 'completed')
       .sort((a, b) => {
         const dateA = a.completedAt ?? '';
         const dateB = b.completedAt ?? '';
         return dateB.localeCompare(dateA);
       });
 
-    // Get history entries for all machines (or filtered machine)
-    const allHistory = allCompleted.map((r) => ({
-      repairRequest: r,
-      totalMaterialCost: r.materials.reduce(
-        (sum, m) => sum + m.quantity * m.unitPrice,
-        0
+    const allHistory = allCompleted.map((request) => ({
+      repairRequest: request,
+      totalMaterialCost: request.materials.reduce(
+        (sum, material) => sum + material.quantity * material.unitPrice,
+        0,
       ),
     }));
 
-    // Apply filters
     const filters: HistoryFilters = {};
     if (dateFrom) filters.dateFrom = dateFrom;
     if (dateTo) filters.dateTo = dateTo;
@@ -62,33 +67,27 @@ export function RepairHistoryPage() {
     if (machineNameFilter) filters.machineName = machineNameFilter;
 
     return filterHistory(allHistory, filters);
-  }, [requests, dateFrom, dateTo, locationFilter, machineNameFilter]);
+  }, [dateFrom, dateTo, locationFilter, machineNameFilter, requests]);
 
-  // Calculate cumulative cost based on current filter
   const cumulativeCost = useMemo(() => {
     if (machineNameFilter) {
       return calculateCumulativeCost(requests, machineNameFilter);
     }
-    // If no machine filter, sum all filtered entries
+
     return filteredHistory.reduce(
       (sum, entry) => sum + entry.totalMaterialCost,
-      0
+      0,
     );
-  }, [requests, machineNameFilter, filteredHistory]);
+  }, [filteredHistory, machineNameFilter, requests]);
 
   const handleRefresh = useCallback(async () => {
     await fetchRequests();
   }, [fetchRequests]);
 
-  const formatCurrency = (value: number) =>
-    value.toLocaleString('vi-VN') + ' đ';
+  const formatCurrency = (value: number) => `${value.toLocaleString('vi-VN')} đ`;
 
   if (loading && requests.length === 0) {
-    return (
-      <div style={styles.loadingContainer}>
-        <LoadingSpinner size="lg" />
-      </div>
-    );
+    return <PageLoading message="Đang tải lịch sử sửa chữa..." />;
   }
 
   return (
@@ -98,12 +97,10 @@ export function RepairHistoryPage() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
     >
-      {/* Header */}
       <div style={styles.header}>
         <h1 style={styles.title}>Lịch sử sửa chữa</h1>
       </div>
 
-      {/* Cumulative Cost */}
       <GlowCard>
         <div style={styles.costSection}>
           <span style={styles.costLabel}>Tổng chi phí tích lũy</span>
@@ -111,7 +108,6 @@ export function RepairHistoryPage() {
         </div>
       </GlowCard>
 
-      {/* Filter Bar */}
       <div style={styles.filterBar}>
         <div style={styles.filterRow}>
           <input
@@ -131,6 +127,7 @@ export function RepairHistoryPage() {
             placeholder="Đến ngày"
           />
         </div>
+
         <div style={styles.filterRow}>
           <select
             value={locationFilter}
@@ -139,12 +136,13 @@ export function RepairHistoryPage() {
             aria-label="Lọc theo địa điểm"
           >
             <option value="">Tất cả địa điểm</option>
-            {locations.map((loc) => (
-              <option key={loc.id} value={loc.id}>
-                {loc.name}
+            {locations.map((location) => (
+              <option key={location.id} value={location.id}>
+                {location.name}
               </option>
             ))}
           </select>
+
           <input
             type="text"
             value={machineNameFilter}
@@ -156,49 +154,40 @@ export function RepairHistoryPage() {
         </div>
       </div>
 
-      {/* History List */}
       <PullToRefresh onRefresh={handleRefresh}>
         {filteredHistory.length === 0 ? (
-          <p style={styles.emptyText}>Không có lịch sử sửa chữa nào.</p>
+          <EmptyState message="Không có lịch sử sửa chữa nào." centered />
         ) : (
           <AnimatedList>
-            {filteredHistory.map((entry) => (
-              <GlowCard
-                key={entry.repairRequest.id}
-                onClick={() => navigate(`/requests/${entry.repairRequest.id}`)}
-              >
-                <div style={styles.cardHeader}>
-                  <span style={styles.machineName}>
-                    {entry.repairRequest.machineName}
-                  </span>
-                  <span style={styles.badge}>
-                    {STATUS_LABELS.completed}
-                  </span>
-                </div>
-                <div style={styles.cardBody}>
-                  <span style={styles.locationText}>
-                    📍 {entry.repairRequest.locationId}
-                  </span>
-                  <span style={styles.dateText}>
-                    {entry.repairRequest.completedAt
-                      ? new Date(entry.repairRequest.completedAt).toLocaleDateString(
-                          'vi-VN',
-                          {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric',
-                          }
-                        )
-                      : '—'}
-                  </span>
-                </div>
-                <div style={styles.cardFooter}>
-                  <span style={styles.costText}>
-                    Chi phí vật tư: {formatCurrency(entry.totalMaterialCost)}
-                  </span>
-                </div>
-              </GlowCard>
-            ))}
+            {filteredHistory.map((entry) => {
+              const request = entry.repairRequest;
+              const location = locationMap.get(request.locationId);
+              return (
+                <RequestCard
+                  key={request.id}
+                  request={request}
+                  status="completed"
+                  onClick={() => navigate(`/requests/${request.id}`)}
+                  showWorkspace={false}
+                  showPriority={false}
+                  locationContent={
+                    <RequestLocationBlock
+                      location={location}
+                      fallbackLabel={`📍 ${request.locationId}`}
+                      showAddress={false}
+                      showPhone={false}
+                    />
+                  }
+                  description={request.description}
+                  footer={
+                    <>
+                      <span style={styles.costText}>Chi phí vật tư: {formatCurrency(entry.totalMaterialCost)}</span>
+                      <span style={styles.dateText}>{formatDate(request.completedAt)}</span>
+                    </>
+                  }
+                />
+              );
+            })}
           </AnimatedList>
         )}
       </PullToRefresh>
@@ -215,12 +204,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
-  },
-  loadingContainer: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   header: {
     marginBottom: '4px',
@@ -275,7 +258,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 12px',
     fontSize: '0.85rem',
     outline: 'none',
-    appearance: 'auto' as React.CSSProperties['appearance'],
+    appearance: 'auto',
   },
   textInput: {
     flex: 1,
@@ -287,55 +270,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.85rem',
     outline: 'none',
   },
-  emptyText: {
-    color: 'var(--color-text-secondary)',
-    fontSize: '0.875rem',
-    textAlign: 'center',
-    padding: '40px 0',
-  },
-  cardHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '8px',
-  },
-  machineName: {
-    fontSize: '0.95rem',
-    fontWeight: 600,
-    color: 'var(--color-text)',
-  },
-  badge: {
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    padding: '3px 8px',
-    borderRadius: '6px',
-    border: '1px solid',
-    whiteSpace: 'nowrap',
-    background: `${STATUS_COLORS.completed}20`,
-    color: STATUS_COLORS.completed,
-    borderColor: `${STATUS_COLORS.completed}40`,
-  },
-  cardBody: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '6px',
-  },
-  locationText: {
-    fontSize: '0.8rem',
-    color: 'var(--color-text-secondary)',
-  },
-  dateText: {
-    fontSize: '0.75rem',
-    color: 'var(--color-text-secondary)',
-  },
-  cardFooter: {
-    borderTop: '1px solid var(--color-surface-light)',
-    paddingTop: '6px',
-  },
   costText: {
     fontSize: '0.8rem',
     fontWeight: 600,
     color: 'var(--color-primary)',
+  },
+  dateText: {
+    fontSize: '0.75rem',
+    color: 'var(--color-text-secondary)',
   },
 };

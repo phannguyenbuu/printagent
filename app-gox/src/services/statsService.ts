@@ -9,16 +9,17 @@ const ALL_STATUSES: RepairStatus[] = ['new', 'accepted', 'in_progress', 'complet
  */
 export function calculateStatusStats(
   requests: RepairRequest[],
-  userLocationIds: string[]
+  userLocationIds?: string[]
 ): Record<RepairStatus, number> {
-  const locationSet = new Set(userLocationIds);
+  const filterByLoc = userLocationIds && userLocationIds.length > 0;
+  const locationSet = new Set(userLocationIds || []);
 
   const stats = Object.fromEntries(
     ALL_STATUSES.map((s) => [s, 0])
   ) as Record<RepairStatus, number>;
 
   for (const req of requests) {
-    if (locationSet.has(req.locationId)) {
+    if (!filterByLoc || locationSet.has(req.locationId)) {
       stats[req.status]++;
     }
   }
@@ -94,8 +95,8 @@ export function calculateUserRepairStats(
       role === 'admin'
         ? true
         : role === 'technician'
-        ? r.assignedTo === userId
-        : r.createdBy === userId;
+          ? r.assignedTo === userId
+          : r.createdBy === userId;
     if (!matchUser) return false;
     if (dateRange) {
       const d = new Date(r.completedAt ?? r.updatedAt);
@@ -152,8 +153,8 @@ export function getUserActivityHistory(
     role === 'admin'
       ? true
       : role === 'technician'
-      ? r.assignedTo === userId
-      : r.createdBy === userId
+        ? r.assignedTo === userId
+        : r.createdBy === userId
   );
 
   return userRequests

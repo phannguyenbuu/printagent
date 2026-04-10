@@ -1,0 +1,642 @@
+[
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO1057",
+    "slug": "e-studio1057",
+    "drivers": [
+      {
+        "name": "PCL Driver 32 Bits",
+        "description": "PCL Driver 32 Bits",
+        "filename": "pcl-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13414/pcl-32bit-orig.zip",
+        "driver_id": "13414"
+      },
+      {
+        "name": "PCL Driver 64 Bits",
+        "description": "PCL Driver 64 Bits",
+        "filename": "pcl-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13415/pcl-64bit-orig.zip",
+        "driver_id": "13415"
+      },
+      {
+        "name": "PS Driver 32 Bits",
+        "description": "PS Driver 32 Bits",
+        "filename": "ps-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13416/ps-32bit-orig.zip",
+        "driver_id": "13416"
+      },
+      {
+        "name": "PS Driver 64 Bits",
+        "description": "PS Driver 64 Bits",
+        "filename": "ps-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13413/ps-64bit-orig.zip",
+        "driver_id": "13413"
+      },
+      {
+        "name": "Print Driver",
+        "description": "All Windows Print Drivers",
+        "filename": "es1207-printdrivers-v100.zip",
+        "version": "",
+        "date": "01/22/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13160/es1207-printdrivers-v100.zip",
+        "driver_id": "13160"
+      }
+    ],
+    "total_windows_drivers": 5
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO1058",
+    "slug": "e-studio1058",
+    "drivers": [
+      {
+        "name": "Print Driver",
+        "description": "e-STUDIO1058/1208 Windows Print Drivers",
+        "filename": "es1058_1208_printdrivers.zip",
+        "version": "",
+        "date": "04/29/20",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/17818/es1058_1208_printdrivers.zip",
+        "driver_id": "17818"
+      },
+      {
+        "name": "e-STUDIO908 Windows Print Drivers",
+        "description": "e-STUDIO908 Windows Print Drivers",
+        "filename": "es908_printdrivers.zip",
+        "version": "9.2.5.2",
+        "date": "03/01/22",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/19307/es908_printdrivers.zip",
+        "driver_id": "19307"
+      }
+    ],
+    "total_windows_drivers": 2
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO1207",
+    "slug": "e-studio1207",
+    "drivers": [
+      {
+        "name": "PCL Driver 32 Bits",
+        "description": "PCL Driver 32 Bits",
+        "filename": "pcl-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13414/pcl-32bit-orig.zip",
+        "driver_id": "13414"
+      },
+      {
+        "name": "PCL Driver 64 Bits",
+        "description": "PCL Driver 64 Bits",
+        "filename": "pcl-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13415/pcl-64bit-orig.zip",
+        "driver_id": "13415"
+      },
+      {
+        "name": "PS Driver 32 Bits",
+        "description": "PS Driver 32 Bits",
+        "filename": "ps-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13416/ps-32bit-orig.zip",
+        "driver_id": "13416"
+      },
+      {
+        "name": "PS Driver 64 Bits",
+        "description": "PS Driver 64 Bits",
+        "filename": "ps-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13413/ps-64bit-orig.zip",
+        "driver_id": "13413"
+      },
+      {
+        "name": "Print Driver",
+        "description": "All Windows Print Drivers",
+        "filename": "es1207-printdrivers-v100.zip",
+        "version": "",
+        "date": "01/22/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13160/es1207-printdrivers-v100.zip",
+        "driver_id": "13160"
+      }
+    ],
+    "total_windows_drivers": 5
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO1208",
+    "slug": "e-studio1208",
+    "drivers": [
+      {
+        "name": "Print Driver",
+        "description": "e-STUDIO1058/1208 Windows Print Drivers",
+        "filename": "es1058_1208_printdrivers.zip",
+        "version": "",
+        "date": "04/29/20",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/17818/es1058_1208_printdrivers.zip",
+        "driver_id": "17818"
+      },
+      {
+        "name": "e-STUDIO908 Windows Print Drivers",
+        "description": "e-STUDIO908 Windows Print Drivers",
+        "filename": "es908_printdrivers.zip",
+        "version": "9.2.5.2",
+        "date": "03/01/22",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/19307/es908_printdrivers.zip",
+        "driver_id": "19307"
+      }
+    ],
+    "total_windows_drivers": 2
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO2309A",
+    "slug": "e-studio2309a",
+    "drivers": [
+      {
+        "name": "GA1340L PS 32",
+        "description": "GA1340 PS Printer Driver (for 32 bit OS)",
+        "filename": "2809-32-ps-53051.zip",
+        "version": "5.30.5.1",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14466/2809-32-ps-53051.zip",
+        "driver_id": "14466"
+      },
+      {
+        "name": "GA1340L PS 64",
+        "description": "GA1340 PS Printer Driver (for 64 bit OS)",
+        "filename": "2809-64-ps-53051.zip",
+        "version": "5.30.5.1",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14465/2809-64-ps-53051.zip",
+        "driver_id": "14465"
+      },
+      {
+        "name": "Win32 ",
+        "description": "Windows 32 Bit Drivers",
+        "filename": "2809-32-pcl-xps-53030.zip",
+        "version": "5.30.3.0",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14462/2809-32-pcl-xps-53030.zip",
+        "driver_id": "14462"
+      },
+      {
+        "name": "Win64",
+        "description": "Windows 64 Bit Drivers",
+        "filename": "2809-64-pcl-xps-53030.zip",
+        "version": "5.30.3.0",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14463/2809-64-pcl-xps-53030.zip",
+        "driver_id": "14463"
+      }
+    ],
+    "total_windows_drivers": 4
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO2802AF",
+    "slug": "e-studio2802af",
+    "drivers": [
+      {
+        "name": "WinAF32 ",
+        "description": "2802AF Windows 32 Bit Print Driver",
+        "filename": "2802af-32-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14438/2802af-32-pcl-xps-53151.zip",
+        "driver_id": "14438"
+      },
+      {
+        "name": "WinAF64",
+        "description": "2802AF Windows 64 Bit Print Driver",
+        "filename": "2802af-64-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14439/2802af-64-pcl-xps-53151.zip",
+        "driver_id": "14439"
+      },
+      {
+        "name": "WinAM32 ",
+        "description": "2802AM Windows 32 Bit Print Driver",
+        "filename": "2802am-32-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14440/2802am-32-pcl-xps-53151.zip",
+        "driver_id": "14440"
+      },
+      {
+        "name": "WinAM64",
+        "description": "2802AM Windows 64 Bit Print Driver",
+        "filename": "2802am-64-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14441/2802am-64-pcl-xps-53151.zip",
+        "driver_id": "14441"
+      }
+    ],
+    "total_windows_drivers": 4
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO2802AM",
+    "slug": "e-studio2802am",
+    "drivers": [
+      {
+        "name": "WinAF32 ",
+        "description": "2802AF Windows 32 Bit Print Driver",
+        "filename": "2802af-32-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14438/2802af-32-pcl-xps-53151.zip",
+        "driver_id": "14438"
+      },
+      {
+        "name": "WinAF64",
+        "description": "2802AF Windows 64 Bit Print Driver",
+        "filename": "2802af-64-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14439/2802af-64-pcl-xps-53151.zip",
+        "driver_id": "14439"
+      },
+      {
+        "name": "WinAM32 ",
+        "description": "2802AM Windows 32 Bit Print Driver",
+        "filename": "2802am-32-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14440/2802am-32-pcl-xps-53151.zip",
+        "driver_id": "14440"
+      },
+      {
+        "name": "WinAM64",
+        "description": "2802AM Windows 64 Bit Print Driver",
+        "filename": "2802am-64-pcl-xps-53151.zip",
+        "version": "5.31.5.1",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14441/2802am-64-pcl-xps-53151.zip",
+        "driver_id": "14441"
+      }
+    ],
+    "total_windows_drivers": 4
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO2803AM",
+    "slug": "e-studio2803am",
+    "drivers": [
+      {
+        "name": "Print Drivers",
+        "description": "Print Drivers",
+        "filename": "es2803-drivers-orig.zip",
+        "version": "1.20",
+        "date": "08/03/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14428/es2803-drivers-orig.zip",
+        "driver_id": "14428"
+      }
+    ],
+    "total_windows_drivers": 1
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO2809A",
+    "slug": "e-studio2809a",
+    "drivers": [
+      {
+        "name": "GA1340L PS 32",
+        "description": "GA1340 PS Printer Driver (for 32 bit OS)",
+        "filename": "2809-32-ps-53051.zip",
+        "version": "5.30.5.1",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14466/2809-32-ps-53051.zip",
+        "driver_id": "14466"
+      },
+      {
+        "name": "GA1340L PS 64",
+        "description": "GA1340 PS Printer Driver (for 64 bit OS)",
+        "filename": "2809-64-ps-53051.zip",
+        "version": "5.30.5.1",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14465/2809-64-ps-53051.zip",
+        "driver_id": "14465"
+      },
+      {
+        "name": "Win32 ",
+        "description": "Windows 32 Bit Drivers",
+        "filename": "2809-32-pcl-xps-53030.zip",
+        "version": "5.30.3.0",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14462/2809-32-pcl-xps-53030.zip",
+        "driver_id": "14462"
+      },
+      {
+        "name": "Win64",
+        "description": "Windows 64 Bit Drivers",
+        "filename": "2809-64-pcl-xps-53030.zip",
+        "version": "5.30.3.0",
+        "date": "08/08/16",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/14463/2809-64-pcl-xps-53030.zip",
+        "driver_id": "14463"
+      }
+    ],
+    "total_windows_drivers": 4
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO409AS",
+    "slug": "e-studio409as",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "version": "3.0.3.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22024/Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "driver_id": "22024"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO409S",
+    "slug": "e-studio409s",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "HBP_Generic_Printer_Driver_Installation_Package.zip",
+        "version": "3.0.2.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22025/HBP_Generic_Printer_Driver_Installation_Package.zip",
+        "driver_id": "22025"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO478S",
+    "slug": "e-studio478s",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "version": "3.0.3.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22024/Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "driver_id": "22024"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO479S",
+    "slug": "e-studio479s",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "version": "3.0.3.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22024/Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "driver_id": "22024"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO907",
+    "slug": "e-studio907",
+    "drivers": [
+      {
+        "name": "PCL Driver 32 Bits",
+        "description": "PCL Driver 32 Bits",
+        "filename": "pcl-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13414/pcl-32bit-orig.zip",
+        "driver_id": "13414"
+      },
+      {
+        "name": "PCL Driver 64 Bits",
+        "description": "PCL Driver 64 Bits",
+        "filename": "pcl-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13415/pcl-64bit-orig.zip",
+        "driver_id": "13415"
+      },
+      {
+        "name": "PS Driver 32 Bits",
+        "description": "PS Driver 32 Bits",
+        "filename": "ps-32bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13416/ps-32bit-orig.zip",
+        "driver_id": "13416"
+      },
+      {
+        "name": "PS Driver 64 Bits",
+        "description": "PS Driver 64 Bits",
+        "filename": "ps-64bit-orig.zip",
+        "version": "Original Release",
+        "date": "05/28/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13413/ps-64bit-orig.zip",
+        "driver_id": "13413"
+      },
+      {
+        "name": "Print Driver",
+        "description": "All Windows Print Drivers",
+        "filename": "es1207-printdrivers-v100.zip",
+        "version": "",
+        "date": "01/22/15",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/13160/es1207-printdrivers-v100.zip",
+        "driver_id": "13160"
+      }
+    ],
+    "total_windows_drivers": 5
+  },
+  {
+    "category": "B/W COPIER",
+    "model": "e-STUDIO908",
+    "slug": "e-studio908",
+    "drivers": [
+      {
+        "name": "Print Driver",
+        "description": "e-STUDIO1058/1208 Windows Print Drivers",
+        "filename": "es1058_1208_printdrivers.zip",
+        "version": "",
+        "date": "04/29/20",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/17818/es1058_1208_printdrivers.zip",
+        "driver_id": "17818"
+      },
+      {
+        "name": "e-STUDIO908 Windows Print Drivers",
+        "description": "e-STUDIO908 Windows Print Drivers",
+        "filename": "es908_printdrivers.zip",
+        "version": "9.2.5.2",
+        "date": "03/01/22",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/19307/es908_printdrivers.zip",
+        "driver_id": "19307"
+      }
+    ],
+    "total_windows_drivers": 2
+  },
+  {
+    "category": "COLOR COPIER",
+    "model": "e-STUDIO389CS",
+    "slug": "e-studio389cs",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "version": "3.0.3.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22024/Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "driver_id": "22024"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  },
+  {
+    "category": "COLOR COPIER",
+    "model": "e-STUDIO509CS",
+    "slug": "e-studio509cs",
+    "drivers": [
+      {
+        "name": "Windows Generic Printer Driver",
+        "description": "Windows Generic Printer Driver",
+        "filename": "Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "version": "3.0.3.0",
+        "date": "03/03/26",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/22024/Toshiba_Generic_Printer_Driver_Installation_Package_10242025.zip",
+        "driver_id": "22024"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver CD-ROM",
+        "description": "e-STUDIO Universal Printer Driver CD-ROM",
+        "filename": "eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "version": "V4.0",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20897/eS220_240_339_409_449_479_509_CDV4_00_Uty.zip",
+        "driver_id": "20897"
+      },
+      {
+        "name": "e-STUDIO Universal Printer Driver for Web Package",
+        "description": "e-STUDIO Universal Printer Driver for Web Package",
+        "filename": "CSW2202CUPD01.zip",
+        "version": "7.222.5412.81",
+        "date": "01/31/24",
+        "download_url": "https://business.toshiba.com/downloads/KB/f1Ulds/20898/CSW2202CUPD01.zip",
+        "driver_id": "20898"
+      }
+    ],
+    "total_windows_drivers": 3
+  }
+]

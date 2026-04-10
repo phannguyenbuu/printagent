@@ -1590,7 +1590,10 @@
 
   const ftpState = {
     pcs: [],
+    sites: [],
     selectedId: "",
+    mode: "create",
+    editingSiteName: "",
   };
 
   function normalizeFtpName(value) {
@@ -1599,6 +1602,10 @@
       .replace(/\s+/g, "_")
       .replace(/[^A-Za-z0-9_-]/g, "");
     return cleaned.slice(0, 48);
+  }
+
+  function normalizeFtpPath(value) {
+    return String(value || "").trim().replace(/\\/g, "/");
   }
 
   function renderFtpPcList() {
@@ -1616,11 +1623,46 @@
         return `
         <tr class="${selected ? "selected" : ""}">
           <td><input type="radio" name="ftp-selected-pc" value="${id}" ${selected ? "checked" : ""} /></td>
-          <td>${pc.name || "-"}</td>
-          <td>${pc.ip || "-"}</td>
-          <td>${pc.department || "-"}</td>
-          <td>${pc.source || "-"}</td>
+          <td>${escapeHtml(pc.name || "-")}</td>
+          <td>${escapeHtml(pc.ip || "-")}</td>
+          <td>${escapeHtml(pc.department || "-")}</td>
+          <td>${escapeHtml(pc.source || "-")}</td>
         </tr>`;
+      })
+      .join("");
+  }
+
+  function renderFtpSiteList() {
+    const body = document.getElementById("ftp-sites-body");
+    if (!body) return;
+    const rows = Array.isArray(ftpState.sites) ? ftpState.sites : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7">No active FTP sites.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((site) => {
+        const name = String(site.name || "");
+        const port = String(site.port || "");
+        const path = String(site.upload_path || site.path || "");
+        const user = String(site.ftp_user || "");
+        const password = String(site.ftp_password || "");
+        const url = String(site.upload_url || site.ftp_url || "");
+        return `
+          <tr>
+            <td style="font-family:monospace;font-weight:700;">${escapeHtml(name)}</td>
+            <td style="font-family:monospace;">${escapeHtml(port || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(path || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(user || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(password || "-")}</td>
+            <td>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : '<span style="color:#888;">-</span>'}</td>
+            <td>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn ghost ftp-site-edit" data-site-name="${escapeHtml(name)}">Edit</button>
+                <button type="button" class="btn ghost ftp-site-delete" data-site-name="${escapeHtml(name)}">Delete</button>
+              </div>
+            </td>
+          </tr>`;
       })
       .join("");
   }
@@ -1636,15 +1678,42 @@
     renderFtpPcList();
   }
 
-  function openFtpCreateModal(defaultName = "") {
+  async function loadFtpSites() {
+    const body = document.getElementById("ftp-sites-body");
+    if (!body) return;
+    body.innerHTML = `<tr><td colspan="7">Loading...</td></tr>`;
+    const data = await jsonFetch("/api/ftp/sites");
+    ftpState.sites = Array.isArray(data?.sites) ? data.sites : [];
+    renderFtpSiteList();
+  }
+
+  function openFtpSiteModal(mode = "create", site = null) {
     const modal = document.getElementById("ftp-create-modal");
-    const input = document.getElementById("ftp-create-name");
-    if (!modal || !input) return;
+    const title = document.getElementById("ftp-create-modal-title");
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    const hiddenOriginal = document.getElementById("ftp-site-original-name");
+    if (!modal || !title || !inputName || !inputPath || !inputPort || !hiddenOriginal) return;
+    ftpState.mode = mode === "edit" ? "edit" : "create";
+    ftpState.editingSiteName = ftpState.mode === "edit" && site ? String(site.name || "") : "";
+    hiddenOriginal.value = ftpState.editingSiteName;
+    title.textContent = ftpState.mode === "edit" ? "Edit FTP" : "Create FTP";
+    if (ftpState.mode === "edit" && site) {
+      inputName.value = normalizeFtpName(site.name || "");
+      inputPath.value = normalizeFtpPath(site.path || "");
+      inputPort.value = String(site.port || 2121);
+    } else {
+      const selected = ftpState.pcs.find((x) => String(x.id || "") === String(ftpState.selectedId || ""));
+      const defaultName = selected ? `ftp_${String(selected.name || "site")}` : "ftp_site";
+      inputName.value = normalizeFtpName(defaultName);
+      inputPath.value = normalizeFtpPath(`storage/ftp/${normalizeFtpName(defaultName) || "ftp_site"}`);
+      inputPort.value = "2121";
+    }
     modal.hidden = false;
-    input.value = normalizeFtpName(defaultName || "");
     setTimeout(() => {
-      input.focus();
-      input.select();
+      inputName.focus();
+      inputName.select();
     }, 0);
   }
 
@@ -1654,13 +1723,77 @@
     modal.hidden = true;
   }
 
+  async function submitFtpSiteModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    const hiddenOriginal = document.getElementById("ftp-site-original-name");
+    const output = document.getElementById("ftp-output");
+    if (!modal || !inputName || !inputPath || !inputPort || !hiddenOriginal) return;
+    const ftpName = normalizeFtpName(inputName.value);
+    const ftpPath = normalizeFtpPath(inputPath.value);
+    const ftpPort = Number.parseInt(String(inputPort.value || "0"), 10) || 0;
+    const originalName = normalizeFtpName(hiddenOriginal.value);
+    if (!ftpName) {
+      if (output) output.textContent = "FTP name is required.";
+      return;
+    }
+
+    const selectedId = String(ftpState.selectedId || "");
+    if (ftpState.mode === "create" && !selectedId) {
+      if (output) output.textContent = "Please select one PC first.";
+      closeFtpCreateModal();
+      return;
+    }
+
+    const okBtn = document.getElementById("ftp-create-ok");
+    if (okBtn) okBtn.disabled = true;
+    try {
+      if (ftpState.mode === "edit") {
+        if (output) output.textContent = "Updating FTP...";
+        const payload = await jsonFetch("/api/ftp/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            site_name: originalName || ftpName,
+            new_site_name: ftpName,
+            local_path: ftpPath,
+            port: ftpPort,
+          }),
+        });
+        if (output) output.textContent = jsonString(payload);
+      } else {
+        if (output) output.textContent = "Creating FTP...";
+        const payload = await jsonFetch("/api/ftp/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            computer_id: selectedId,
+            ftp_name: ftpName,
+            ftp_path: ftpPath,
+            port: ftpPort,
+          }),
+        });
+        if (output) output.textContent = jsonString(payload);
+      }
+      closeFtpCreateModal();
+      await loadFtpSites();
+    } catch (err) {
+      if (output) output.textContent = `${ftpState.mode === "edit" ? "Update" : "Create"} FTP failed: ${String(err?.message || err)}`;
+    } finally {
+      if (okBtn) okBtn.disabled = false;
+    }
+  }
+
   function bindFtpModal() {
     const modal = document.getElementById("ftp-create-modal");
     const okBtn = document.getElementById("ftp-create-ok");
     const cancelBtn = document.getElementById("ftp-create-cancel");
-    const input = document.getElementById("ftp-create-name");
-    const output = document.getElementById("ftp-output");
-    if (!modal || !okBtn || !cancelBtn || !input) return;
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    if (!modal || !okBtn || !cancelBtn || !inputName || !inputPath || !inputPort) return;
     if (modal.dataset.bound) return;
     modal.dataset.bound = "1";
 
@@ -1668,45 +1801,36 @@
     modal.addEventListener("click", (event) => {
       if (event.target === modal) closeFtpCreateModal();
     });
-    input.addEventListener("input", () => {
-      const next = normalizeFtpName(input.value);
-      if (next !== input.value) input.value = next;
+    inputName.addEventListener("input", () => {
+      const next = normalizeFtpName(inputName.value);
+      if (next !== inputName.value) inputName.value = next;
     });
-    okBtn.addEventListener("click", async () => {
-      const selectedId = String(ftpState.selectedId || "");
-      const ftpName = normalizeFtpName(input.value);
-      if (!selectedId) {
-        if (output) output.textContent = "Please select one PC first.";
-        closeFtpCreateModal();
-        return;
-      }
-      if (!ftpName) {
-        if (output) output.textContent = "FTP name is required.";
-        return;
-      }
-      okBtn.disabled = true;
-      try {
-        if (output) output.textContent = "Creating FTP...";
-        const payload = await jsonFetch("/api/ftp/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ computer_id: selectedId, ftp_name: ftpName }),
-        });
-        if (output) output.textContent = jsonString(payload);
-        closeFtpCreateModal();
-      } catch (err) {
-        if (output) output.textContent = `Create FTP failed: ${String(err?.message || err)}`;
-      } finally {
-        okBtn.disabled = false;
-      }
+    inputPath.addEventListener("input", () => {
+      const next = normalizeFtpPath(inputPath.value);
+      if (next !== inputPath.value) inputPath.value = next;
     });
+    okBtn.addEventListener("click", () => submitFtpSiteModal());
+  }
+
+  async function deleteFtpSite(siteName) {
+    const output = document.getElementById("ftp-output");
+    const safeName = normalizeFtpName(siteName);
+    if (!safeName) return;
+    const ok = window.confirm(`Delete FTP site "${safeName}"?`);
+    if (!ok) return;
+    if (output) output.textContent = `Deleting ${safeName}...`;
+    const payload = await jsonFetch(`/api/ftp/sites/${encodeURIComponent(safeName)}`, { method: "DELETE" });
+    if (output) output.textContent = jsonString(payload);
+    await loadFtpSites();
   }
 
   async function initFtpPage() {
     bindFtpModal();
     const refreshBtn = document.getElementById("ftp-refresh-btn");
     const createBtn = document.getElementById("ftp-create-btn");
-    const body = document.getElementById("ftp-pc-body");
+    const sitesRefreshBtn = document.getElementById("ftp-sites-refresh-btn");
+    const pcBody = document.getElementById("ftp-pc-body");
+    const sitesBody = document.getElementById("ftp-sites-body");
     if (refreshBtn && !refreshBtn.dataset.bound) {
       refreshBtn.dataset.bound = "1";
       refreshBtn.addEventListener("click", () => {
@@ -1716,15 +1840,24 @@
         });
       });
     }
-    if (body && !body.dataset.bound) {
-      body.dataset.bound = "1";
-      body.addEventListener("change", (event) => {
+    if (sitesRefreshBtn && !sitesRefreshBtn.dataset.bound) {
+      sitesRefreshBtn.dataset.bound = "1";
+      sitesRefreshBtn.addEventListener("click", () => {
+        loadFtpSites().catch((err) => {
+          const output = document.getElementById("ftp-output");
+          if (output) output.textContent = `Load FTP sites failed: ${String(err?.message || err)}`;
+        });
+      });
+    }
+    if (pcBody && !pcBody.dataset.bound) {
+      pcBody.dataset.bound = "1";
+      pcBody.addEventListener("change", (event) => {
         const node = event.target?.closest?.('input[name="ftp-selected-pc"]');
         if (!node) return;
         ftpState.selectedId = String(node.value || "");
         renderFtpPcList();
       });
-      body.addEventListener("click", (event) => {
+      pcBody.addEventListener("click", (event) => {
         const row = event.target?.closest?.("tr");
         if (!row) return;
         const radio = row.querySelector('input[name="ftp-selected-pc"]');
@@ -1734,15 +1867,28 @@
         renderFtpPcList();
       });
     }
-    if (createBtn && !createBtn.dataset.bound) {
-      createBtn.dataset.bound = "1";
-      createBtn.addEventListener("click", () => {
-        const selected = ftpState.pcs.find((x) => String(x.id || "") === String(ftpState.selectedId || ""));
-        const defaultName = selected ? `ftp_${String(selected.name || "site")}` : "ftp_site";
-        openFtpCreateModal(defaultName);
+    if (sitesBody && !sitesBody.dataset.bound) {
+      sitesBody.dataset.bound = "1";
+      sitesBody.addEventListener("click", async (event) => {
+        const editBtn = event.target?.closest?.(".ftp-site-edit");
+        if (editBtn) {
+          const siteName = String(editBtn.getAttribute("data-site-name") || "");
+          const site = ftpState.sites.find((x) => String(x.name || "") === siteName);
+          openFtpSiteModal("edit", site || null);
+          return;
+        }
+        const deleteBtn = event.target?.closest?.(".ftp-site-delete");
+        if (deleteBtn) {
+          await deleteFtpSite(deleteBtn.getAttribute("data-site-name") || "");
+        }
       });
     }
+    if (createBtn && !createBtn.dataset.bound) {
+      createBtn.dataset.bound = "1";
+      createBtn.addEventListener("click", () => openFtpSiteModal("create"));
+    }
     await loadFtpPcs();
+    await loadFtpSites();
   }
 
   function getScanTarget() {
@@ -2234,7 +2380,6 @@
           POLLING_LEAD: envForm.elements.POLLING_LEAD.value,
           POLLING_TOKEN: envForm.elements.POLLING_TOKEN.value,
           POLLING_INTERVAL_SECONDS: envForm.elements.POLLING_INTERVAL_SECONDS.value,
-          POLLING_LAN_UID: envForm.elements.POLLING_LAN_UID.value,
           POLLING_AGENT_UID: envForm.elements.POLLING_AGENT_UID.value,
         };
         try {
@@ -2424,16 +2569,17 @@
     const tabDevicesEl = document.getElementById("nav-tab-devices");
     if (!lanEl) return;
     try {
-      const data = await jsonFetch("/api/dashboard/config");
-      if (data.lan_uid) {
-        lanEl.textContent = data.lan_uid;
-        lanEl.title = `Fingerprint: ${data.fingerprint || ""}`;
+      const data = await jsonFetch("/api/polling/status");
+      const lanUid = String(data?.resolved_lan_uid || "").trim();
+      if (lanUid) {
+        lanEl.textContent = lanUid;
+        lanEl.title = data?.lead ? `Lead: ${String(data.lead)}` : "";
         if (tabDevicesEl) {
           tabDevicesEl.textContent = "Devices";
         }
       }
     } catch (_e) {
-      lanEl.textContent = "UID: Unknown";
+      lanEl.textContent = "LAN UID: Unknown";
     }
   }
 
@@ -2459,10 +2605,6 @@
     bindMobileMenu();
     initSidebarLanInfo();
     const page = document.body.dataset.page;
-    if (page === "dashboard") {
-      bindDashboardActions();
-      loadDashboardConfig();
-    }
     if (page === "analytics") loadOverview().catch(() => { });
     if (page === "devices") {
       loadOverview().catch(() => { });

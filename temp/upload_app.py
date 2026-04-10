@@ -1,0 +1,10 @@
+import paramiko
+client = paramiko.SSHClient()
+client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+client.connect('31.97.76.62', username='root', password='@baoLong0511', timeout=5)
+sftp = client.open_sftp()
+sftp.put('app_vps.py', '/opt/printagent/app.py')
+sftp.close()
+client.exec_command('systemctl restart printagent')
+client.close()
+print("app.py uploaded and service restarted.")

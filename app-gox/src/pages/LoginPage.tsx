@@ -186,15 +186,7 @@ export function LoginPage() {
         
         {tab !== 'forgot' && (
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-            <GoogleLogin
-              onSuccess={handleGoogleSuccess}
-              onError={() => setError('Google Login Failed')}
-              useOneTap
-              theme="filled_blue"
-              shape="pill"
-              text={tab === 'login' ? 'signin_with' : 'signup_with'}
-              width="380"
-            />
+            {import.meta.env.VITE_GOOGLE_CLIENT_ID && <GoogleLogin onSuccess={handleGoogleSuccess} onError={() => setError("Google Login Failed")} useOneTap theme="filled_blue" shape="pill" text={tab === "login" ? "signin_with" : "signup_with"} width="380" />}
           </div>
         )}
 

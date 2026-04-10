@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel timelapse-panel">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+    <div id="devices-meta" class="meta-line">DB: checking...</div>
+    <button id="btn-export-all-csv" class="filter-btn" style="white-space: nowrap;">
+      Export All CSV
+    </button>
+  </div>
+  <div id="devices-grid" class="counter-grid">
+    <div class="counter-card loading">Loading...</div>
+  </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById("btn-export-all-csv");
+      if (!btn) return;
+      btn.innerText = "Export All JSON";
+      btn.addEventListener("click", async () => {
+        try {
+          btn.innerText = "Exporting...";
+          btn.disabled = true;
+
+          let lead = "";
+          const leadSelect = document.getElementById("global-filter-lead");
+          if (leadSelect) lead = leadSelect.value;
+
+          // Fetch all 13,000+ records via limit=0
+          let url = "/api/infor/list?limit=0";
+          if (lead && lead !== "all" && lead !== "default") {
+            url += "&lead=" + encodeURIComponent(lead);
+          } else if (lead === "default") {
+            url += "&lead=default";
+          }
+
+          const res = await fetch(url);
+          const data = await res.json();
+
+          if (!data.rows || data.rows.length === 0) {
+            alert("No data found or API error.");
+            return;
+          }
+
+          const jsonContent = JSON.stringify(data.rows, null, 2);
+          const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+          const link = document.createElement("a");
+          const urlObj = URL.createObjectURL(blob);
+          link.setAttribute("href", urlObj);
+          link.setAttribute("download", `infor_data_export_${new Date().getTime()}.json`);
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(urlObj);
+
+        } catch (e) {
+          console.error(e);
+          alert("Error exporting JSON: " + e.message);
+        } finally {
+          btn.innerText = "Export All JSON";
+          btn.disabled = false;
+        }
+      });
+    });
+  </script>
+  <div class="pager">
+    <button id="devices-prev" aria-label="Previous page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M14.5 6.5 9 12l5.5 5.5"></path>
+      </svg>
+    </button>
+    <div id="devices-page" class="pager-pages"></div>
+    <button id="devices-next" aria-label="Next page">
+      <svg class="pager-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9.5 6.5 15 12l-5.5 5.5"></path>
+      </svg>
+    </button>
+    <div class="pager-limit">
+      <select id="devices-limit" aria-label="Items per page">
+        <option value="50">50 / page</option>
+        <option value="100">100 / page</option>
+        <option value="200">200 / page</option>
+        <option value="0">All</option>
+      </select>
+    </div>
+  </div>
+</section>
+{% endblock %}

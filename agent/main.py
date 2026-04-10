@@ -2,23 +2,144 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import date
+from logging import FileHandler, Filter
 import os
 import signal
-import shutil
 import sys
+import threading
 import time
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 from app.config import AppConfig
 from app.modules.ricoh.service import RicohService
 from app.services.api_client import APIClient, Printer
-from app.web import create_app
+from app.services.ftp_worker import FtpWorker
+from app.services.polling_bridge import PollingBridge
+from app.services.runtime import acquire_single_instance, default_log_path, ensure_startup_registration, startup_command_for_current_exe
+from agent.services.tray import TrayController
+from app.services.updater import AutoUpdater
+from app.web import create_app, run_web_server, shutdown_app_resources
 
 
-def setup_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+DEFAULT_WEB_PORT = 9173
+BACKGROUND_HEARTBEAT_SECONDS = 300
+
+
+class _MaxLevelFilter(Filter):
+    def __init__(self, max_level: int) -> None:
+        super().__init__()
+        self.max_level = max_level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < self.max_level
+
+
+class _DailyStoutFileHandler(FileHandler):
+    def __init__(self, base_path: Path, encoding: str = "utf-8") -> None:
+        self.base_path = base_path
+        self.current_day = date.today()
+        try:
+            if self.base_path.exists():
+                file_day = date.fromtimestamp(self.base_path.stat().st_mtime)
+                if file_day != self.current_day:
+                    archive_path = self.base_path.with_name(f"{self.base_path.stem}_{file_day.isoformat()}{self.base_path.suffix}")
+                    try:
+                        if archive_path.exists():
+                            archive_path.unlink()
+                    except Exception:
+                        pass
+                    try:
+                        self.base_path.replace(archive_path)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        super().__init__(base_path, encoding=encoding)
+
+    def _rollover_if_needed(self) -> None:
+        today = date.today()
+        if today == self.current_day:
+            return
+        self.acquire()
+        try:
+            if today == self.current_day:
+                return
+            try:
+                if self.stream:
+                    self.stream.flush()
+                    self.stream.close()
+                    self.stream = None
+            except Exception:
+                pass
+            previous_day = self.current_day
+            if self.base_path.exists():
+                archive_path = self.base_path.with_name(f"{self.base_path.stem}_{previous_day.isoformat()}{self.base_path.suffix}")
+                try:
+                    if archive_path.exists():
+                        archive_path.unlink()
+                except Exception:
+                    pass
+                try:
+                    self.base_path.replace(archive_path)
+                except Exception:
+                    pass
+            self.current_day = today
+            self.stream = self._open()
+        finally:
+            self.release()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._rollover_if_needed()
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+
+def _resolve_log_path(preferred: str, runtime_root: Path, fallback_name: str) -> Path:
+    candidate = Path(preferred)
+    try:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except Exception:
+        fallback = runtime_root / fallback_name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def setup_logging(runtime_root: Path) -> tuple[Path, Path]:
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    stdout_path = _resolve_log_path(str(default_log_path("stout.txt")), runtime_root, "stout.txt")
+    stderr_path = _resolve_log_path(str(default_log_path("sterror.txt")), runtime_root, "sterror.txt")
+
+    stdout_handler = _DailyStoutFileHandler(stdout_path, encoding="utf-8")
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.addFilter(_MaxLevelFilter(logging.ERROR))
+    stdout_handler.setFormatter(formatter)
+
+    stderr_handler = FileHandler(stderr_path, encoding="utf-8")
+    stderr_handler.setLevel(logging.ERROR)
+    stderr_handler.setFormatter(formatter)
+
+    stdout_stream = logging.StreamHandler(sys.stdout)
+    stdout_stream.setLevel(logging.INFO)
+    stdout_stream.addFilter(_MaxLevelFilter(logging.ERROR))
+    stdout_stream.setFormatter(formatter)
+
+    stderr_stream = logging.StreamHandler(sys.stderr)
+    stderr_stream.setLevel(logging.ERROR)
+    stderr_stream.setFormatter(formatter)
+
+    root.addHandler(stdout_handler)
+    root.addHandler(stderr_handler)
+    root.addHandler(stdout_stream)
+    root.addHandler(stderr_stream)
+    return stdout_path, stderr_path
 
 
 def _ensure_runtime_root() -> Path:
@@ -27,26 +148,6 @@ def _ensure_runtime_root() -> Path:
         os.chdir(exe_dir)
         return exe_dir
     return Path.cwd()
-
-
-def _resolve_config_path(config_path: str, runtime_root: Path) -> str:
-    requested = Path(config_path)
-    if requested.is_absolute() and requested.exists():
-        return str(requested)
-    if requested.exists():
-        return str(requested)
-
-    fallback = runtime_root / requested
-    if fallback.exists():
-        return str(fallback)
-
-    bundle_root = getattr(sys, "_MEIPASS", "")
-    bundled = Path(bundle_root) / requested if bundle_root else None
-    if bundled and bundled.exists():
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(bundled, fallback)
-        return str(fallback)
-    return str(requested)
 
 
 def load_test_printer(config: AppConfig) -> Printer:
@@ -62,7 +163,7 @@ def load_test_printer(config: AppConfig) -> Printer:
 def run_test_mode(config: AppConfig, service: RicohService) -> None:
     printer = load_test_printer(config)
     if not printer.ip:
-        raise ValueError("Missing test.ip in config.yaml")
+        raise ValueError("Missing test.ip configuration")
 
     post_server = config.get_bool("test.post_server", True)
     while True:
@@ -113,16 +214,24 @@ def run_test_mode(config: AppConfig, service: RicohService) -> None:
             print(f"Loi: {exc}")
 
 
-def run_normal_mode(service: RicohService, config: AppConfig) -> None:
-    from app.services.polling_bridge import PollingBridge
+def run_normal_mode(service: RicohService, config: AppConfig, updater: AutoUpdater) -> None:
     import socket
-    
+
     # Resolve LAN UID for display
     hostname = socket.gethostname()
     local_ip = PollingBridge._resolve_local_ip()
-    bridge = PollingBridge(config, service._api_client, service)
+    restart_event = threading.Event()
+    bridge = PollingBridge(
+        config,
+        service._api_client,
+        service,
+        updater=updater,
+        run_mode="service",
+        web_port=0,
+        restart_callback=restart_event.set,
+    )
     lan_uid, _ = bridge._resolve_lan_info(hostname, local_ip)
-    
+
     print(f"\n{'='*60}")
     print(f" PRINT AGENT STARTING...")
     print(f" MODE: SERVICE")
@@ -138,24 +247,34 @@ def run_normal_mode(service: RicohService, config: AppConfig) -> None:
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
-    service.start()
+    ok, message = bridge.start()
+    if not ok and "already running" not in message.lower():
+        raise RuntimeError(message)
     try:
-        while not stop:
+        while not stop and not restart_event.wait(0.2):
             time.sleep(0.2)
     finally:
+        bridge.stop()
         service.stop()
 
 
+def run_ftp_worker_mode() -> None:
+    worker = FtpWorker()
+    try:
+        worker.run_forever()
+    finally:
+        worker.stop()
+
+
 def main() -> int:
-    load_dotenv()
-    setup_logging()
     runtime_root = _ensure_runtime_root()
+    stdout_path, stderr_path = setup_logging(runtime_root)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["web", "service", "test"],
+        choices=["web", "service", "test", "ftp-worker"],
         default="web",
-        help="Run mode: web (Flask UI), service (scheduler), test (interactive menu)",
+        help="Run mode: web (Flask UI), service (scheduler), test (interactive menu), ftp-worker (persistent FTP host)",
     )
     parser.add_argument(
         "--host",
@@ -164,7 +283,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--port",
-        default=int(os.getenv("FLASK_PORT", "5000")),
+        default=int(os.getenv("FLASK_PORT", str(DEFAULT_WEB_PORT))),
         type=int,
         help="Flask port in web mode (env: FLASK_PORT)",
     )
@@ -174,22 +293,91 @@ def main() -> int:
         default=os.getenv("FLASK_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"},
         help="Enable Flask debug mode (env: FLASK_DEBUG=true/false)",
     )
-    parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     args = parser.parse_args()
-    resolved_config_path = _resolve_config_path(args.config, runtime_root)
-
-    if args.mode == "web":
-        app = create_app(resolved_config_path)
-        app.run(host=args.host, port=args.port, debug=args.debug)
+    instance_name = "Global\\GoPrinxAgentFtpWorker" if args.mode == "ftp-worker" else "Global\\GoPrinxAgentMain"
+    instance_lock, is_primary = acquire_single_instance(instance_name)
+    if not is_primary:
+        logging.info("Another GoPrinxAgent process is already running for mode=%s; skipping startup", args.mode)
         return 0
 
-    config = AppConfig.load(resolved_config_path)
-    service = RicohService(APIClient(config))
-    if args.mode == "test":
-        run_test_mode(config, service)
+    startup_ok = False
+    startup_note = "skipped"
+    if args.mode == "ftp-worker":
+        worker_cmd = startup_command_for_current_exe("ftp-worker")
+        startup_ok, startup_note = ensure_startup_registration(app_name="GoPrinxAgentFtpWorker", command=worker_cmd)
     else:
-        run_normal_mode(service, config)
-    return 0
+        worker_cmd = startup_command_for_current_exe("ftp-worker")
+        if args.mode == "web":
+            main_cmd = startup_command_for_current_exe("web", args.host, args.port)
+        elif args.mode == "service":
+            main_cmd = startup_command_for_current_exe("service")
+        else:
+            main_cmd = startup_command_for_current_exe("web", args.host, args.port)
+        startup_ok, startup_note = ensure_startup_registration(command=main_cmd)
+        worker_ok, worker_note = ensure_startup_registration(app_name="GoPrinxAgentFtpWorker", command=worker_cmd)
+        logging.info("FTP worker startup registration: %s (%s)", worker_ok, worker_note)
+    logging.info("Startup registration: %s (%s)", startup_ok, startup_note)
+    logging.info("Log files: stdout=%s stderr=%s", stdout_path.as_posix(), stderr_path.as_posix())
+
+    try:
+        updater_args: list[str]
+        if args.mode == "web":
+            updater_args = ["--mode", "web", "--host", args.host, "--port", str(args.port)]
+        elif args.mode == "service":
+            updater_args = ["--mode", "service"]
+        elif args.mode == "ftp-worker":
+            updater_args = ["--mode", "ftp-worker"]
+        else:
+            updater_args = ["--mode", "test"]
+        updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1], current_args=updater_args)
+
+        if args.mode == "web":
+            os.environ["APP_RUN_MODE"] = "web"
+            os.environ["APP_WEB_PORT"] = str(args.port)
+            current_args = ["--mode", "web", "--host", args.host, "--port", str(args.port)]
+            stop_event = threading.Event()
+            app = create_app(current_args=current_args, shutdown_event=stop_event)
+            server, server_thread = run_web_server(app, args.host, args.port)
+            tray = TrayController(f"http://127.0.0.1:{args.port}", stop_event=stop_event)
+            tray_thread = threading.Thread(target=tray.run, daemon=True, name="agent-tray")
+            tray_thread.start()
+            try:
+                while not stop_event.wait(0.5):
+                    if not tray_thread.is_alive():
+                        LOGGER.warning("Tray thread exited unexpectedly; keeping web server alive")
+                        tray_thread = threading.Thread(target=tray.run, daemon=True, name="agent-tray-restart")
+                        tray_thread.start()
+            finally:
+                stop_event.set()
+                shutdown_app_resources(app)
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
+                if server_thread.is_alive():
+                    server_thread.join(timeout=5)
+            return 0
+
+        if args.mode == "ftp-worker":
+            run_ftp_worker_mode()
+            return 0
+
+        config = AppConfig.load()
+        service = RicohService(APIClient(config), config=config)
+        if args.mode == "test":
+            run_test_mode(config, service)
+        else:
+            os.environ["APP_RUN_MODE"] = "service"
+            os.environ["APP_WEB_PORT"] = "0"
+            run_normal_mode(service, config, updater)
+        return 0
+    finally:
+        if instance_lock is not None:
+            instance_lock.release()
 
 
 if __name__ == "__main__":

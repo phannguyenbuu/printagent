@@ -860,37 +860,17 @@ class RicohCollectorMixin(RicohServiceBase):
         ]
 
     def start_counter_logging(self, printer: Printer) -> None:
-        csv_path = Path("storage/data/log_counter.csv")
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        if not csv_path.exists():
-            with csv_path.open("w", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["timestamp", "printer_name", "ip", "copier_bw", "printer_bw", "total_bw"])
-
         while not self._stop_event.is_set():
             try:
-                payload = self.process_counter(printer, should_post=True)
-                data = payload["counter_data"]
-                c_bw = int(data.get("copier_bw", 0))
-                p_bw = int(data.get("printer_bw", 0))
-                with csv_path.open("a", newline="", encoding="utf-8") as f:
-                    csv.writer(f).writerow([self._timestamp(), printer.name, printer.ip, c_bw, p_bw, c_bw + p_bw])
+                self.process_counter(printer, should_post=True)
             except Exception as exc:
                 LOGGER.error("Counter logging error: %s", exc)
             time.sleep(60)
 
     def start_status_logging(self, printer: Printer, csv_path: str | Path = "storage/data/log_status.csv") -> None:
-        path = Path(csv_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            with path.open("w", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["timestamp", "printer_name", "ip", "sys_status", "toner", "t1", "t2", "t3", "t4"])
-
         while not self._stop_event.is_set():
             try:
-                payload = self.process_status(printer, should_post=True)
-                row = self._prepare_csv_row(self._timestamp(), printer, payload["status_data"])
-                with path.open("a", newline="", encoding="utf-8") as f:
-                    csv.writer(f).writerow(row)
+                self.process_status(printer, should_post=True)
             except Exception as exc:
                 LOGGER.error("Status logging error: %s", exc)
             time.sleep(30)

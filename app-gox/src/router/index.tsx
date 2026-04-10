@@ -53,6 +53,7 @@ const AccountPage = React.lazy(() =>
   import('../pages/AccountPage').then((m) => ({ default: m.AccountPage }))
 );
 const DownloadPage = React.lazy(() => import('../pages/DownloadPage'));
+const DriversPage = React.lazy(() => import('../pages/DriversPage'));
 const AgentPage = React.lazy(() =>
   import('../pages/AgentPage').then((m) => ({ default: m.AgentPage }))
 );
@@ -90,7 +91,7 @@ export function ProtectedRoute({ allowedRoles }: ProtectedRouteProps) {
   useEffect(() => {
     checkSession();
     setChecked(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount only
 
   if (!checked) {
@@ -144,6 +145,7 @@ export function AppRouter() {
               <Route path="/history" element={<RepairHistoryPage />} />
               <Route path="/agents" element={<AgentPage />} />
               <Route path="/downloads" element={<DownloadPage />} />
+              <Route path="/drivers" element={<DriversPage />} />
               <Route path="/account" element={<AccountPage />} />
             </Route>
           </Route>
