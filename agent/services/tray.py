@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import sys
 import threading
@@ -54,7 +55,9 @@ NIM_DELETE = 0x00000002
 NIF_MESSAGE = 0x00000001
 NIF_ICON = 0x00000002
 NIF_TIP = 0x00000004
+NIF_INFO = 0x00000010
 MF_STRING = 0x00000000
+MF_SEPARATOR = 0x00000800
 TPM_RIGHTBUTTON = 0x0002
 IDI_APPLICATION = 32512
 LR_DEFAULTSIZE = 0x0040
@@ -62,8 +65,14 @@ LR_SHARED = 0x8000
 IMAGE_ICON = 1
 SW_HIDE = 0
 SW_SHOWNORMAL = 1
+NIIF_INFO = 0x00000001
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
 ID_SHOW = 1001
-ID_CLOSE = 1002
+ID_VERSION = 1002
+ID_CLOSE = 1003
+DEFAULT_TRAY_TIP = "GoPrinxAgent"
+UPDATE_NOTICE_FILE = Path("storage/data/update_notice.json")
 
 
 class NOTIFYICONDATAW(ctypes.Structure):
@@ -94,6 +103,7 @@ class POINT(ctypes.Structure):
 class TrayController:
     url: str
     stop_event: threading.Event | None = None
+    app_version: str = ""
 
     def __post_init__(self) -> None:
         self._closed = False
@@ -101,7 +111,39 @@ class TrayController:
         self._hicon: int | None = None
         self._class_atom: int | None = None
         self._wndproc = None
+        self._pending_update_version = self._read_update_notice()
+        self._tip_text = self._build_tip_text(self._pending_update_version)
         self._taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated") if user32 else 0
+
+    @staticmethod
+    def _clip_text(value: str, limit: int) -> str:
+        return str(value or "").strip()[:limit]
+
+    def _build_tip_text(self, version: str = "") -> str:
+        version_text = str(version or "").strip()
+        if version_text:
+            return self._clip_text(f"{DEFAULT_TRAY_TIP} - Updated version {version_text}", 127)
+        return DEFAULT_TRAY_TIP
+
+    @staticmethod
+    def _read_update_notice() -> str:
+        try:
+            if not UPDATE_NOTICE_FILE.exists():
+                return ""
+            payload = json.loads(UPDATE_NOTICE_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return str(payload.get("version") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to read update notice: %s", exc)
+        return ""
+
+    @staticmethod
+    def _clear_update_notice() -> None:
+        try:
+            if UPDATE_NOTICE_FILE.exists():
+                UPDATE_NOTICE_FILE.unlink()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to clear update notice: %s", exc)
 
     def _show(self) -> None:
         target = self.url.strip()
@@ -120,6 +162,16 @@ class TrayController:
             self.stop_event.set()
         if self._hwnd and user32:
             user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
+
+    def _show_version_dialog(self) -> None:
+        if not user32:
+            return
+        version = str(self.app_version or "").strip() or "unknown"
+        title = DEFAULT_TRAY_TIP
+        message = f"Version: {version}"
+        hwnd = self._hwnd or 0
+        user32.SetForegroundWindow(hwnd)
+        user32.MessageBoxW(hwnd, message, title, MB_OK | MB_ICONINFORMATION)
 
     def _load_icon(self) -> int:
         if not user32:
@@ -141,9 +193,44 @@ class TrayController:
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         data.uCallbackMessage = WM_USER + 20
         data.hIcon = self._hicon or 0
-        data.szTip = "GoPrinxAgent"
+        data.szTip = self._tip_text
         shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(data))
         shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
+
+    def _update_tray_tip(self) -> None:
+        if not user32 or not self._hwnd:
+            return
+        data = NOTIFYICONDATAW()
+        data.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        data.hWnd = self._hwnd
+        data.uID = 1
+        data.uFlags = NIF_TIP
+        data.szTip = self._tip_text
+        shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
+
+    def _show_balloon(self, title: str, message: str) -> None:
+        if not user32 or not self._hwnd:
+            return
+        data = NOTIFYICONDATAW()
+        data.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        data.hWnd = self._hwnd
+        data.uID = 1
+        data.uFlags = NIF_INFO | NIF_TIP | NIF_ICON
+        data.hIcon = self._hicon or 0
+        data.szTip = self._tip_text
+        data.szInfoTitle = self._clip_text(title, 63)
+        data.szInfo = self._clip_text(message, 255)
+        data.dwInfoFlags = NIIF_INFO
+        data.uTimeoutOrVersion = 10000
+        shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
+
+    def _show_startup_notice(self) -> None:
+        version = str(self._pending_update_version or "").strip()
+        if not version:
+            return
+        self._show_balloon(DEFAULT_TRAY_TIP, f"Updated version {version}")
+        self._clear_update_notice()
+        self._pending_update_version = ""
 
     def _remove_tray_icon(self) -> None:
         if not user32 or not self._hwnd:
@@ -162,6 +249,8 @@ class TrayController:
             return
         try:
             user32.AppendMenuW(menu, MF_STRING, ID_SHOW, "Show")
+            user32.AppendMenuW(menu, MF_STRING, ID_VERSION, "Version")
+            user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
             user32.AppendMenuW(menu, MF_STRING, ID_CLOSE, "Close")
             user32.SetForegroundWindow(self._hwnd)
             pt = POINT()
@@ -188,6 +277,8 @@ class TrayController:
                 command = int(wparam) & 0xFFFF
                 if command == ID_SHOW:
                     self._show()
+                elif command == ID_VERSION:
+                    self._show_version_dialog()
                 elif command == ID_CLOSE:
                     self._close()
                 return 0
@@ -263,6 +354,8 @@ class TrayController:
             LOGGER.warning("Failed to create tray window")
             return
         self._add_tray_icon()
+        self._update_tray_tip()
+        self._show_startup_notice()
         user32.ShowWindow(hwnd, SW_HIDE)
         user32.UpdateWindow(hwnd)
 

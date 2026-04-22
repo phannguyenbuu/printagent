@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app.config import AppConfig
 from app.modules.ricoh.service import RicohService
+from app.modules.toshiba.service import ToshibaService
 from app.services.api_client import APIClient, Printer
 from app.services.ftp_worker import FtpWorker
 from app.services.polling_bridge import PollingBridge
@@ -214,7 +215,12 @@ def run_test_mode(config: AppConfig, service: RicohService) -> None:
             print(f"Loi: {exc}")
 
 
-def run_normal_mode(service: RicohService, config: AppConfig, updater: AutoUpdater) -> None:
+def run_normal_mode(
+    service: RicohService,
+    toshiba_service: ToshibaService | None,
+    config: AppConfig,
+    updater: AutoUpdater,
+) -> None:
     import socket
 
     # Resolve LAN UID for display
@@ -225,6 +231,7 @@ def run_normal_mode(service: RicohService, config: AppConfig, updater: AutoUpdat
         config,
         service._api_client,
         service,
+        toshiba_service=toshiba_service,
         updater=updater,
         run_mode="service",
         web_port=0,
@@ -338,7 +345,11 @@ def main() -> int:
             stop_event = threading.Event()
             app = create_app(current_args=current_args, shutdown_event=stop_event)
             server, server_thread = run_web_server(app, args.host, args.port)
-            tray = TrayController(f"http://127.0.0.1:{args.port}", stop_event=stop_event)
+            tray = TrayController(
+                f"http://127.0.0.1:{args.port}",
+                stop_event=stop_event,
+                app_version=updater.current_version,
+            )
             tray_thread = threading.Thread(target=tray.run, daemon=True, name="agent-tray")
             tray_thread.start()
             try:
@@ -367,13 +378,15 @@ def main() -> int:
             return 0
 
         config = AppConfig.load()
-        service = RicohService(APIClient(config), config=config)
+        api_client = APIClient(config)
+        service = RicohService(api_client, config=config)
+        toshiba_service = ToshibaService(api_client)
         if args.mode == "test":
             run_test_mode(config, service)
         else:
             os.environ["APP_RUN_MODE"] = "service"
             os.environ["APP_WEB_PORT"] = "0"
-            run_normal_mode(service, config, updater)
+            run_normal_mode(service, toshiba_service, config, updater)
         return 0
     finally:
         if instance_lock is not None:

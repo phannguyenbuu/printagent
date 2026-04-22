@@ -60,6 +60,11 @@ function updateSpecifiedRangeVisibility() {
 async function loadLeadOptions(preferredLead = "") {
   const select = qs("global-filter-lead");
   if (!select) return;
+  return loadLeadOptionsInto(select, preferredLead);
+}
+
+async function loadLeadOptionsInto(select, preferredLead = "") {
+  if (!select) return;
   let dbLeads = [];
   try {
     const data = await jget("/api/leads");
@@ -162,6 +167,119 @@ function inforRowCounterTotal(row) {
     : (row?.counter && typeof row.counter === "object" ? row.counter : {});
   const n = Number(row?.counter_total ?? counter?.total ?? 0);
   return Number.isFinite(n) ? n : 0;
+}
+
+function getInforFilterValue(id) {
+  return (qs(id)?.value || "").trim();
+}
+
+function buildInforQueryParams(limitOverride = null) {
+  const query = new URLSearchParams();
+  const lead = getInforFilterValue("infor-filter-lead");
+  const rowId = getInforFilterValue("infor-filter-id");
+  const printerName = getInforFilterValue("infor-filter-printer-name");
+  const ip = getInforFilterValue("infor-filter-ip");
+  const macId = getInforFilterValue("infor-filter-mac-id");
+  const lanUid = getInforFilterValue("infor-filter-lan-uid");
+  const counterMin = getInforFilterValue("infor-filter-counter-min");
+  const counterMax = getInforFilterValue("infor-filter-counter-max");
+  const printedMin = getInforFilterValue("infor-filter-printed-min");
+  const printedMax = getInforFilterValue("infor-filter-printed-max");
+  const cartridgeStatus = getInforFilterValue("infor-filter-cartridge-status");
+  const updatedFrom = getInforFilterValue("infor-filter-updated-from");
+  const updatedTo = getInforFilterValue("infor-filter-updated-to");
+  const limitValue = limitOverride === null || limitOverride === undefined ? state.devices.limit : limitOverride;
+
+  if (lead) query.set("lead", lead);
+  if (rowId) query.set("id", rowId);
+  if (printerName) query.set("printer_name", printerName);
+  if (ip) query.set("ip", ip);
+  if (macId) query.set("mac_id", macId);
+  if (lanUid) query.set("lan_uid", lanUid);
+  if (counterMin) query.set("counter_min", counterMin);
+  if (counterMax) query.set("counter_max", counterMax);
+  if (printedMin) query.set("printed_paper_min", printedMin);
+  if (printedMax) query.set("printed_paper_max", printedMax);
+  if (cartridgeStatus) query.set("cartridge_status", cartridgeStatus);
+  if (updatedFrom) query.set("updated_from", updatedFrom);
+  if (updatedTo) query.set("updated_to", updatedTo);
+  query.set("page", String(Math.max(1, Number(state.devices.page || 1))));
+  query.set("limit", String(limitValue));
+  return query;
+}
+
+async function loadInforLeadOptions(preferredLead = "default") {
+  const select = qs("infor-filter-lead");
+  if (!select) return;
+  await loadLeadOptionsInto(select, preferredLead);
+}
+
+function resetInforFilters() {
+  if (qs("infor-filter-lead")) qs("infor-filter-lead").value = "default";
+  if (qs("infor-filter-id")) qs("infor-filter-id").value = "";
+  if (qs("infor-filter-printer-name")) qs("infor-filter-printer-name").value = "";
+  if (qs("infor-filter-ip")) qs("infor-filter-ip").value = "";
+  if (qs("infor-filter-mac-id")) qs("infor-filter-mac-id").value = "";
+  if (qs("infor-filter-lan-uid")) qs("infor-filter-lan-uid").value = "";
+  if (qs("infor-filter-counter-min")) qs("infor-filter-counter-min").value = "";
+  if (qs("infor-filter-counter-max")) qs("infor-filter-counter-max").value = "";
+  if (qs("infor-filter-printed-min")) qs("infor-filter-printed-min").value = "";
+  if (qs("infor-filter-printed-max")) qs("infor-filter-printed-max").value = "";
+  if (qs("infor-filter-cartridge-status")) qs("infor-filter-cartridge-status").value = "";
+  if (qs("infor-filter-updated-from")) qs("infor-filter-updated-from").value = "";
+  if (qs("infor-filter-updated-to")) qs("infor-filter-updated-to").value = "";
+}
+
+function bindInforFilters() {
+  const applyBtn = qs("infor-filter-apply");
+  const resetBtn = qs("infor-filter-reset");
+  if (applyBtn && !applyBtn.dataset.bound) {
+    applyBtn.addEventListener("click", () => {
+      state.devices.page = 1;
+      loadDevicesPage();
+    });
+    applyBtn.dataset.bound = "1";
+  }
+  if (resetBtn && !resetBtn.dataset.bound) {
+    resetBtn.addEventListener("click", () => {
+      resetInforFilters();
+      state.devices.page = 1;
+      loadDevicesPage();
+    });
+    resetBtn.dataset.bound = "1";
+  }
+  [
+    "infor-filter-id",
+    "infor-filter-printer-name",
+    "infor-filter-ip",
+    "infor-filter-mac-id",
+    "infor-filter-lan-uid",
+    "infor-filter-counter-min",
+    "infor-filter-counter-max",
+    "infor-filter-printed-min",
+    "infor-filter-printed-max",
+    "infor-filter-updated-from",
+    "infor-filter-updated-to",
+  ].forEach((id) => {
+    const input = qs(id);
+    if (!input || input.dataset.bound) return;
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        state.devices.page = 1;
+        loadDevicesPage();
+      }
+    });
+    input.dataset.bound = "1";
+  });
+  ["infor-filter-lead", "infor-filter-cartridge-status"].forEach((id) => {
+    const select = qs(id);
+    if (!select || select.dataset.bound) return;
+    select.addEventListener("change", () => {
+      state.devices.page = 1;
+      loadDevicesPage();
+    });
+    select.dataset.bound = "1";
+  });
 }
 
 function buildPrintedPaperBaseline(rows) {
@@ -1648,7 +1766,6 @@ function renderDevicesGrid() {
     return;
   }
 
-  const printedBaseline = buildPrintedPaperBaseline(rows);
   grid.innerHTML = rows
     .map((r) => {
       const rowId = Number(r.id || 0);
@@ -1659,9 +1776,7 @@ function renderDevicesGrid() {
         ? r.status_data
         : (r.status && typeof r.status === "object" ? r.status : {});
       const total = Number(r.counter_total || counter.total || 0);
-      const printedKey = `${String(r.lan_uid || "").trim()}||${String(r.mac_id || "").trim().toUpperCase()}`;
-      const base = printedBaseline[printedKey];
-      const printedPaper = Math.max(0, Math.round(total - Number(base?.total || total)));
+      const printedPaper = Number(r.printed_paper ?? r.printer_page ?? 0);
       const systemStatus = String(r.status_system || status.system_status || status.printer_status || "-");
       const statusLine = systemStatus.length > 140 ? `${systemStatus.slice(0, 140)}...` : systemStatus;
       const createAt = String(r.createAt || r.created_at || "");
@@ -1675,7 +1790,7 @@ function renderDevicesGrid() {
           <div class="counter-card-time">${escapeHtml(r.printer_name || "unknown")} ${escapeHtml(r.ip ? `(${r.ip})` : "")}</div>
         </header>
         <div class="counter-card-body">
-          <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v">${escapeHtml(r.lan_uid || "-")}</span></div>
+          <div class="counter-kv"><span class="counter-k">LAN UID</span><span class="counter-v infor-lan-uid">${escapeHtml(r.lan_uid || "-")}</span></div>
           <div class="counter-kv"><span class="counter-k">MAC ID</span><span class="counter-v">${escapeHtml(r.mac_id || "-")}</span></div>
           <div class="counter-kv"><span class="counter-k">CreateAt</span><span class="counter-v">${escapeHtml(fmtDateGmt7(createAt))}</span></div>
           <div class="counter-kv"><span class="counter-k">Counter</span><span class="counter-v">${fmtNumber(total)}</span></div>
@@ -1739,14 +1854,7 @@ function openInforDetailModal(row) {
     ["CreateAt", fmtDateGmt7(row.createAt || row.created_at || "")],
     ["Updated", fmtTimestampGmt7(row.updated_at || "")],
     ["Counter Total", fmtNumber(row.counter_total || 0)],
-    ["Printed Paper", (() => {
-      const allRows = Array.isArray(state.devices.rows) ? state.devices.rows : [];
-      const baseline = buildPrintedPaperBaseline(allRows);
-      const total = inforRowCounterTotal(row);
-      const key = `${String(row.lan_uid || "").trim()}||${String(row.mac_id || "").trim().toUpperCase()}`;
-      const base = baseline[key];
-      return fmtNumber(Math.max(0, Math.round(total - Number(base?.total || total))));
-    })()],
+    ["Printed Paper", fmtNumber(row.printed_paper ?? row.printer_page ?? 0)],
   ];
   const renderPairs = (pairs) =>
     pairs
@@ -1782,13 +1890,7 @@ function openInforDetailModal(row) {
 
 async function loadDevicesPage() {
   initDevicesPaging();
-  const lead = (qs("global-filter-lead")?.value || "").trim();
-  const requestedPage = Math.max(1, Number(state.devices.page || 1));
-  const query = new URLSearchParams({ 
-    lead,
-    page: requestedPage,
-    limit: state.devices.limit
-  });
+  const query = buildInforQueryParams();
   const data = await jget(`/api/infor/list?${query.toString()}`);
   state.devices.rows = Array.isArray(data.rows) ? data.rows : [];
   state.devices.total = data.total || 0;
@@ -2210,6 +2312,10 @@ async function bind() {
   updateSpecifiedRangeVisibility();
   const restoredLead = (qs("global-filter-lead")?.value || "").trim();
   await loadLeadOptions(restoredLead || "default");
+  if (page === "infor") {
+    await loadInforLeadOptions("default");
+    bindInforFilters();
+  }
   const uiConfig = loadUiConfig();
   applyUiConfig(uiConfig);
   qs("global-filter-apply")?.addEventListener("click", () => {

@@ -19,7 +19,8 @@ from app.services.runtime import fresh_pyinstaller_env, is_frozen, is_windows
 
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_APP_VERSION = "1.3.34"
+DEFAULT_APP_VERSION = "1.3.40"
+UPDATE_NOTICE_FILE = Path("storage/data/update_notice.json")
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
@@ -184,6 +185,15 @@ class AutoUpdater:
     def _vbs_string(value: str) -> str:
         return str(value or "").replace('"', '""')
 
+    @staticmethod
+    def _write_update_notice(path: Path, version: str) -> None:
+        payload = {
+            "version": str(version or "").strip(),
+            "updated_at": _utc_now(),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
     def should_check(self) -> bool:
         with self._lock:
             if self.state.running:
@@ -300,6 +310,7 @@ class AutoUpdater:
         staged_binary = release_dir / f"{current_binary.stem}.new{current_binary.suffix}"
         backup_binary = release_dir / f"{current_binary.stem}.bak{current_binary.suffix}"
         helper_script = release_dir / "storage" / "data" / "agent_update.vbs"
+        notice_file = UPDATE_NOTICE_FILE if UPDATE_NOTICE_FILE.is_absolute() else release_dir / UPDATE_NOTICE_FILE
         helper_script.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -375,6 +386,12 @@ class AutoUpdater:
                 "//Nologo",
                 str(helper_script),
             ]
+            notice_version = str(target_version or self.state.last_available_version or "").strip()
+            if notice_version:
+                try:
+                    self._write_update_notice(notice_file, notice_version)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("Failed to write update notice marker: %s", exc)
             subprocess.Popen(
                 helper_cmd,
                 cwd=str(release_dir),
@@ -399,6 +416,11 @@ class AutoUpdater:
             try:
                 if staged_binary.exists():
                     staged_binary.unlink()
+            except Exception:
+                pass
+            try:
+                if notice_file.exists():
+                    notice_file.unlink()
             except Exception:
                 pass
             return False, str(exc), False

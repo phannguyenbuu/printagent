@@ -17,6 +17,7 @@ import requests
 
 from app.config import AppConfig
 from app.modules.ricoh.service import RicohService
+from app.modules.toshiba.service import ToshibaService
 from app.services.api_client import APIClient, Printer
 from app.services.ftp_control import FtpControlCommand, parse_ftp_control_rows
 from app.services.scan_drop import ensure_active_drop_folder
@@ -37,6 +38,7 @@ class PollingBridge:
         config: AppConfig,
         api_client: APIClient,
         ricoh_service: RicohService,
+        toshiba_service: ToshibaService | None = None,
         updater: AutoUpdater | None = None,
         run_mode: str = "web",
         web_port: int = DEFAULT_WEB_PORT,
@@ -45,6 +47,7 @@ class PollingBridge:
         self._config = config
         self._api_client = api_client
         self._ricoh_service = ricoh_service
+        self._toshiba_service = toshiba_service
         self._updater = updater
         self._run_mode = str(run_mode or "web").strip() or "web"
         self._web_port = int(web_port or DEFAULT_WEB_PORT)
@@ -92,6 +95,155 @@ class PollingBridge:
         self._trigger_event = threading.Event()
         self._last_discovered_printers: list[Printer] = []
         self._load_scan_upload_state()
+
+    @staticmethod
+    def _printer_type(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    def _collector_service_for(self, printer: Printer) -> RicohService | ToshibaService:
+        if self._toshiba_service is not None and self._printer_type(printer.printer_type) == "toshiba":
+            return self._toshiba_service
+        return self._ricoh_service
+
+    @staticmethod
+    def _device_info_probe_name(info: dict[str, Any]) -> tuple[str, str]:
+        model_name = (
+            str(info.get("Model Name", "") or "").strip()
+            or str(info.get("Machine Name", "") or "").strip()
+            or str(info.get("model_name", "") or "").strip()
+            or str(info.get("Host Name", "") or "").strip()
+            or str(info.get("host_name", "") or "").strip()
+        )
+        machine_id = (
+            str(info.get("Machine ID", "") or "").strip()
+            or str(info.get("machine_id", "") or "").strip()
+        )
+        return model_name, machine_id
+
+    def _candidate_probe_types(self, preferred_type: str = "") -> list[str]:
+        candidates: list[str] = []
+        normalized = self._printer_type(preferred_type)
+        if normalized in {"ricoh", "toshiba"}:
+            candidates.append(normalized)
+        if "ricoh" not in candidates:
+            candidates.append("ricoh")
+        if self._toshiba_service is not None and "toshiba" not in candidates:
+            candidates.append("toshiba")
+        return candidates
+
+    def _resolve_scanned_mac(
+        self,
+        ip: str,
+        row: dict[str, object],
+        neighbor_mac_map: dict[str, str],
+        preferred_type: str = "",
+    ) -> str:
+        mac = self._normalize_mac(str(row.get("mac_id", "") or row.get("mac_address", "") or ""))
+        if not mac:
+            mac = self._normalize_mac(neighbor_mac_map.get(ip, ""))
+        if not mac and self._printer_type(preferred_type) == "ricoh":
+            mac = self._normalize_mac(str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip())
+        return mac
+
+    def _probe_discovered_printer(
+        self,
+        *,
+        ip: str,
+        mac: str,
+        preferred_type: str = "",
+    ) -> Printer | None:
+        for candidate_type in self._candidate_probe_types(preferred_type):
+            collector = (
+                self._toshiba_service
+                if candidate_type == "toshiba" and self._toshiba_service is not None
+                else self._ricoh_service
+            )
+            temp = Printer(
+                name="Discovery",
+                ip=ip,
+                user="",
+                password="",
+                printer_type=candidate_type,
+                mac_address=mac,
+            )
+            try:
+                info_payload = collector.process_device_info(temp, should_post=False)
+                info = info_payload.get("device_info", {}) if isinstance(info_payload, dict) else {}
+                model_name, machine_id = self._device_info_probe_name(info if isinstance(info, dict) else {})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.debug("Polling %s discovery probe failed: ip=%s error=%s", candidate_type, ip, exc)
+                continue
+            if not model_name and not machine_id:
+                continue
+            return Printer(
+                id=0,
+                name=model_name or machine_id or ip,
+                ip=ip,
+                user="",
+                password="",
+                printer_type=candidate_type,
+                status="online",
+                mac_address=mac,
+            )
+        return None
+
+    def _fallback_discovery_candidates(
+        self,
+        active_rows: list[tuple[str, dict[str, object]]],
+    ) -> list[tuple[str, dict[str, object]]]:
+        preferred = [
+            (ip, row)
+            for ip, row in active_rows
+            if bool(row.get("has_printer_ports")) or self._printer_type(str(row.get("printer_type", "") or "")) in {"ricoh", "toshiba"}
+        ]
+        return preferred or active_rows
+
+    def _merge_server_printers(self, printers: list[Printer]) -> list[Printer]:
+        try:
+            server_printers = self._api_client.get_printers()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("Polling printer merge from server failed: %s", exc)
+            return printers
+
+        if not server_printers:
+            return printers
+
+        ordered: list[Printer] = list(printers)
+        by_ip: dict[str, Printer] = {
+            str(printer.ip or "").strip(): printer
+            for printer in ordered
+            if str(printer.ip or "").strip()
+        }
+
+        for printer in server_printers:
+            ip = str(printer.ip or "").strip()
+            if not ip:
+                continue
+            existing = by_ip.get(ip)
+            if existing is None:
+                ordered.append(printer)
+                by_ip[ip] = printer
+                continue
+            if printer.id and not existing.id:
+                existing.id = printer.id
+            if str(printer.name or "").strip() and (
+                not str(existing.name or "").strip() or str(existing.name or "").strip() == ip
+            ):
+                existing.name = printer.name
+            if str(printer.user or "").strip():
+                existing.user = printer.user
+            if str(printer.password or "").strip():
+                existing.password = printer.password
+            if str(printer.printer_type or "").strip() and (
+                self._printer_type(existing.printer_type) in {"", "unknown"}
+                or self._printer_type(printer.printer_type) == "toshiba"
+            ):
+                existing.printer_type = printer.printer_type
+            if str(printer.status or "").strip():
+                existing.status = printer.status
+            if str(printer.mac_address or "").strip() and not str(existing.mac_address or "").strip():
+                existing.mac_address = printer.mac_address
+        return ordered
 
     def _agent_runtime_metadata(self) -> dict[str, object]:
         version = ""
@@ -493,88 +645,46 @@ Get-NetNeighbor -AddressFamily IPv4 |
                     continue
                 seen.add(ip)
                 active_rows.append((ip, row))
-                is_ricoh = bool(row.get("is_ricoh"))
-                if not is_ricoh:
+                printer_type = self._printer_type(str(row.get("printer_type", "") or ""))
+                if printer_type not in {"ricoh", "toshiba"}:
                     continue
-                mac = self._normalize_mac(str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip())
-                if not mac:
-                    mac = self._normalize_mac(str(row.get("mac_id", "") or row.get("mac_address", "") or ""))
-                if not mac:
-                    mac = self._normalize_mac(neighbor_mac_map.get(ip, ""))
-                name = ip
-                try:
-                    temp = Printer(name="Discovery", ip=ip, user="", password="", printer_type="ricoh", mac_address=mac)
-                    info_payload = self._ricoh_service.process_device_info(temp, should_post=False)
-                    info = info_payload.get("device_info", {}) if isinstance(info_payload, dict) else {}
-                    model_name = (
-                        str(info.get("Model Name", "") or "").strip()
-                        or str(info.get("Machine Name", "") or "").strip()
-                        or str(info.get("model_name", "") or "").strip()
-                    )
-                    if model_name:
-                        name = model_name
-                except Exception:
-                    pass
-                printers.append(
-                    Printer(
+                mac = self._resolve_scanned_mac(ip, row, neighbor_mac_map, preferred_type=printer_type)
+                discovered = self._probe_discovered_printer(ip=ip, mac=mac, preferred_type=printer_type)
+                if discovered is None:
+                    discovered = Printer(
                         id=0,
-                        name=name,
+                        name=ip,
                         ip=ip,
                         user="",
                         password="",
-                        printer_type="ricoh",
+                        printer_type=printer_type,
                         status="online",
                         mac_address=mac,
                     )
-                )
+                printers.append(discovered)
                 if not mac:
-                    LOGGER.warning("Polling MAC unresolved for ip=%s (UI may still resolve from separate scan path)", ip)
+                    LOGGER.warning(
+                        "Polling MAC unresolved for ip=%s type=%s (UI may still resolve from separate scan path)",
+                        ip,
+                        printer_type,
+                    )
             if not printers and active_rows:
                 LOGGER.info(
-                    "Polling local scan found %s active hosts but no Ricoh hits; probing device-info fallback",
+                    "Polling local scan found %s active hosts but no classified printer hits; probing device-info fallback",
                     len(active_rows),
                 )
-                for ip, row in active_rows:
-                    mac = self._normalize_mac(str(self._ricoh_service.fetch_mac_address_direct(ip) or "").strip())
-                    if not mac:
-                        mac = self._normalize_mac(str(row.get("mac_id", "") or row.get("mac_address", "") or ""))
-                    if not mac:
-                        mac = self._normalize_mac(neighbor_mac_map.get(ip, ""))
-                    try:
-                        temp = Printer(name="Discovery", ip=ip, user="", password="", printer_type="ricoh", mac_address=mac)
-                        info_payload = self._ricoh_service.process_device_info(temp, should_post=False)
-                        info = info_payload.get("device_info", {}) if isinstance(info_payload, dict) else {}
-                        model_name = (
-                            str(info.get("Model Name", "") or "").strip()
-                            or str(info.get("Machine Name", "") or "").strip()
-                            or str(info.get("model_name", "") or "").strip()
-                        )
-                        machine_id = (
-                            str(info.get("Machine ID", "") or "").strip()
-                            or str(info.get("machine_id", "") or "").strip()
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        LOGGER.debug("Polling fallback probe failed: ip=%s error=%s", ip, exc)
+                for ip, row in self._fallback_discovery_candidates(active_rows):
+                    preferred_type = self._printer_type(str(row.get("printer_type", "") or ""))
+                    mac = self._resolve_scanned_mac(ip, row, neighbor_mac_map, preferred_type=preferred_type)
+                    discovered = self._probe_discovered_printer(ip=ip, mac=mac, preferred_type=preferred_type)
+                    if discovered is None:
                         continue
-                    if not model_name and not machine_id:
-                        continue
-                    name = model_name or machine_id or ip
-                    printers.append(
-                        Printer(
-                            id=0,
-                            name=name,
-                            ip=ip,
-                            user="",
-                            password="",
-                            printer_type="ricoh",
-                            status="online",
-                            mac_address=mac,
-                        )
-                    )
+                    printers.append(discovered)
                     if not mac:
                         LOGGER.warning(
-                            "Polling fallback MAC unresolved for ip=%s (printer was detected via device info)",
+                            "Polling fallback MAC unresolved for ip=%s type=%s (printer was detected via device info)",
                             ip,
+                            discovered.printer_type,
                         )
             if not printers and self._last_discovered_printers:
                 printers = list(self._last_discovered_printers)
@@ -593,7 +703,15 @@ Get-NetNeighbor -AddressFamily IPv4 |
                         )
                 except Exception as exc:  # noqa: BLE001
                     LOGGER.debug("Polling server printer fallback failed: %s", exc)
-            LOGGER.info("Polling bridge printers source=local_scan count=%s", len(printers))
+            printers = self._merge_server_printers(printers)
+            ricoh_count = sum(1 for printer in printers if self._printer_type(printer.printer_type) == "ricoh")
+            toshiba_count = sum(1 for printer in printers if self._printer_type(printer.printer_type) == "toshiba")
+            LOGGER.info(
+                "Polling bridge printers source=local_scan count=%s ricoh=%s toshiba=%s",
+                len(printers),
+                ricoh_count,
+                toshiba_count,
+            )
             if printers:
                 self._last_discovered_printers = list(printers)
             return printers
@@ -1554,9 +1672,10 @@ if ($node) {{ $node }}
                     continue
                 self._last_cycle_ricoh_printers += 1
                 try:
+                    collector = self._collector_service_for(printer)
                     LOGGER.info("Polling collect: name=%s ip=%s type=%s", printer.name, printer.ip, printer.printer_type)
-                    counter_payload = self._ricoh_service.process_counter(printer, should_post=False)
-                    status_payload = self._ricoh_service.process_status(printer, should_post=False)
+                    counter_payload = collector.process_counter(printer, should_post=False)
+                    status_payload = collector.process_status(printer, should_post=False)
                     counter_data = counter_payload.get("counter_data", {})
                     payload = {
                         "lead": lead,

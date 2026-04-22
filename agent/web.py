@@ -18,6 +18,7 @@ from werkzeug.serving import make_server
 
 from app.config import AppConfig
 from app.modules.ricoh.service import RicohService
+from app.modules.toshiba.service import ToshibaService
 from app.services.api_client import APIClient, Printer
 from app.services.polling_bridge import PollingBridge
 from app.services.scan_drop import build_drop_folder_metadata
@@ -440,7 +441,11 @@ def _scan_devices_payload(
             "source": "api",
         }
         for p in api_devices
-        if p.ip and (not valid_only or (p.printer_type == "ricoh" and not _should_ignore_device(p.name, ignored_prefixes)))
+        if p.ip
+        and (
+            not valid_only
+            or (_supports_collection_vendor(p.printer_type) and not _should_ignore_device(p.name, ignored_prefixes))
+        )
     ]
 
     payload: list[dict[str, Any]] = []
@@ -530,6 +535,26 @@ def _resolve_printer(ip: str, devices: list[Printer]) -> Printer | None:
     return next((p for p in devices if p.ip == ip), None)
 
 
+def _printer_vendor(printer: Printer | None) -> str:
+    if printer is None:
+        return ""
+    return str(printer.printer_type or "").strip().lower()
+
+
+def _supports_collection_vendor(printer_type: str) -> bool:
+    return str(printer_type or "").strip().lower() in {"ricoh", "toshiba"}
+
+
+def _collector_service_for(
+    printer: Printer,
+    ricoh_service: RicohService,
+    toshiba_service: ToshibaService | None,
+) -> RicohService | ToshibaService:
+    if toshiba_service is not None and _printer_vendor(printer) == "toshiba":
+        return toshiba_service
+    return ricoh_service
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -547,8 +572,14 @@ def _read_history(limit: int = 7) -> tuple[list[str], list[int], list[int], list
     return labels, copier, printer, scanner
 
 
-def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[str, Any]:
-    ricoh_devices = [d for d in devices if d.ip and d.printer_type.lower() == "ricoh"]
+def _build_live_overview(
+    ricoh_service: RicohService,
+    toshiba_service: ToshibaService | None,
+    devices: list[Printer],
+) -> dict[str, Any]:
+    live_devices = [d for d in devices if d.ip and _supports_collection_vendor(d.printer_type)]
+    ricoh_count = sum(1 for device in live_devices if _printer_vendor(device) == "ricoh")
+    toshiba_count = sum(1 for device in live_devices if _printer_vendor(device) == "toshiba")
     copier_pages = 0
     print_pages = 0
     scan_pages = 0
@@ -556,11 +587,13 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
     alert_count = {"low_toner": 0, "paper_warning": 0, "scanner_notice": 0}
     details: list[dict[str, Any]] = []
 
-    for printer in ricoh_devices:
+    for printer in live_devices:
+        vendor = _printer_vendor(printer)
+        collector = _collector_service_for(printer, ricoh_service, toshiba_service)
         device_row: dict[str, Any] = {"name": printer.name, "ip": printer.ip, "ok": False}
         try:
-            counter_payload = service.process_counter(printer, should_post=False)
-            status_payload = service.process_status(printer, should_post=False)
+            counter_payload = collector.process_counter(printer, should_post=False)
+            status_payload = collector.process_status(printer, should_post=False)
 
             counter = counter_payload.get("counter_data", {})
             status = status_payload.get("status_data", {})
@@ -570,19 +603,49 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
             scan_pages += _to_int(counter.get("scanner_send_bw")) + _to_int(counter.get("scanner_send_color"))
 
             system_status = status.get("system_status", "")
-            if system_status == "OK":
-                active_count += 1
-
-            if status.get("toner_black", "") != "OK":
-                alert_count["low_toner"] += 1
-            if any(k.startswith("tray_") and "status" in k for k in status):
-                paper_values = [str(v).lower() for k, v in status.items() if k.startswith("tray_") and k.endswith("_status")]
-                if any("empty" in v or "near" in v or "alert" in v for v in paper_values):
+            if vendor == "toshiba":
+                if system_status in {"Status OK", "Ready"}:
+                    active_count += 1
+                if status.get("toner_black", "") not in {"", "Status OK", "Ready"}:
+                    alert_count["low_toner"] += 1
+                paper_values: list[str] = [
+                    str(value).lower()
+                    for key, value in status.items()
+                    if key.endswith("_tray_status") or (key.startswith("tray_") and key.endswith("_status"))
+                ]
+                status_json = status.get("status_json", {})
+                if isinstance(status_json, dict):
+                    input_tray = status_json.get("input_tray", {})
+                    if isinstance(input_tray, dict):
+                        for tray_value in input_tray.values():
+                            if isinstance(tray_value, dict):
+                                paper_values.append(str(tray_value.get("text", "")).lower())
+                                icons = tray_value.get("icons", [])
+                                if isinstance(icons, list):
+                                    paper_values.extend(str(icon).lower() for icon in icons)
+                if any(
+                    token in value
+                    for value in paper_values
+                    for token in ("out of paper", "almost out of paper", "cover open", "empty", "alert")
+                ):
                     alert_count["paper_warning"] += 1
-            if "scanner_alerts" in status:
-                alert_count["scanner_notice"] += 1
+                scanner_alerts = status.get("scanner_alerts", [])
+                if isinstance(scanner_alerts, list) and scanner_alerts:
+                    alert_count["scanner_notice"] += 1
+            else:
+                if system_status == "OK":
+                    active_count += 1
+                if status.get("toner_black", "") != "OK":
+                    alert_count["low_toner"] += 1
+                if any(k.startswith("tray_") and "status" in k for k in status):
+                    paper_values = [str(v).lower() for k, v in status.items() if k.startswith("tray_") and k.endswith("_status")]
+                    if any("empty" in v or "near" in v or "alert" in v for v in paper_values):
+                        alert_count["paper_warning"] += 1
+                if "scanner_alerts" in status:
+                    alert_count["scanner_notice"] += 1
 
             device_row["ok"] = True
+            device_row["type"] = vendor or "unknown"
             device_row["counter"] = {
                 "copier_bw": counter.get("copier_bw", ""),
                 "printer_bw": counter.get("printer_bw", ""),
@@ -594,7 +657,7 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
             device_row["error"] = str(exc)
         details.append(device_row)
 
-    total = len(ricoh_devices)
+    total = len(live_devices)
     offline = max(total - active_count, 0)
     _append_history(copier_pages, print_pages, scan_pages, active_count, offline, total)
     labels, copier_hist, print_hist, scan_hist = _read_history(limit=7)
@@ -602,7 +665,8 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
     return {
         "stats": {
             "total_devices": total,
-            "ricoh_devices": total,
+            "ricoh_devices": ricoh_count,
+            "toshiba_devices": toshiba_count,
             "active_devices": active_count,
             "offline_devices": offline,
             "copier_pages_total": copier_pages,
@@ -624,19 +688,31 @@ def _build_live_overview(service: RicohService, devices: list[Printer]) -> dict[
     }
 
 
-def _counter_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
+def _counter_worker(
+    ricoh_service: RicohService,
+    toshiba_service: ToshibaService | None,
+    printer: Printer,
+    stop_event: threading.Event,
+) -> None:
     while not stop_event.is_set():
         try:
-            service.process_counter(printer, should_post=True)
+            collector = _collector_service_for(printer, ricoh_service, toshiba_service)
+            collector.process_counter(printer, should_post=True)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Counter push failed: ip=%s error=%s", printer.ip, exc)
         stop_event.wait(60)
 
 
-def _status_worker(service: RicohService, printer: Printer, stop_event: threading.Event) -> None:
+def _status_worker(
+    ricoh_service: RicohService,
+    toshiba_service: ToshibaService | None,
+    printer: Printer,
+    stop_event: threading.Event,
+) -> None:
     while not stop_event.is_set():
         try:
-            service.process_status(printer, should_post=True)
+            collector = _collector_service_for(printer, ricoh_service, toshiba_service)
+            collector.process_status(printer, should_post=True)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Status push failed: ip=%s error=%s", printer.ip, exc)
         stop_event.wait(30)
@@ -686,6 +762,7 @@ def create_app(
     config = AppConfig.load()
     api_client = APIClient(config)
     ricoh_service = RicohService(api_client, config=config)
+    toshiba_service = ToshibaService(api_client)
     updater_args = list(current_args or ["--mode", "web"])
     updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1], current_args=updater_args)
     web_port = int(str(os.getenv("APP_WEB_PORT", os.getenv("FLASK_PORT", str(DEFAULT_WEB_PORT))) or str(DEFAULT_WEB_PORT)))
@@ -693,6 +770,7 @@ def create_app(
         config,
         api_client,
         ricoh_service,
+        toshiba_service=toshiba_service,
         updater=updater,
         run_mode="web",
         web_port=web_port,
@@ -702,6 +780,7 @@ def create_app(
     app.config["APP_CONFIG"] = config
     app.config["API_CLIENT"] = api_client
     app.config["RICOH_SERVICE"] = ricoh_service
+    app.config["TOSHIBA_SERVICE"] = toshiba_service
     app.config["POLLING_BRIDGE"] = polling_bridge
     app.config["UPDATER"] = updater
     app.config["LOG_JOBS"] = {"counter": {}, "status": {}}
@@ -1520,7 +1599,7 @@ def create_app(
     @app.get("/api/overview")
     def api_overview() -> Any:
         devices = _load_printers(api_client)
-        overview = _build_live_overview(ricoh_service, devices)
+        overview = _build_live_overview(ricoh_service, toshiba_service, devices)
         _emit_ui_event("overview_updated", overview)
         return jsonify(overview)
 
@@ -1583,21 +1662,22 @@ def create_app(
         LOGGER.info("Device action request: trace_id=%s ip=%s action=%s remote_addr=%s", trace_id, ip, action, request.remote_addr or "-")
 
         target = _resolve_target_printer(ip=ip)
+        collector = _collector_service_for(target, ricoh_service, toshiba_service)
 
         counter_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["counter"]
         status_jobs: dict[str, dict[str, Any]] = app.config["LOG_JOBS"]["status"]
 
         try:
             if action == "status":
-                payload = ricoh_service.process_status(target, should_post=False)
+                payload = collector.process_status(target, should_post=False)
                 _emit_ui_event("device_status", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "counter":
-                payload = ricoh_service.process_counter(target, should_post=False)
+                payload = collector.process_counter(target, should_post=False)
                 _emit_ui_event("device_counter", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "device_info":
-                payload = ricoh_service.process_device_info(target, should_post=False)
+                payload = collector.process_device_info(target, should_post=False)
                 _emit_ui_event("device_info", payload)
                 return jsonify({"ok": True, "action": action, "payload": payload})
             if action == "enable_machine":
@@ -1690,7 +1770,7 @@ def create_app(
                 ok, message = _start_job(
                     counter_jobs,
                     ip,
-                    lambda stop_event: _counter_worker(ricoh_service, target, stop_event),
+                    lambda stop_event: _counter_worker(ricoh_service, toshiba_service, target, stop_event),
                 )
                 _emit_ui_event("counter_log_start", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message, "job": counter_jobs.get(ip, {})})
@@ -1702,7 +1782,7 @@ def create_app(
                 ok, message = _start_job(
                     status_jobs,
                     ip,
-                    lambda stop_event: _status_worker(ricoh_service, target, stop_event),
+                    lambda stop_event: _status_worker(ricoh_service, toshiba_service, target, stop_event),
                 )
                 _emit_ui_event("status_log_start", {"ip": ip, "ok": ok, "message": message})
                 return jsonify({"ok": ok, "action": action, "message": message, "job": status_jobs.get(ip, {})})

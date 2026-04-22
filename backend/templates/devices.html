@@ -1,6 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="panel timelapse-panel">
+  <div class="filter-board infor-filter-board">
+    <div class="filter-group">
+      <label for="infor-filter-lead">Lead</label>
+      <select id="infor-filter-lead">
+        <option value="">loading leads...</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-id">ID</label>
+      <input id="infor-filter-id" placeholder="id" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-printer-name">Tên máy</label>
+      <input id="infor-filter-printer-name" placeholder="printer name" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-ip">IP</label>
+      <input id="infor-filter-ip" placeholder="ip" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-mac-id">MAC ID</label>
+      <input id="infor-filter-mac-id" placeholder="mac_id" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-lan-uid">LAN UID</label>
+      <input id="infor-filter-lan-uid" placeholder="lan_uid" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-counter-min">Counter Min</label>
+      <input id="infor-filter-counter-min" type="number" min="0" placeholder="min" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-counter-max">Counter Max</label>
+      <input id="infor-filter-counter-max" type="number" min="0" placeholder="max" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-printed-min">PrinterPage Min</label>
+      <input id="infor-filter-printed-min" type="number" min="0" placeholder="min" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-printed-max">PrinterPage Max</label>
+      <input id="infor-filter-printed-max" type="number" min="0" placeholder="max" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-cartridge-status">Cartridge</label>
+      <select id="infor-filter-cartridge-status">
+        <option value="">all</option>
+        <option value="ok">OK</option>
+        <option value="empty">empty</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-updated-from">Updated From</label>
+      <input id="infor-filter-updated-from" type="datetime-local" />
+    </div>
+    <div class="filter-group">
+      <label for="infor-filter-updated-to">Updated To</label>
+      <input id="infor-filter-updated-to" type="datetime-local" />
+    </div>
+    <div class="filter-group infor-filter-actions">
+      <label>&nbsp;</label>
+      <div>
+        <button id="infor-filter-reset" class="filter-btn ghost" type="button">Reset</button>
+        <button id="infor-filter-apply" class="filter-btn" type="button">Search</button>
+      </div>
+    </div>
+  </div>
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
     <div id="devices-meta" class="meta-line">DB: checking...</div>
     <button id="btn-export-all-csv" class="filter-btn" style="white-space: nowrap;">
@@ -21,15 +88,15 @@
           btn.disabled = true;
 
           let lead = "";
-          const leadSelect = document.getElementById("global-filter-lead");
+          const leadSelect = document.getElementById("infor-filter-lead");
           if (leadSelect) lead = leadSelect.value;
 
-          // Fetch all 13,000+ records via limit=0
           let url = "/api/infor/list?limit=0";
-          if (lead && lead !== "all" && lead !== "default") {
+          if (typeof buildInforQueryParams === "function") {
+            const params = buildInforQueryParams(0);
+            url = `/api/infor/list?${params.toString()}`;
+          } else if (lead) {
             url += "&lead=" + encodeURIComponent(lead);
-          } else if (lead === "default") {
-            url += "&lead=default";
           }
 
           const res = await fetch(url);
