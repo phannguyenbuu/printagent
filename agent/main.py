@@ -11,16 +11,16 @@ import threading
 import time
 from pathlib import Path
 
-from app.config import AppConfig
-from app.modules.ricoh.service import RicohService
-from app.modules.toshiba.service import ToshibaService
-from app.services.api_client import APIClient, Printer
-from app.services.ftp_worker import FtpWorker
-from app.services.polling_bridge import PollingBridge
-from app.services.runtime import acquire_single_instance, default_log_path, ensure_startup_registration, startup_command_for_current_exe
+from agent.config import AppConfig
+from agent.modules.ricoh.service import RicohService
+from agent.modules.toshiba.service import ToshibaService
+from agent.services.api_client import APIClient, Printer
+from agent.services.polling_bridge import PollingBridge
+from agent.services.runtime import acquire_single_instance, default_log_path, ensure_startup_registration, startup_command_for_current_exe
 from agent.services.tray import TrayController
-from app.services.updater import AutoUpdater
-from app.web import create_app, run_web_server, shutdown_app_resources
+from agent.services.updater import AutoUpdater
+from agent.services.ftp_worker import FtpWorker
+from agent.web import create_app, run_web_server, shutdown_app_resources
 
 
 DEFAULT_WEB_PORT = 9173
@@ -229,7 +229,7 @@ def run_normal_mode(
     restart_event = threading.Event()
     bridge = PollingBridge(
         config,
-        service._api_client,
+        service.api_client,
         service,
         toshiba_service=toshiba_service,
         updater=updater,
@@ -279,9 +279,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["web", "service", "test", "ftp-worker"],
+        choices=["web", "service", "test", ""],
         default="web",
-        help="Run mode: web (Flask UI), service (scheduler), test (interactive menu), ftp-worker (persistent FTP host)",
+        help="Run mode: web (Flask UI), service (scheduler), test (interactive menu),  (persistent FTP host)",
     )
     parser.add_argument(
         "--host",
@@ -301,7 +301,7 @@ def main() -> int:
         help="Enable Flask debug mode (env: FLASK_DEBUG=true/false)",
     )
     args = parser.parse_args()
-    instance_name = "Global\\GoPrinxAgentFtpWorker" if args.mode == "ftp-worker" else "Global\\GoPrinxAgentMain"
+    instance_name = "Global\\GoPrinxAgentFtpWorker" if args.mode == "" else "Global\\GoPrinxAgentMain"
     instance_lock, is_primary = acquire_single_instance(instance_name)
     if not is_primary:
         logging.info("Another GoPrinxAgent process is already running for mode=%s; skipping startup", args.mode)
@@ -309,11 +309,11 @@ def main() -> int:
 
     startup_ok = False
     startup_note = "skipped"
-    if args.mode == "ftp-worker":
-        worker_cmd = startup_command_for_current_exe("ftp-worker")
+    if args.mode == "":
+        worker_cmd = startup_command_for_current_exe("")
         startup_ok, startup_note = ensure_startup_registration(app_name="GoPrinxAgentFtpWorker", command=worker_cmd)
     else:
-        worker_cmd = startup_command_for_current_exe("ftp-worker")
+        worker_cmd = startup_command_for_current_exe("")
         if args.mode == "web":
             main_cmd = startup_command_for_current_exe("web", args.host, args.port)
         elif args.mode == "service":
@@ -332,8 +332,8 @@ def main() -> int:
             updater_args = ["--mode", "web", "--host", args.host, "--port", str(args.port)]
         elif args.mode == "service":
             updater_args = ["--mode", "service"]
-        elif args.mode == "ftp-worker":
-            updater_args = ["--mode", "ftp-worker"]
+        elif args.mode == "":
+            updater_args = ["--mode", ""]
         else:
             updater_args = ["--mode", "test"]
         updater = AutoUpdater(project_root=Path(__file__).resolve().parents[1], current_args=updater_args)
@@ -373,7 +373,7 @@ def main() -> int:
                     server_thread.join(timeout=5)
             return 0
 
-        if args.mode == "ftp-worker":
+        if args.mode == "":
             run_ftp_worker_mode()
             return 0
 
@@ -388,9 +388,16 @@ def main() -> int:
             os.environ["APP_WEB_PORT"] = "0"
             run_normal_mode(service, toshiba_service, config, updater)
         return 0
+    except Exception as err:
+        logging.exception("Unhandled error in main: %s", err)
+        print(f"CRITICAL ERROR: {err}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
     finally:
         if instance_lock is not None:
             instance_lock.release()
+        os._exit(0)
 
 
 if __name__ == "__main__":

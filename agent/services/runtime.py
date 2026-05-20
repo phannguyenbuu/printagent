@@ -181,9 +181,13 @@ def acquire_single_instance(name: str) -> tuple[SingleInstanceLock | None, bool]
 
 def startup_command_for_current_exe(mode: str = "web", host: str = "127.0.0.1", port: int = 9173) -> str:
     target = Path(sys.executable if is_frozen() else sys.argv[0]).resolve()
-    safe_mode = str(mode or "web").strip() or "web"
+    if mode is None:
+        mode = "web"
+    safe_mode = str(mode).strip()
     if safe_mode == "web":
         return f'"{target}" --mode web --host {host} --port {int(port)}'
+    if safe_mode == "":
+        return f'"{target}" --mode ""'
     return f'"{target}" --mode {safe_mode}'
 
 

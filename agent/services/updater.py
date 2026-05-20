@@ -15,11 +15,12 @@ from typing import Any
 
 import requests
 
-from app.services.runtime import fresh_pyinstaller_env, is_frozen, is_windows
+from agent.services.runtime import fresh_pyinstaller_env, is_frozen, is_windows
 
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_APP_VERSION = "1.3.40"
+DEFAULT_APP_VERSION = "1.3.62"
+# Build timestamp: 2026-05-18 20:15:00
 UPDATE_NOTICE_FILE = Path("storage/data/update_notice.json")
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -35,6 +36,20 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_core_zip_path() -> Path:
+    temp_dir = os.environ.get("TEMP")
+    if temp_dir:
+        folder = Path(temp_dir) / "GoPrinxAgent"
+    else:
+        import tempfile
+        folder = Path(tempfile.gettempdir()) / "GoPrinxAgent"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / "agent_core.zip"
+    except Exception:
+        return Path("agent_core.zip")
 
 
 @dataclass
@@ -224,13 +239,22 @@ class AutoUpdater:
         with self._lock:
             self.state.last_check_at = _utc_now()
 
+        is_loader = os.environ.get("AGENT_RUNNING_LOADER") == "true"
         current_binary = self._current_binary_path()
         current_sha = ""
-        if current_binary is not None and current_binary.exists():
-            try:
-                current_sha = self._sha256_file(current_binary)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Failed to hash current agent binary: %s", exc)
+        if is_loader:
+            zip_path = _get_core_zip_path()
+            if zip_path.exists():
+                try:
+                    current_sha = self._sha256_file(zip_path)
+                except Exception as exc:
+                    LOGGER.warning("Failed to hash agent_core.zip: %s", exc)
+        else:
+            if current_binary is not None and current_binary.exists():
+                try:
+                    current_sha = self._sha256_file(current_binary)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("Failed to hash current agent binary: %s", exc)
 
         headers = {"Accept": "application/json", "X-Lead-Token": token}
         params = {
@@ -243,7 +267,8 @@ class AutoUpdater:
             "current_sha256": current_sha,
         }
         try:
-            response = session.get(f"{base_url}/api/agent/release", params=params, headers=headers, timeout=20)
+            endpoint = "/api/agent/core-release" if is_loader else "/api/agent/release"
+            response = session.get(f"{base_url}{endpoint}", params=params, headers=headers, timeout=20)
             response.raise_for_status()
             payload = response.json()
         except Exception as exc:  # noqa: BLE001
@@ -287,11 +312,66 @@ class AutoUpdater:
             return True, "No release available", False
         if not download_url:
             return False, "Release payload missing download_url", False
-        if not is_windows() or not is_frozen():
+        is_loader = os.environ.get("AGENT_RUNNING_LOADER") == "true"
+        if not is_loader and (not is_windows() or not is_frozen()):
             return True, "Release available but auto-apply only runs on Windows EXE build", False
         return self._download_and_restart(download_url=download_url, target_version=latest_version, expected_sha256=expected_sha)
-
     def _download_and_restart(self, download_url: str, target_version: str, expected_sha256: str) -> tuple[bool, str, bool]:
+        is_loader = os.environ.get("AGENT_RUNNING_LOADER") == "true"
+        if is_loader:
+            LOGGER.info("New core version %s is available on server. Downloading agent_core.zip first...", target_version)
+            try:
+                request_headers = {
+                    "Cache-Control": "no-cache, no-store, max-age=0",
+                    "Pragma": "no-cache",
+                }
+                cache_buster = ""
+                if expected_sha256:
+                    cache_buster = f"v={expected_sha256}"
+                current_download_url = download_url
+                if cache_buster:
+                    joiner = "&" if "?" in download_url else "?"
+                    current_download_url = f"{download_url}{joiner}{cache_buster}"
+                
+                target_zip = _get_core_zip_path()
+                temp_zip = target_zip.with_name(target_zip.name + ".tmp")
+                with requests.get(current_download_url, stream=True, timeout=(20, 300), headers=request_headers) as response:
+                    response.raise_for_status()
+                    with temp_zip.open("wb") as handle:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                handle.write(chunk)
+                
+                downloaded_sha = self._sha256_file(temp_zip).lower()
+                if expected_sha256 and downloaded_sha != expected_sha256:
+                    if temp_zip.exists():
+                        temp_zip.unlink()
+                    raise RuntimeError(f"Downloaded core zip checksum mismatch: expected={expected_sha256} got={downloaded_sha}")
+                
+                if target_zip.exists():
+                    target_zip.unlink()
+                temp_zip.rename(target_zip)
+                LOGGER.info("New agent_core.zip successfully saved to disk.")
+            except Exception as exc:
+                LOGGER.error("Failed to download and stage new agent_core.zip: %s", exc)
+                return False, f"Failed to download and stage new agent_core.zip: {exc}", False
+
+            LOGGER.info("Restarting loader to load the new core in-memory...")
+            if is_windows():
+                import subprocess
+                try:
+                    subprocess.Popen(sys.argv, close_fds=True)
+                except Exception as p_exc:
+                    LOGGER.error("Failed to spawn process with sys.argv: %s. Trying sys.executable...", p_exc)
+                    try:
+                        subprocess.Popen([sys.executable] + sys.argv[1:], close_fds=True)
+                    except Exception as p_exc2:
+                        LOGGER.error("Failed all attempts to restart process: %s", p_exc2)
+                os._exit(0)
+            else:
+                os.execv(sys.executable, sys.argv)
+            return True, "Core updating via loader restart", True
+
         current_binary = self._current_binary_path()
         if current_binary is None or not current_binary.exists():
             return False, "Current binary path not available", False
@@ -309,7 +389,7 @@ class AutoUpdater:
         release_dir = current_binary.parent
         staged_binary = release_dir / f"{current_binary.stem}.new{current_binary.suffix}"
         backup_binary = release_dir / f"{current_binary.stem}.bak{current_binary.suffix}"
-        helper_script = release_dir / "storage" / "data" / "agent_update.vbs"
+        helper_script = release_dir / "storage" / "data" / "agent_update.bat"
         notice_file = UPDATE_NOTICE_FILE if UPDATE_NOTICE_FILE.is_absolute() else release_dir / UPDATE_NOTICE_FILE
         helper_script.parent.mkdir(parents=True, exist_ok=True)
 
@@ -340,50 +420,36 @@ class AutoUpdater:
 
             relaunch_command = subprocess.list2cmdline([str(current_binary), *self._current_args])
             helper_lines = [
-                "Option Explicit",
-                f"Dim pid : pid = {int(os.getpid())}",
-                f'Dim target : target = "{self._vbs_string(str(current_binary))}"',
-                f'Dim staged : staged = "{self._vbs_string(str(staged_binary))}"',
-                f'Dim backup : backup = "{self._vbs_string(str(backup_binary))}"',
-                f'Dim launchCmd : launchCmd = "{self._vbs_string(relaunch_command)}"',
-                "Dim fso, sh, wmi, procSet, proc, result, newPid, alive",
-                "Set fso = CreateObject(\"Scripting.FileSystemObject\")",
-                "Set sh = CreateObject(\"WScript.Shell\")",
-                "Set wmi = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")",
-                "sh.Environment(\"PROCESS\")(\"PYINSTALLER_RESET_ENVIRONMENT\") = \"1\"",
-                "Do",
-                "  Set procSet = wmi.ExecQuery(\"Select * from Win32_Process Where ProcessId=\" & pid)",
-                "  If procSet.Count = 0 Then Exit Do",
-                "  WScript.Sleep 1000",
-                "Loop",
-                "WScript.Sleep 5000",
-                "On Error Resume Next",
-                "If fso.FileExists(backup) Then fso.DeleteFile backup, True",
-                "If fso.FileExists(target) Then fso.MoveFile target, backup",
-                "fso.MoveFile staged, target",
-                "On Error GoTo 0",
-                "WScript.Sleep 10000",
-                "Set proc = wmi.Get(\"Win32_Process\")",
-                "result = proc.Create(launchCmd, Null, Null, newPid)",
-                "If result = 0 Then",
-                "  WScript.Sleep 15000",
-                "  alive = False",
-                "  Set procSet = wmi.ExecQuery(\"Select * from Win32_Process Where ProcessId=\" & newPid)",
-                "  If procSet.Count > 0 Then alive = True",
-                "  If Not alive Then",
-                "    WScript.Sleep 5000",
-                "    result = proc.Create(launchCmd, Null, Null, newPid)",
-                "  End If",
-                "End If",
-                "On Error Resume Next",
-                "fso.DeleteFile WScript.ScriptFullName, True",
-                "On Error GoTo 0",
+                "@echo off",
+                "rem Wait for the main agent process to exit completely",
+                "ping 127.0.0.1 -n 6 > nul",
+                "",
+                ":retry",
+                f'if exist "{str(backup_binary)}" del /f /q "{str(backup_binary)}"',
+                f'if exist "{str(current_binary)}" (',
+                f'    rename "{str(current_binary)}" "{backup_binary.name}"',
+                "    if errorlevel 1 (",
+                "        ping 127.0.0.1 -n 2 > nul",
+                "        goto retry",
+                "    )",
+                ")",
+                f'if exist "{str(staged_binary)}" (',
+                f'    rename "{str(staged_binary)}" "{current_binary.name}"',
+                "    if errorlevel 1 (",
+                f'        if exist "{str(backup_binary)}" rename "{str(backup_binary)}" "{current_binary.name}"',
+                "        ping 127.0.0.1 -n 2 > nul",
+                "        goto retry",
+                "    )",
+                ")",
+                "rem Launch the new agent completely detached in the background",
+                f'start "" {relaunch_command}',
+                "rem Self delete this batch script cleanly",
+                'del "%~f0"',
             ]
             helper_script.write_text("\r\n".join(helper_lines) + "\r\n", encoding="utf-8")
             helper_cmd = [
-                "wscript.exe",
-                "//B",
-                "//Nologo",
+                "cmd.exe",
+                "/c",
                 str(helper_script),
             ]
             notice_version = str(target_version or self.state.last_available_version or "").strip()
@@ -416,6 +482,11 @@ class AutoUpdater:
             try:
                 if staged_binary.exists():
                     staged_binary.unlink()
+            except Exception:
+                pass
+            try:
+                if helper_script.exists():
+                    helper_script.unlink()
             except Exception:
                 pass
             try:
@@ -484,3 +555,5 @@ class AutoUpdater:
             return self.handle_signal(body, "", source=source, raw_text=text)
 
         return False, "Ignored message format"
+
+

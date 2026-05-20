@@ -83,7 +83,6 @@ from models import (
     DeviceInfor,
     DeviceInforHistory,
     DeviceLockHistory,
-    FtpControlCommand,
     LanSite,
     MachineAlert,
     NetworkInfo,
@@ -103,11 +102,12 @@ from models import (
     RepairRequest,
     Material,
     UserWorkspace,
+    LanEmail,
 )
 
 LOGGER = logging.getLogger(__name__)
 UI_TZ = timezone(timedelta(hours=7))
-ONLINE_STALE_SECONDS = 300
+ONLINE_STALE_SECONDS = 600
 SCAN_UPLOAD_ROOT = Path("storage/uploads/scans")
 LAST_DATA_FILE = Path("storage/data/last_data.json")
 PUBLIC_API_FILE = Path("PUBLIC_API.md")
@@ -235,6 +235,51 @@ def _validate_polling_auth(body: dict[str, Any], lead_key_map: dict[str, str], s
     return True, lead, None
 
 
+def _is_agent_master_and_get_emails(session, lead: str, lan_uid: str, agent_uid: str) -> tuple[bool, list[dict]]:
+    # Get all online agents in this LAN, sorted by ID (smallest ID is oldest/master)
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_STALE_SECONDS)
+    stmt = select(AgentNode).where(
+        AgentNode.lead == lead,
+        AgentNode.lan_uid == lan_uid,
+        AgentNode.last_seen_at >= stale_before
+    ).order_by(AgentNode.id.asc())
+    
+    online_agents = session.execute(stmt).scalars().all()
+    
+    # Fallback to all agents in the LAN if none are currently registered as online
+    if not online_agents:
+        stmt_fallback = select(AgentNode).where(
+            AgentNode.lead == lead,
+            AgentNode.lan_uid == lan_uid
+        ).order_by(AgentNode.id.asc())
+        online_agents = session.execute(stmt_fallback).scalars().all()
+        
+    is_master = False
+    if online_agents:
+        if online_agents[0].agent_uid == agent_uid:
+            is_master = True
+            
+    # Fetch all address book emails for this LAN
+    email_stmt = select(LanEmail).where(
+        LanEmail.lead == lead,
+        LanEmail.lan_uid == lan_uid
+    ).order_by(LanEmail.email_number.asc())
+    email_rows = session.execute(email_stmt).scalars().all()
+    
+    emails = [
+        {
+            "id": em.id,
+            "email": em.email,
+            "email_number": em.email_number,
+            "email_type": getattr(em, "email_type", "common") or "common",
+            "pc_name": getattr(em, "pc_name", "") or "",
+        }
+        for em in email_rows
+    ]
+    return is_master, emails
+
+
+
 def _default_lead_name(lead_key_map: dict[str, str]) -> str:
     keys = sorted({_to_text(key) for key in lead_key_map.keys() if _to_text(key)}, key=str.lower)
     if "default" in keys:
@@ -306,7 +351,7 @@ def _load_agent_release_manifest() -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if AGENT_RELEASE_MANIFEST_FILE.exists():
         try:
-            loaded = json.loads(AGENT_RELEASE_MANIFEST_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(AGENT_RELEASE_MANIFEST_FILE.read_text(encoding="utf-8-sig"))
             if isinstance(loaded, dict):
                 payload = loaded
         except Exception as exc:  # noqa: BLE001
@@ -337,38 +382,6 @@ def _load_agent_release_manifest() -> dict[str, Any]:
         payload.setdefault("size", 0)
     return payload
 
-
-def _normalize_ftp_site_payload(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    name = _to_text(value.get("name")).strip()
-    if not name:
-        return None
-    return {
-        "name": name,
-        "path": _to_text(value.get("path")),
-        "port": _to_int(value.get("port")) or 0,
-        "ftp_url": _to_text(value.get("ftp_url")),
-        "ftp_user": _to_text(value.get("ftp_user")),
-        "ftp_password": _to_text(value.get("ftp_password")),
-    }
-
-
-def _normalize_ftp_sites_payload(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    sites: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in value:
-        normalized = _normalize_ftp_site_payload(item)
-        if not normalized:
-            continue
-        key = normalized["name"].lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        sites.append(normalized)
-    return sorted(sites, key=lambda item: (int(item.get("port", 0) or 0), str(item.get("name", ""))))
 
 
 def _sanitize_ftp_name(value: str) -> str:
@@ -422,68 +435,6 @@ def _derive_scan_password(site_name: str, mac_id: str) -> str:
     mac_token = compact_mac[-6:] if compact_mac else "AGENT"
     return f"Scan!{mac_token}_{safe_site}"[:64]
 
-
-def _agent_known_ftp_site_names(agent: AgentNode) -> set[str]:
-    raw_sites = agent.ftp_sites if isinstance(agent.ftp_sites, list) else []
-    names: set[str] = set()
-    for site in raw_sites:
-        normalized = _normalize_ftp_site_payload(site)
-        if normalized:
-            names.add(str(normalized["name"]).lower())
-    return names
-
-
-def _agent_ftp_site_by_name(agent: AgentNode, site_name: str) -> dict[str, Any] | None:
-    target = _sanitize_ftp_name(site_name).lower()
-    if not target:
-        return None
-    raw_sites = agent.ftp_sites if isinstance(agent.ftp_sites, list) else []
-    for site in raw_sites:
-        normalized = _normalize_ftp_site_payload(site)
-        if not normalized:
-            continue
-        if str(normalized.get("name", "")).strip().lower() == target:
-            return normalized
-    return None
-
-
-def _agent_ftp_site_by_port(agent: AgentNode, port: int) -> dict[str, Any] | None:
-    if int(port or 0) <= 0:
-        return None
-    raw_sites = agent.ftp_sites if isinstance(agent.ftp_sites, list) else []
-    for site in raw_sites:
-        normalized = _normalize_ftp_site_payload(site)
-        if not normalized:
-            continue
-        if int(normalized.get("port", 0) or 0) == int(port):
-            return normalized
-    return None
-
-
-def _agent_used_ftp_ports(agent: AgentNode) -> set[int]:
-    ports: set[int] = set()
-    raw_sites = agent.ftp_sites if isinstance(agent.ftp_sites, list) else []
-    for site in raw_sites:
-        normalized = _normalize_ftp_site_payload(site)
-        if not normalized:
-            continue
-        port = int(normalized.get("port", 0) or 0)
-        if port > 0:
-            ports.add(port)
-    raw_ports = _to_text(getattr(agent, "ftp_ports", ""))
-    for item in raw_ports.replace("\n", ",").replace(";", ",").split(","):
-        port = _to_int(item)
-        if int(port or 0) > 0:
-            ports.add(int(port))
-    return ports
-
-
-def _next_available_agent_ftp_port(agent: AgentNode, preferred_port: int = 2121) -> int:
-    port = max(1, int(preferred_port or 2121))
-    used = _agent_used_ftp_ports(agent)
-    while port in used and port < 65535:
-        port += 1
-    return port
 
 
 def _serialize_scan_target_printer(printer: Printer) -> dict[str, Any]:
@@ -988,6 +939,7 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS mac_address VARCHAR(64) NOT NULL DEFAULT \'\';'))
+        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS address_book_sync JSONB;'))
         
         # Self-heal UserAccount table
         session.execute(text('ALTER TABLE "UserAccount" ADD COLUMN IF NOT EXISTS password VARCHAR(128) NOT NULL DEFAULT \'\';'))
@@ -1044,24 +996,13 @@ def create_app() -> Flask:
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS run_mode VARCHAR(32) NOT NULL DEFAULT \'web\';'))
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS web_port INTEGER NOT NULL DEFAULT 9173;'))
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS ftp_ports TEXT NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS ftp_sites JSONB NOT NULL DEFAULT \'[]\'::jsonb;'))
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('UPDATE "AgentNode" SET updated_at = COALESCE(last_seen_at, created_at, updated_at, NOW());'))
         session.execute(text('ALTER TABLE "AgentPresenceLog" ADD COLUMN IF NOT EXISTS ftp_ports TEXT NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "AgentPresenceLog" ADD COLUMN IF NOT EXISTS ftp_sites JSONB NOT NULL DEFAULT \'[]\'::jsonb;'))
         session.execute(text('ALTER TABLE "AgentPresenceLog" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('UPDATE "AgentPresenceLog" SET updated_at = COALESCE(changed_at, last_seen_at, created_at, updated_at, NOW());'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS printer_mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS printer_ip VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS printer_name VARCHAR(255) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS ftp_user VARCHAR(128) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS ftp_password VARCHAR(255) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS printer_auth_user VARCHAR(128) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS printer_auth_password VARCHAR(255) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "FtpControlCommand" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('UPDATE "FtpControlCommand" SET created_at = COALESCE(requested_at, created_at, NOW()), updated_at = COALESCE(responded_at, requested_at, updated_at, NOW());'))
         session.execute(text('ALTER TABLE "PrinterEnableLog" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "PrinterEnableLog" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
@@ -1071,6 +1012,7 @@ def create_app() -> Flask:
         session.execute(text('UPDATE "PrinterOnlineLog" SET created_at = COALESCE(changed_at, created_at, NOW()), updated_at = COALESCE(changed_at, updated_at, NOW());'))
         session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
         session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS command_type VARCHAR(64) NOT NULL DEFAULT \'enable_disable\';'))
         session.execute(text('UPDATE "PrinterControlCommand" SET created_at = COALESCE(requested_at, created_at, NOW()), updated_at = COALESCE(responded_at, requested_at, updated_at, NOW());'))
         # Self-heal CounterInfor / StatusInfor for dedupe + touch-updated flow
         session.execute(text('ALTER TABLE "CounterInfor" ADD COLUMN IF NOT EXISTS mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
@@ -1250,8 +1192,14 @@ def create_app() -> Flask:
         name = _to_text(request.args.get("name"))
         date_from = _to_text(request.args.get("date_from"))
         date_to = _to_text(request.args.get("date_to"))
+        require_online = _to_text(request.args.get("require_online")).lower() == "true"
         with session_factory() as session:
+            # Refresh stale agents offline state to get accurate live data
+            _refresh_stale_agent_offline(session=session, lead=lead)
+            session.commit()
+
             stmt = select(LanSite).order_by(LanSite.created_at.desc())
+
             if lead:
                 stmt = stmt.where(LanSite.lead == lead)
             if lan_uid:
@@ -1260,6 +1208,84 @@ def create_app() -> Flask:
                 stmt = stmt.where(LanSite.lan_name.ilike(f"%{name}%"))
             stmt = _apply_date_filters(stmt, LanSite, date_from, date_to)
             rows = session.execute(stmt).scalars().all()
+
+            agent_stmt = select(AgentNode)
+            if lead:
+                agent_stmt = agent_stmt.where(AgentNode.lead == lead)
+            agent_rows = session.execute(agent_stmt).scalars().all()
+            
+            # Determine master agent for each unique (lead, lan_uid)
+            master_by_lan = {}
+            agents_by_lan_all = defaultdict(list)
+            for a in agent_rows:
+                agents_by_lan_all[(a.lead, a.lan_uid)].append(a)
+            for (l_lead, l_lan), l_agents in agents_by_lan_all.items():
+                l_agents_sorted = sorted(l_agents, key=lambda x: x.id)
+                master_agent = next((x for x in l_agents_sorted if x.is_online), None)
+                if not master_agent and l_agents_sorted:
+                    master_agent = l_agents_sorted[0]
+                if master_agent:
+                    master_by_lan[(l_lead, l_lan)] = master_agent.agent_uid
+
+            agents_by_lan = defaultdict(list)
+            active_agents_by_lan = defaultdict(list)
+            for agent in agent_rows:
+                agent_dict = {
+                    "id": int(agent.id),
+                    "agent_uid": agent.agent_uid,
+                    "hostname": agent.hostname,
+                    "local_ip": agent.local_ip,
+                    "local_mac": agent.local_mac,
+                    "app_version": agent.app_version,
+                    "run_mode": agent.run_mode,
+                    "web_port": agent.web_port,
+                    "ftp_ports": agent.ftp_ports,
+                    "ftp_sites": list(agent.ftp_sites or []),
+                    "is_master": master_by_lan.get((agent.lead, agent.lan_uid)) == agent.agent_uid,
+                    "is_online": bool(agent.is_online),
+                    "updated_at": _format_agents_datetime_ui(agent.updated_at),
+                    "created_at": _format_agents_datetime_ui(agent.created_at)
+                }
+                agents_by_lan[agent.lan_uid].append(agent_dict)
+                if agent.is_online:
+                    active_agents_by_lan[agent.lan_uid].append(agent_dict)
+
+            rows = [r for r in rows if len(active_agents_by_lan.get(r.lan_uid, [])) > 0]
+
+            # Fetch address book emails grouped by lan_uid
+            email_stmt = select(LanEmail).order_by(LanEmail.email_number.asc())
+            if lead:
+                email_stmt = email_stmt.where(LanEmail.lead == lead)
+            email_rows = session.execute(email_stmt).scalars().all()
+            emails_by_lan: dict[str, list[dict]] = defaultdict(list)
+            for em in email_rows:
+                emails_by_lan[em.lan_uid].append({
+                    "id": em.id,
+                    "email": em.email,
+                    "email_number": em.email_number,
+                    "email_type": em.email_type,
+                    "pc_name": em.pc_name,
+                })
+
+            # Fetch printers grouped by lan_uid
+            printer_stmt = select(Printer)
+            if lead:
+                printer_stmt = printer_stmt.where(Printer.lead == lead)
+            printer_rows = session.execute(printer_stmt).scalars().all()
+            printers_by_lan: dict[str, list[dict]] = defaultdict(list)
+            for p in printer_rows:
+                printers_by_lan[p.lan_uid].append({
+                    "id": p.id,
+                    "printer_name": p.printer_name,
+                    "ip": p.ip,
+                    "mac_id": p.mac_address,
+                    "is_online": p.is_online,
+                    "enabled": p.enabled,
+                    "auth_user": p.auth_user or "",
+                    "auth_password": p.auth_password or "",
+                    "address_book_sync": p.address_book_sync,
+                })
+
             return jsonify({
                 "rows": [
                     {
@@ -1270,6 +1296,10 @@ def create_app() -> Flask:
                         "gateway_ip": r.gateway_ip,
                         "gateway_mac": r.gateway_mac,
                         "fingerprint_signature": r.fingerprint_signature,
+                        "active_agents": len(active_agents_by_lan.get(r.lan_uid, [])),
+                        "agents": active_agents_by_lan.get(r.lan_uid, []),
+                        "emails": emails_by_lan.get(r.lan_uid, []),
+                        "printers": printers_by_lan.get(r.lan_uid, []),
                         **_serialize_audit_payload(r.created_at, r.updated_at),
                     }
                     for r in rows
@@ -1290,12 +1320,14 @@ def create_app() -> Flask:
             session.commit()
         return jsonify({"ok": True, "lan_uid": lan_uid})
 
+
+
     @app.get("/api/agents")
     def list_agents() -> Any:
         lead = _to_text(request.args.get("lead"))
         lan_uid = _to_text(request.args.get("lan_uid"))
         agent_uid = _to_text(request.args.get("agent_uid"))
-        status = _to_text(request.args.get("status")).lower()
+        status = _to_text(request.args.get("status")).lower() or "online"
         stale_seconds = _to_int(request.args.get("stale_seconds")) or ONLINE_STALE_SECONDS
         stale_seconds = max(30, stale_seconds)
 
@@ -1396,6 +1428,27 @@ def create_app() -> Flask:
                     )
                 )
 
+            # Determine master agent for each unique (lead, lan_uid)
+            lan_keys = {(_to_text(r[0].lead), _to_text(r[0].lan_uid)) for r in rows}
+            master_by_lan = {}
+            for l_lead, l_lan in lan_keys:
+                if not l_lead or not l_lan:
+                    continue
+                online_stmt = select(AgentNode).where(
+                    AgentNode.lead == l_lead,
+                    AgentNode.lan_uid == l_lan,
+                    AgentNode.is_online.is_(True)
+                ).order_by(AgentNode.id.asc())
+                master_agent = session.execute(online_stmt).scalars().first()
+                if not master_agent:
+                    fallback_stmt = select(AgentNode).where(
+                        AgentNode.lead == l_lead,
+                        AgentNode.lan_uid == l_lan
+                    ).order_by(AgentNode.id.asc())
+                    master_agent = session.execute(fallback_stmt).scalars().first()
+                if master_agent:
+                    master_by_lan[(l_lead, l_lan)] = master_agent.agent_uid
+
         result_rows: list[dict[str, Any]] = []
         for agent, lan_name, subnet_cidr, gateway_ip in rows:
             last_seen = agent.last_seen_at if agent.last_seen_at and agent.last_seen_at.tzinfo else (
@@ -1410,6 +1463,7 @@ def create_app() -> Flask:
             if status == "offline" and is_online:
                 continue
             port = int(agent.web_port or 9173)
+            is_master = master_by_lan.get((_to_text(agent.lead), _to_text(agent.lan_uid))) == agent.agent_uid
             result_rows.append(
                 {
                     "id": int(agent.id),
@@ -1426,13 +1480,13 @@ def create_app() -> Flask:
                     "run_mode": agent.run_mode or "web",
                     "web_port": port,
                     "ftp_ports": _to_text(agent.ftp_ports),
-                    "ftp_sites": _normalize_ftp_sites_payload(agent.ftp_sites),
                     "printer_ips": printer_ips_by_lan.get((_to_text(agent.lead), _to_text(agent.lan_uid)), []),
                     "printers": printers_by_agent.get((_to_text(agent.lead), _to_text(agent.lan_uid), _to_text(agent.agent_uid)), []),
                     "lan_printers": printers_by_lan.get((_to_text(agent.lead), _to_text(agent.lan_uid)), []),
                     "last_seen_at": _format_agents_datetime_ui(last_seen),
                     "online_changed_at": _format_agents_datetime_ui(online_changed_at),
                     "is_online": is_online,
+                    "is_master": is_master,
                     "localhost_url": f"http://127.0.0.1:{port}",
                     "ftp_page_url": f"http://127.0.0.1:{port}/ftp",
                     **_serialize_audit_payload_agents(agent.created_at, agent.updated_at),
@@ -1457,23 +1511,6 @@ def create_app() -> Flask:
             session.commit()
         LOGGER.info("agent deleted: id=%s lead=%s", agent_id, lead or "-")
         return jsonify({"ok": True, "agent_id": agent_id})
-
-    @app.post("/api/agents/<int:agent_id>/ftp-sites")
-    def queue_agent_ftp_site(agent_id: int) -> Any:
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
-            return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
-        with session_factory() as session:
-            agent = session.get(AgentNode, int(agent_id))
-            if agent is None:
-                return jsonify({"ok": False, "error": "Agent not found"}), 404
-            payload, status = _queue_scan_folder_command_for_agent(
-                session,
-                agent=agent,
-                body=body,
-            )
-        return jsonify(payload), status
-
     @app.get("/api/agents/history")
     def list_agent_history() -> Any:
         lead = _to_text(request.args.get("lead"))
@@ -1510,7 +1547,6 @@ def create_app() -> Flask:
                         "run_mode": row.run_mode,
                         "web_port": int(row.web_port or 9173),
                         "ftp_ports": row.ftp_ports,
-                        "ftp_sites": _normalize_ftp_sites_payload(row.ftp_sites),
                         "is_online": bool(row.is_online),
                         "changed_at": _format_agents_datetime_ui(row.changed_at),
                         "last_seen_at": _format_agents_datetime_ui(row.last_seen_at),
@@ -1629,7 +1665,7 @@ def create_app() -> Flask:
             run_mode = _to_text(body.get("run_mode")) or "web"
             web_port = _to_int(body.get("web_port")) or 9173
             ftp_ports = _to_text(body.get("ftp_ports"))
-            ftp_sites = _normalize_ftp_sites_payload(body.get("ftp_sites"))
+            ftp_sites = body.get("ftp_sites") if isinstance(body.get("ftp_sites"), list) else None
             _refresh_stale_agent_offline(session=session, lead=lead, stale_seconds=ONLINE_STALE_SECONDS)
             lan_uid = _upsert_lan_and_agent(
                 session=session,
@@ -1650,8 +1686,9 @@ def create_app() -> Flask:
                 ftp_sites=ftp_sites,
                 fingerprint_signature=fingerprint,
             )
+            is_master, emails = _is_agent_master_and_get_emails(session, lead, lan_uid, agent_uid)
             session.commit()
-        LOGGER.info("register: lead=%s lan_uid=%s agent_uid=%s hostname=%s", lead, lan_uid, agent_uid, hostname)
+        LOGGER.info("register: lead=%s lan_uid=%s agent_uid=%s hostname=%s master=%s", lead, lan_uid, agent_uid, hostname, is_master)
 
         return jsonify(
             {
@@ -1659,8 +1696,48 @@ def create_app() -> Flask:
                 "lead": lead,
                 "lan_uid": lan_uid,
                 "agent_uid": agent_uid,
+                "is_master": is_master,
+                "emails": emails,
             }
         )
+
+    @app.get("/api/agent/core-release")
+    def get_agent_core_release() -> Any:
+        sent_token = _request_api_token()
+        ok_auth, lead_valid, auth_error = _resolve_request_lead({}, lead_key_map, sent_token, request.args.get("lead"))
+        if not ok_auth:
+            return auth_error
+
+        current_version = _to_text(request.args.get("current_version"))
+        manifest_path = Path("storage/releases/agent_core_release.json")
+        payload = {}
+        if manifest_path.exists():
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if not payload:
+            payload = {
+                "version": "1.0.0",
+                "download_url": "/static/releases/agent_core.zip",
+                "sha256": "",
+            }
+
+        version = _to_text(payload.get("version"))
+        sha256 = _to_text(payload.get("sha256")).lower()
+        current_sha = _to_text(request.args.get("current_sha256")).lower()
+        if sha256 and current_sha:
+            update_available = sha256 != current_sha
+        else:
+            update_available = _is_newer_version(version, current_version)
+
+        return jsonify({
+            "ok": True,
+            "version": version,
+            "download_url": _to_text(payload.get("download_url")),
+            "sha256": sha256,
+            "update_available": update_available,
+        })
 
     @app.get("/api/agent/release")
     def get_agent_release() -> Any:
@@ -2055,6 +2132,7 @@ def create_app() -> Flask:
                         "mac_id": r.mac_address or "",
                         "user": r.auth_user or "",
                         "password": r.auth_password or "",
+                        "address_book_sync": r.address_book_sync,
                         **_serialize_audit_payload_iso(r.created_at, r.updated_at),
                     }
                     for r in rows
@@ -2125,6 +2203,7 @@ def create_app() -> Flask:
                     "last_seen_at": printer.updated_at.isoformat() if printer.updated_at else "",
                     "auth_user": printer.auth_user or "",
                     "auth_password": printer.auth_password or "",
+                    "address_book_sync": printer.address_book_sync,
                     **_serialize_audit_payload_iso(printer.created_at, printer.updated_at),
                 },
                 "events": events,
@@ -2249,6 +2328,97 @@ def create_app() -> Flask:
             504,
         )
 
+    def _submit_printer_fetch_address_book_command(device_ref: Any) -> Any:
+        requested_at = datetime.now(timezone.utc)
+        with session_factory() as session:
+            printer = _resolve_printer_control_target(session, device_ref)
+            if printer is None:
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+            printer_id_value = int(printer.id)
+            printer_mac_value = _normalize_mac(printer.mac_address) or printer.mac_address or ""
+
+            # Check if there is an existing pending command
+            pending = session.execute(
+                select(PrinterControlCommand).where(
+                    PrinterControlCommand.printer_id == printer.id,
+                    PrinterControlCommand.status == "pending",
+                )
+            ).scalars().all()
+            for cmd in pending:
+                cmd.status = "failed"
+                cmd.error_message = "Superseded by newer command"
+                cmd.responded_at = requested_at
+
+            command = PrinterControlCommand(
+                printer_id=printer.id,
+                lead=printer.lead,
+                lan_uid=printer.lan_uid,
+                agent_uid=printer.agent_uid,
+                printer_name=printer.printer_name,
+                ip=printer.ip,
+                desired_enabled=printer.enabled,
+                command_type="fetch_address_book",
+                auth_user=printer.auth_user or "",
+                auth_password=printer.auth_password or "",
+                status="pending",
+                error_message="",
+                requested_at=requested_at,
+                responded_at=None,
+            )
+            session.add(command)
+            session.commit()
+            command_id = int(command.id)
+
+        timeout_seconds = 25
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+        while datetime.now(timezone.utc) < deadline:
+            with session_factory() as session:
+                current = session.get(PrinterControlCommand, command_id)
+                if current is None:
+                    break
+                if current.status == "success":
+                    pr = session.get(Printer, printer_id_value)
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "id": printer_id_value,
+                            "mac_id": printer_mac_value,
+                            "address_book_sync": pr.address_book_sync if pr else None,
+                            "command_id": command_id,
+                        }
+                    )
+                if current.status == "failed":
+                    return (
+                        jsonify(
+                            {
+                                "ok": False,
+                                "error": current.error_message or "Fetch address book command failed",
+                                "command_id": command_id,
+                            }
+                        ),
+                        409,
+                    )
+            import time as _time
+            _time.sleep(0.5)
+
+        with session_factory() as session:
+            timeout_cmd = session.get(PrinterControlCommand, command_id)
+            if timeout_cmd is not None and timeout_cmd.status == "pending":
+                timeout_cmd.status = "failed"
+                timeout_cmd.error_message = "Timeout waiting agent address book fetch"
+                timeout_cmd.responded_at = datetime.now(timezone.utc)
+                session.commit()
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Timeout waiting agent address book fetch",
+                    "command_id": command_id,
+                }
+            ),
+            504,
+        )
+
     @app.patch("/api/devices/<device_ref>/enable")
     def device_set_enable(device_ref: str) -> Any:
         body = request.get_json(silent=True) or {}
@@ -2275,6 +2445,26 @@ def create_app() -> Flask:
             enabled=False,
             action_name="lock",
         )
+
+    @app.patch("/api/devices/<device_ref>/credentials")
+    def device_update_credentials(device_ref: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
+        auth_user = str(body.get("auth_user", "")).strip()
+        auth_password = str(body.get("auth_password", "")).strip()
+        with session_factory() as session:
+            printer = _resolve_printer_control_target(session, device_ref)
+            if printer is None:
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+            printer.auth_user = auth_user
+            printer.auth_password = auth_password
+            session.commit()
+            return jsonify({"ok": True, "auth_user": printer.auth_user})
+
+    @app.post("/api/devices/<device_ref>/fetch-address-book")
+    def device_fetch_address_book(device_ref: str) -> Any:
+        return _submit_printer_fetch_address_book_command(device_ref)
 
     @app.post("/api/devices/<device_ref>/scan-folder")
     def device_scan_folder(device_ref: str) -> Any:
@@ -2826,6 +3016,7 @@ def create_app() -> Flask:
                             {
                                 "id": int(pending_by_printer[int(r.id)].id),
                                 "desired_enabled": bool(pending_by_printer[int(r.id)].desired_enabled),
+                                "command_type": pending_by_printer[int(r.id)].command_type or "enable_disable",
                                 "auth_user": pending_by_printer[int(r.id)].auth_user or "",
                                 "auth_password": pending_by_printer[int(r.id)].auth_password or "",
                             }
@@ -2872,129 +3063,37 @@ def create_app() -> Flask:
                 session.commit()
                 return jsonify({"ok": False, "error": "Printer not found"}), 404
 
-            if ok_value:
-                command.status = "success"
-                command.error_message = ""
-                command.responded_at = responded_at
-                _apply_printer_enabled_state(session, printer, bool(command.desired_enabled), responded_at)
-            else:
-                command.status = "failed"
-                command.error_message = error_message or "Agent lock/unlock failed"
-                command.responded_at = responded_at
-            session.commit()
-
-        return jsonify(
-            {
-                "ok": True,
-                "id": int(command_id),
-                "status": "success" if ok_value else "failed",
-                "responded_at": responded_at.isoformat(),
-            }
-        )
-
-    @app.get("/api/polling/ftp-controls")
-    def polling_ftp_controls() -> Any:
-        agent_uid = _to_text(request.args.get("agent_uid"))
-        if not agent_uid:
-            return jsonify({"ok": False, "error": "Missing agent_uid"}), 400
-        sent_token = _request_api_token()
-        ok_auth, lead_valid, auth_error = _resolve_request_lead({}, lead_key_map, sent_token, request.args.get("lead"))
-        if not ok_auth:
-            return auth_error
-        with session_factory() as session:
-            lan_uid, _ = _resolve_lan_uid_with_session(
-                session,
-                lead_valid,
-                {
-                    "lead": lead_valid,
-                    "lan_uid": _to_text(request.args.get("lan_uid")),
-                    "agent_uid": agent_uid,
-                    "hostname": "",
-                    "local_ip": "",
-                    "gateway_ip": _to_text(request.args.get("gateway_ip")),
-                    "gateway_mac": _to_text(request.args.get("gateway_mac")),
-                },
-            )
-            pending_cmds = session.execute(
-                select(FtpControlCommand)
-                .where(
-                    FtpControlCommand.lead == lead_valid,
-                    FtpControlCommand.lan_uid == lan_uid,
-                    FtpControlCommand.agent_uid == agent_uid,
-                    FtpControlCommand.status == "pending",
-                )
-                .order_by(FtpControlCommand.requested_at.asc(), FtpControlCommand.id.asc())
-            ).scalars().all()
-        return jsonify(
-            {
-                "ok": True,
-                "lead": lead_valid,
-                "lan_uid": lan_uid,
-                "agent_uid": agent_uid,
-                "rows": [
-                    {
-                        "id": int(cmd.id),
-                        "action": cmd.action,
-                        "site_name": cmd.site_name,
-                        "new_site_name": cmd.new_site_name,
-                        "local_path": cmd.local_path,
-                        "port": int(cmd.port or 0),
-                        "ftp_user": cmd.ftp_user,
-                        "ftp_password": cmd.ftp_password,
-                        "printer_mac_id": cmd.printer_mac_id,
-                        "printer_ip": cmd.printer_ip,
-                        "printer_name": cmd.printer_name,
-                        "printer_auth_user": cmd.printer_auth_user,
-                        "printer_auth_password": cmd.printer_auth_password,
+            if command.command_type == "fetch_address_book":
+                if ok_value:
+                    command.status = "success"
+                    command.error_message = ""
+                    command.responded_at = responded_at
+                    address_book_data = body.get("address_book_data")
+                    if isinstance(address_book_data, dict):
+                        printer.address_book_sync = {
+                            "status": "success",
+                            "timestamp": responded_at.isoformat(),
+                            "address_list": address_book_data.get("address_list") or [],
+                        }
+                else:
+                    command.status = "failed"
+                    command.error_message = error_message or "Fetch address book failed"
+                    command.responded_at = responded_at
+                    printer.address_book_sync = {
+                        "status": "error",
+                        "timestamp": responded_at.isoformat(),
+                        "error": command.error_message,
                     }
-                    for cmd in pending_cmds
-                ],
-            }
-        )
-
-    @app.post("/api/polling/ftp-control-result")
-    def polling_ftp_control_result() -> Any:
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
-            return jsonify({"ok": False, "error": "Invalid JSON body"}), 400
-        sent_token = _request_api_token()
-        ok_auth, lead, auth_error = _validate_polling_auth(body, lead_key_map, sent_token)
-        if not ok_auth:
-            return auth_error
-
-        command_id = _to_int(body.get("command_id"))
-        if command_id is None or command_id <= 0:
-            return jsonify({"ok": False, "error": "Missing command_id"}), 400
-        ok_value = bool(body.get("ok", False))
-        error_message = _to_text(body.get("error"))
-        warning_message = _to_text(body.get("warning"))
-        responded_at = datetime.now(timezone.utc)
-
-        with session_factory() as session:
-            command = session.get(FtpControlCommand, int(command_id))
-            if command is None:
-                return jsonify({"ok": False, "error": "Command not found"}), 404
-            if command.lead != lead:
-                return jsonify({"ok": False, "error": "Lead mismatch"}), 400
-            if command.status != "pending":
-                return jsonify({"ok": True, "status": command.status, "id": int(command.id)})
-
-            if ok_value:
-                command.status = "success"
-                command.error_message = warning_message
-                command.responded_at = responded_at
-                if warning_message:
-                    LOGGER.warning(
-                        "ftp control completed with warning: id=%s site=%s mac_id=%s warning=%s",
-                        int(command.id),
-                        _to_text(command.site_name),
-                        _to_text(command.printer_mac_id),
-                        warning_message,
-                    )
             else:
-                command.status = "failed"
-                command.error_message = error_message or "FTP command failed"
-                command.responded_at = responded_at
+                if ok_value:
+                    command.status = "success"
+                    command.error_message = ""
+                    command.responded_at = responded_at
+                    _apply_printer_enabled_state(session, printer, bool(command.desired_enabled), responded_at)
+                else:
+                    command.status = "failed"
+                    command.error_message = error_message or "Agent lock/unlock failed"
+                    command.responded_at = responded_at
             session.commit()
 
         return jsonify(
@@ -3002,11 +3101,9 @@ def create_app() -> Flask:
                 "ok": True,
                 "id": int(command_id),
                 "status": "success" if ok_value else "failed",
-                "warning": warning_message if ok_value else "",
                 "responded_at": responded_at.isoformat(),
             }
         )
-
     @app.post("/api/polling/inventory")
     def ingest_inventory() -> Any:
         body = request.get_json(silent=True) or {}
@@ -3029,7 +3126,7 @@ def create_app() -> Flask:
             run_mode = _to_text(body.get("run_mode")) or "web"
             web_port = _to_int(body.get("web_port")) or 9173
             ftp_ports = _to_text(body.get("ftp_ports"))
-            ftp_sites = _normalize_ftp_sites_payload(body.get("ftp_sites"))
+            ftp_sites = body.get("ftp_sites") if isinstance(body.get("ftp_sites"), list) else None
             timestamp = _parse_timestamp(body.get("timestamp"))
             devices = body.get("devices") if isinstance(body.get("devices"), list) else []
             inserted = 0
@@ -3116,6 +3213,79 @@ def create_app() -> Flask:
             }
         )
 
+    @app.get("/api/scans/files")
+    def list_email_scan_files() -> Any:
+        lan_uid = request.args.get("lan_uid", "").strip()
+        email = request.args.get("email", "").strip()
+        if not lan_uid or not email:
+            return jsonify({"ok": False, "error": "Missing lan_uid or email"}), 400
+
+        lan_uid_safe = _safe_path_token(lan_uid)
+        email_safe = _safe_path_token(email)
+        static_dir = Path("static/scans") / lan_uid_safe / email_safe
+
+        rows: list[dict[str, Any]] = []
+        if static_dir.exists():
+            files = [p for p in static_dir.iterdir() if p.is_file() and not p.name.endswith(".meta.json")]
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            for pth in files:
+                try:
+                    st = pth.stat()
+                except Exception:
+                    continue
+                
+                # Check for metadata file
+                upload_duration = None
+                upload_completed_at = None
+                meta_path = pth.with_name(f"{pth.name}.meta.json")
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as meta_f:
+                            meta_data = json.load(meta_f)
+                            upload_duration = meta_data.get("upload_duration")
+                            upload_completed_at = meta_data.get("upload_completed_at")
+                    except Exception:
+                        pass
+                
+                rows.append({
+                    "name": pth.name,
+                    "size": int(st.st_size),
+                    "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+                    "url": f"/static/scans/{lan_uid_safe}/{email_safe}/{pth.name}",
+                    "upload_duration": upload_duration,
+                    "upload_completed_at": upload_completed_at
+                })
+        return jsonify({"ok": True, "rows": rows})
+
+    @app.get("/api/scan-uploads")
+    def list_scan_uploads() -> Any:
+        sent_token = _request_api_token()
+        ok_auth, lead_valid, auth_error = _resolve_request_lead({"lead": request.args.get("lead")}, lead_key_map, sent_token)
+        if not ok_auth:
+            return auth_error
+
+        limit = _to_int(request.args.get("limit")) or 200
+        limit = max(1, min(limit, 1000))
+        root = SCAN_UPLOAD_ROOT / _safe_path_token(lead_valid)
+        rows: list[dict[str, Any]] = []
+        if root.exists():
+            files = [p for p in root.rglob("*") if p.is_file()]
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            for pth in files[:limit]:
+                try:
+                    st = pth.stat()
+                except Exception:
+                    continue
+                rel = str(pth.relative_to(SCAN_UPLOAD_ROOT).as_posix())
+                rows.append({
+                    "path": rel,
+                    "file_name": pth.name,
+                    "size": int(getattr(st, "st_size", 0) or 0),
+                    "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+                })
+        return jsonify({"ok": True, "lead": lead_valid, "rows": rows})
+
+
     @app.post("/api/polling/scan-upload")
     def ingest_scan_upload() -> Any:
         sent_token = _request_api_token()
@@ -3177,6 +3347,47 @@ def create_app() -> Flask:
         temp_path.replace(dest_path)
         file_size = int(dest_path.stat().st_size if dest_path.exists() else 0)
         relative_path = str(dest_path.as_posix())
+
+        # Replicate to public static folder for Dropbox-style direct web access
+        try:
+            import shutil
+            original_folder_name = "default"
+            if source_root:
+                # Handle both Windows backslash and Posix forward slash
+                source_root_clean = source_root.replace("\\", "/")
+                original_folder_name = Path(source_root_clean).name or "default"
+            
+            safe_lan_uid = _safe_path_token(lan_uid)
+            safe_folder_name = _safe_path_token(original_folder_name)
+            static_scans_dir = Path("static/scans") / safe_lan_uid / safe_folder_name
+            static_scans_dir.mkdir(parents=True, exist_ok=True)
+            static_scans_path = static_scans_dir / dest_path.name
+            shutil.copy2(dest_path, static_scans_path)
+            LOGGER.info("Replicated scan to public static path: %s", static_scans_path)
+            
+            # Save metadata file with upload stats
+            try:
+                meta_path = static_scans_path.with_name(f"{static_scans_path.name}.meta.json")
+                upload_completed_at = datetime.now(timezone.utc)
+                duration_seconds = (upload_completed_at - event_time).total_seconds()
+                if duration_seconds < 0:
+                    duration_seconds = 0.0
+                
+                meta_data = {
+                    "upload_started_at": event_time.isoformat(),
+                    "upload_completed_at": upload_completed_at.isoformat(),
+                    "upload_duration": round(duration_seconds, 2),
+                    "client_ip": local_ip or "",
+                    "hostname": hostname or "",
+                }
+                with open(meta_path, "w", encoding="utf-8") as meta_f:
+                    json.dump(meta_data, meta_f, ensure_ascii=False, indent=2)
+                LOGGER.info("Saved scan upload metadata to: %s", meta_path)
+            except Exception as meta_exc:
+                LOGGER.warning("Failed to save scan upload metadata: %s", meta_exc)
+        except Exception as static_exc:
+            LOGGER.warning("Failed to replicate scan to static/scans directory: %s", static_exc)
+
         drive_sync_payload = drive_sync.disabled_result().as_dict()
         if drive_sync.enabled:
             try:
@@ -3257,7 +3468,7 @@ def create_app() -> Flask:
         run_mode = _to_text(body.get("run_mode")) or "web"
         web_port = _to_int(body.get("web_port")) or 9173
         ftp_ports = _to_text(body.get("ftp_ports"))
-        ftp_sites = _normalize_ftp_sites_payload(body.get("ftp_sites"))
+        ftp_sites = body.get("ftp_sites") if isinstance(body.get("ftp_sites"), list) else None
         timestamp = _parse_timestamp(body.get("timestamp"))
         counter_data = body.get("counter_data") if isinstance(body.get("counter_data"), dict) else {}
         status_data = body.get("status_data") if isinstance(body.get("status_data"), dict) else {}
@@ -3324,6 +3535,8 @@ def create_app() -> Flask:
                     auth_user=_to_text(body.get("auth_user")),
                     auth_password=_to_text(body.get("auth_password")),
                 )
+                if "address_book_sync" in body:
+                    printer_row.address_book_sync = body.get("address_book_sync")
             if printer_row is not None and collector_ok:
                 _set_printer_online_state(session=session, printer=printer_row, is_online=True, changed_at=timestamp)
             device_enabled = True if printer_row is None else bool(printer_row.enabled)
@@ -3609,9 +3822,10 @@ def create_app() -> Flask:
                         updated_at=datetime.now(timezone.utc),
                     )
                     session.add(history)
+            is_master, emails = _is_agent_master_and_get_emails(session, lead, lan_uid, agent_uid)
             session.commit()
         LOGGER.info(
-            "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s)",
+            "polling: lead=%s lan=%s agent=%s printer=%s ip=%s inserted(counter=%s,status=%s) skipped(counter=%s,status=%s,disabled=%s) master=%s",
             lead,
             lan_uid,
             agent_uid,
@@ -3622,6 +3836,7 @@ def create_app() -> Flask:
             skipped_counter,
             skipped_status,
             skipped_disabled,
+            is_master,
         )
 
         return jsonify(
@@ -3640,6 +3855,8 @@ def create_app() -> Flask:
                 "skipped_disabled": skipped_disabled,
                 "collector_ok": collector_ok,
                 "skip_data_update": skip_data_update,
+                "is_master": is_master,
+                "emails": emails,
             }
         )
 
@@ -3883,7 +4100,12 @@ def create_app() -> Flask:
             _refresh_stale_offline(session=session, lead=lead)
             session.commit()
             
-            history_stmt = select(DeviceInforHistory).order_by(
+            # Retrieve only data from the last 7 days
+            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+            
+            history_stmt = select(DeviceInforHistory).where(
+                DeviceInforHistory.updated_at >= seven_days_ago
+            ).order_by(
                 DeviceInforHistory.updated_at.desc(), DeviceInforHistory.id.desc()
             )
             if lead:
@@ -3937,7 +4159,9 @@ def create_app() -> Flask:
                     )
             else:
                 # Backward compatibility for environments without history rows yet.
-                base_stmt = select(DeviceInfor).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
+                base_stmt = select(DeviceInfor).where(
+                    DeviceInfor.updated_at >= seven_days_ago
+                ).order_by(DeviceInfor.updated_at.desc(), DeviceInfor.id.desc())
                 if lead:
                     base_stmt = base_stmt.where(DeviceInfor.lead == lead)
 
@@ -5708,6 +5932,9 @@ def create_app() -> Flask:
         except Exception as exc:
             LOGGER.error("drivers catalog load error brand=%s: %s", brand_clean, exc)
             return jsonify({"ok": False, "error": "Failed to load catalog"}), 500
+
+    from email_routes import register_email_routes
+    register_email_routes(app, session_factory, lead_key_map)
 
     return app
 

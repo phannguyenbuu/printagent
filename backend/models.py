@@ -138,7 +138,7 @@ class AgentNode(Base):
     run_mode: Mapped[str] = mapped_column(String(32), default="web")
     web_port: Mapped[int] = mapped_column(Integer, default=9173)
     ftp_ports: Mapped[str] = mapped_column(Text, default="")
-    ftp_sites: Mapped[list] = mapped_column(JSONB, default=list)
+    ftp_sites: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     online_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
@@ -160,7 +160,7 @@ class AgentPresenceLog(Base):
     run_mode: Mapped[str] = mapped_column(String(32), default="web")
     web_port: Mapped[int] = mapped_column(Integer, default=9173)
     ftp_ports: Mapped[str] = mapped_column(Text, default="")
-    ftp_sites: Mapped[list] = mapped_column(JSONB, default=list)
+    ftp_sites: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
@@ -184,6 +184,7 @@ class Printer(Base):
     is_online: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     online_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     mac_address: Mapped[str] = mapped_column(String(64), default="")
+    address_book_sync: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
@@ -269,6 +270,7 @@ class PrinterControlCommand(Base):
     printer_name: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), index=True)
     desired_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    command_type: Mapped[str] = mapped_column(String(64), default="enable_disable")
     auth_user: Mapped[str] = mapped_column(String(128), default="")
     auth_password: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
@@ -279,31 +281,6 @@ class PrinterControlCommand(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
 
-class FtpControlCommand(Base):
-    __tablename__ = "FtpControlCommand"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    lead: Mapped[str] = mapped_column(String(64), index=True)
-    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
-    agent_uid: Mapped[str] = mapped_column(String(128), index=True, default="legacy-agent")
-    action: Mapped[str] = mapped_column(String(32), default="create", index=True)
-    site_name: Mapped[str] = mapped_column(String(128), default="", index=True)
-    new_site_name: Mapped[str] = mapped_column(String(128), default="")
-    local_path: Mapped[str] = mapped_column(Text, default="")
-    port: Mapped[int] = mapped_column(Integer, default=2121, index=True)
-    ftp_user: Mapped[str] = mapped_column(String(128), default="")
-    ftp_password: Mapped[str] = mapped_column(String(255), default="")
-    printer_mac_id: Mapped[str] = mapped_column(String(64), default="")
-    printer_ip: Mapped[str] = mapped_column(String(64), default="")
-    printer_name: Mapped[str] = mapped_column(String(255), default="")
-    printer_auth_user: Mapped[str] = mapped_column(String(128), default="")
-    printer_auth_password: Mapped[str] = mapped_column(String(255), default="")
-    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
-    error_message: Mapped[str] = mapped_column(Text, default="")
-    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
-    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
 
 
 class UserRole(str, Enum):
@@ -561,3 +538,21 @@ class Material(Base):
     total_price: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+
+
+class LanEmail(Base):
+    __tablename__ = "LanEmail"
+    __table_args__ = (
+        UniqueConstraint("lead", "lan_uid", "email", name="uq_lanemail_lead_lan_email"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead: Mapped[str] = mapped_column(String(64), index=True)
+    lan_uid: Mapped[str] = mapped_column(String(128), index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    email_number: Mapped[int] = mapped_column(Integer, index=True)
+    email_type: Mapped[str] = mapped_column(String(32), default="common", server_default="common", index=True)
+    pc_name: Mapped[str | None] = mapped_column(String(255), nullable=True, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
+

@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block content %}
 {% set release = agent_release or {} %}
@@ -89,9 +89,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const refreshBtn = document.getElementById('download-agents-refresh');
   let refreshTimer = null;
 
-  const statusBadge = (isOnline) => {
-    const label = isOnline ? 'ONLINE' : 'OFFLINE';
-    const color = isOnline ? '#2fa36b' : '#c05a5a';
+  const statusBadge = (isOnline, isMaster = false) => {
+    let label = isOnline ? 'ONLINE' : 'OFFLINE';
+    let color = isOnline ? '#2fa36b' : '#c05a5a';
+    if (isOnline && isMaster) {
+      label = 'MASTER';
+      color = '#f97316'; // orange
+    }
     return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px;">${label}</span>`;
   };
 
@@ -315,7 +319,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         `;
         tr.innerHTML = `
-          <td>${statusBadge(Boolean(row.is_online))}</td>
+          <td>${statusBadge(Boolean(row.is_online), Boolean(row.is_master))}</td>
           <td>${escapeHtml(row.lead || '')}</td>
           <td>${lanUidCell}</td>
           <td>${escapeHtml(row.hostname || '')}</td>

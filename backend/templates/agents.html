@@ -199,8 +199,8 @@
     <div class="filter-group">
       <label>Status</label>
       <select id="agents-filter-status">
-        <option value="">All</option>
-        <option value="online">Online</option>
+        <option value="online" selected>Online</option>
+        <option value="all">All</option>
         <option value="offline">Offline</option>
       </select>
     </div>
@@ -617,8 +617,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     for (const row of data.rows) {
       const tr = document.createElement('tr');
-      const state = row.is_online ? 'ONLINE' : 'OFFLINE';
-      const stateColor = row.is_online ? '#2fa36b' : '#c05a5a';
+      let state = row.is_online ? 'ONLINE' : 'OFFLINE';
+      let stateColor = row.is_online ? '#2fa36b' : '#c05a5a';
+      if (row.is_online && row.is_master) {
+        state = 'MASTER';
+        stateColor = '#f97316'; // orange
+      }
       const modeText = `${safeText(row.run_mode || 'web')} : ${safeText(String(row.web_port || 9173))}`;
       const ftpSites = ftpSiteBadges(row.ftp_sites, row.ftp_ports, row);
       const printerIps = printerBadges(row);

@@ -1,0 +1,8 @@
+{
+  "version": "1.3.62",
+  "download_url": "/static/releases/agent_core.zip",
+  "sha256": "0d0629f242b0ed50dbccf50edc252681f27d21c512ca9ec261b7512974669a04",
+  "size": 177071,
+  "notes": "Auto-packaged via pack_agent_core.py",
+  "published_at": "2026-05-20T18:22:50.729222+07:00"
+}

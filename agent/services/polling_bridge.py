@@ -15,15 +15,15 @@ from urllib.parse import urlparse
 
 import requests
 
-from app.config import AppConfig
-from app.modules.ricoh.service import RicohService
-from app.modules.toshiba.service import ToshibaService
-from app.services.api_client import APIClient, Printer
-from app.services.ftp_control import FtpControlCommand, parse_ftp_control_rows
-from app.services.scan_drop import ensure_active_drop_folder
-from app.services.updater import AutoUpdater
-from app.services.runtime import get_machine_agent_uid, no_window_subprocess_kwargs
-from app.utils.scanner import SubnetScanner
+from agent.config import AppConfig
+from agent.modules.ricoh.service import RicohService
+from agent.modules.toshiba.service import ToshibaService
+from agent.services.api_client import APIClient, Printer
+from agent.services.scan_drop import ensure_active_drop_folder
+from agent.services.updater import AutoUpdater
+from agent.services.runtime import get_machine_agent_uid, no_window_subprocess_kwargs
+from agent.utils.scanner import SubnetScanner
+from agent.services.ftp_store import normalize_site_name
 
 
 LOGGER = logging.getLogger(__name__)
@@ -70,7 +70,6 @@ class PollingBridge:
         self._last_ftp_control_apply_error = ""
         self._applied_controls: dict[str, bool] = {}
         self._control_retry_after: dict[str, datetime] = {}
-        self._applied_ftp_controls: dict[str, bool] = {}
         self._resolved_lan_uid = ""
         self._agent_uid = get_machine_agent_uid(self._config.get_string("polling.agent_uid", ""))
         self._scan_last_cycle_at = ""
@@ -93,7 +92,9 @@ class PollingBridge:
         self._scan_uploaded_fingerprints: dict[str, str] = {}
         self._scan_lock = threading.Lock()
         self._trigger_event = threading.Event()
-        self._last_discovered_printers: list[Printer] = []
+        self._is_master = False
+        self._emails = []
+        self._last_discovered_printers = []
         self._load_scan_upload_state()
 
     @staticmethod
@@ -271,6 +272,9 @@ class PollingBridge:
                             "ftp_url": str(site.get("ftp_url", "") or ""),
                             "ftp_user": str(site.get("ftp_user", "") or ""),
                             "ftp_password": str(site.get("ftp_password", "") or ""),
+                            "running": bool(site.get("running", False)),
+                            "state": str(site.get("state", "configured") or "configured"),
+                            "error": str(site.get("error", "") or ""),
                         }
                     )
                 if ports:
@@ -509,12 +513,12 @@ Get-NetNeighbor -AddressFamily IPv4 |
         return mapping
 
     def interval_seconds(self) -> int:
-        raw = self._config.get_string("polling.interval_seconds", "300").strip()
+        raw = self._config.get_string("polling.interval_seconds", "1").strip()
         try:
             value = int(raw)
-            return max(10, value)
+            return max(1, value)
         except Exception:  # noqa: BLE001
-            return 300
+            return 1
 
     def scan_enabled(self) -> bool:
         return self._config.get_bool("polling.scan_enabled", True)
@@ -600,13 +604,13 @@ Get-NetNeighbor -AddressFamily IPv4 |
             "last_cycle_ricoh_printers": self._last_cycle_ricoh_printers,
             "last_cycle_sent": self._last_cycle_sent,
             "last_cycle_failed": self._last_cycle_failed,
-            "last_control_pull_at": self._last_control_pull_at,
-            "last_control_total": self._last_control_total,
-            "last_control_apply_error": self._last_control_apply_error,
-            "last_ftp_control_pull_at": self._last_ftp_control_pull_at,
-            "last_ftp_control_total": self._last_ftp_control_total,
-            "last_ftp_control_apply_error": self._last_ftp_control_apply_error,
-            "resolved_lan_uid": self._resolved_lan_uid,
+            "last_control_pull_at": getattr(self, "_last_control_pull_at", ""),
+            "last_control_total": getattr(self, "_last_control_total", 0),
+            "last_control_apply_error": getattr(self, "_last_control_apply_error", ""),
+            "last_ftp_control_pull_at": getattr(self, "_last_ftp_control_pull_at", ""),
+            "last_ftp_control_total": getattr(self, "_last_ftp_control_total", 0),
+            "last_ftp_control_apply_error": getattr(self, "_last_ftp_control_apply_error", ""),
+            "resolved_lan_uid": getattr(self, "_resolved_lan_uid", ""),
             "scan_enabled": self.scan_enabled(),
             "scan_running": bool(self._thread and self._thread.is_alive()) if self.scan_enabled() else False,
             "scan_interval_seconds": self.scan_interval_seconds(),
@@ -1020,6 +1024,13 @@ if ($node) {{ $node }}
                 LOGGER.info("Server reassigned lan_uid: %s -> %s", lan_uid, server_lan_uid)
                 lan_uid = server_lan_uid
             self._resolved_lan_uid = lan_uid
+            
+            self._is_master = bool(server_data.get("is_master", False))
+            self._emails = server_data.get("emails") if isinstance(server_data.get("emails"), list) else []
+            try:
+                self._reconcile_scan_address_ftp(self._is_master, self._emails)
+            except Exception as ftp_exc:
+                LOGGER.warning("FTP reconciliation failed during registration: %s", ftp_exc)
         return lan_uid
 
     @staticmethod
@@ -1151,6 +1162,99 @@ if ($node) {{ $node }}
         self._scan_last_error = ""
         self._save_scan_upload_state()
         return payload
+
+    def _get_owned_emails(self, is_master: bool, emails: list[dict]) -> list[dict]:
+        import socket
+        hostname = socket.gethostname().strip().lower()
+        owned = []
+        for em in (emails or []):
+            etype = str(em.get("email_type") or "common").strip().lower()
+            if etype == "private":
+                epc = str(em.get("pc_name") or "").strip().lower()
+                if epc == hostname:
+                    owned.append(em)
+            else:  # common
+                if is_master:
+                    owned.append(em)
+        return owned
+
+    def _reconcile_scan_address_ftp(self, is_master: bool, emails: list[dict]) -> None:
+        share_manager = getattr(self._ricoh_service, "share_manager", None)
+        if share_manager is None:
+            LOGGER.warning("share_manager not available in ricoh_service; skipping FTP reconciliation")
+            return
+
+        owned_emails = self._get_owned_emails(is_master, emails)
+        LOGGER.info("Reconciling FTP scan addresses: is_master=%s, total_emails=%d, owned_count=%d", 
+                    is_master, len(emails) if emails else 0, len(owned_emails))
+
+        # 1. Fetch current FTP sites
+        try:
+            current_sites = share_manager.list_ftp_sites()
+        except Exception as exc:
+            LOGGER.warning("Failed to list FTP sites: %s", exc)
+            current_sites = []
+
+        # 2. Determine target sites
+        target_site_names = set()
+        target_ports = set()
+        
+        if owned_emails:
+            for em in owned_emails:
+                email = str(em.get("email") or "").strip()
+                port = int(em.get("email_number") or 0)
+                if not email or port <= 0:
+                    continue
+                site_name = normalize_site_name(f"gox_scan_{email}")
+                target_site_names.add(site_name)
+                target_ports.add(port)
+
+                # Ensure local directory C:/Scangox/{email} exists
+                local_dir = Path("C:/Scangox") / email
+                try:
+                    if not local_dir.exists():
+                        local_dir.mkdir(parents=True, exist_ok=True)
+                        LOGGER.info("Created scan address folder: %s", local_dir)
+                except Exception as exc:
+                    LOGGER.error("Failed to create scan folder %s: %s", local_dir, exc)
+                
+                # Check if this FTP site is already configured and matches
+                existing = next((s for s in current_sites if str(s.get("name")) == site_name), None)
+                if existing:
+                    existing_port = int(existing.get("port") or 0)
+                    existing_path = str(existing.get("path") or "")
+                    if existing_port != port or Path(existing_path).resolve() != local_dir.resolve():
+                        LOGGER.info("FTP site %s matches but has different configuration (port %s->%s, path %s->%s). Updating.",
+                                    site_name, existing_port, port, existing_path, local_dir)
+                        try:
+                            share_manager.update_ftp_site(
+                                site_name,
+                                local_path=local_dir,
+                                port=port
+                            )
+                        except Exception as exc:
+                            LOGGER.warning("Failed to update FTP site %s: %s", site_name, exc)
+                else:
+                    LOGGER.info("Creating new FTP site %s on port %d pointing to %s", site_name, port, local_dir)
+                    try:
+                        share_manager.create_ftp_site(
+                            site_name=site_name,
+                            local_path=local_dir,
+                            port=port
+                        )
+                    except Exception as exc:
+                        LOGGER.warning("Failed to create FTP site %s: %s", site_name, exc)
+
+        # 3. Clean up any FTP sites starting with "gox_scan_" that are no longer owned by this agent
+        for site in current_sites:
+            name = str(site.get("name") or "")
+            if name.startswith("gox_scan_"):
+                if name not in target_site_names:
+                    LOGGER.info("Deleting obsolete/inactive FTP site: %s", name)
+                    try:
+                        share_manager.delete_ftp_site(name)
+                    except Exception as exc:
+                        LOGGER.warning("Failed to delete FTP site %s: %s", name, exc)
 
     @staticmethod
     def _safe_int(value: object) -> int:
@@ -1375,7 +1479,7 @@ if ($node) {{ $node }}
             )
             raise
 
-    def _post_control_result(self, command_id: int, ok: bool, error: str = "") -> None:
+    def _post_control_result(self, command_id: int, ok: bool, error: str = "", address_book_data: dict[str, Any] | None = None) -> None:
         base_url = self._polling_base_url()
         if not base_url:
             return
@@ -1388,46 +1492,11 @@ if ($node) {{ $node }}
             "ok": bool(ok),
             "error": str(error or ""),
         }
+        if address_book_data:
+            payload["address_book_data"] = address_book_data
         headers = {"Content-Type": "application/json", "X-Lead-Token": token}
         response = self._api_client.session.post(url, json=payload, headers=headers, timeout=20)
         response.raise_for_status()
-
-    def _pull_ftp_controls(self, lan_uid: str) -> list[FtpControlCommand]:
-        base_url = self._polling_base_url()
-        if not base_url:
-            return []
-        token = self._config.get_string("polling.token").strip()
-        lead = self._config.get_string("polling.lead").strip()
-        params = {"lead": lead, "lan_uid": lan_uid, "agent_uid": self._agent_uid}
-        headers = {"Accept": "application/json", "X-Lead-Token": token}
-        url = f"{base_url}/api/polling/ftp-controls"
-        response = self._api_client.session.get(url, params=params, headers=headers, timeout=20)
-        response.raise_for_status()
-        payload = response.json()
-        rows = payload.get("rows", []) if isinstance(payload, dict) else []
-        commands = parse_ftp_control_rows(rows)
-        self._last_ftp_control_pull_at = self._now_iso()
-        self._last_ftp_control_total = len(commands)
-        return commands
-
-    def _post_ftp_control_result(self, command_id: int, ok: bool, error: str = "", warning: str = "") -> None:
-        base_url = self._polling_base_url()
-        if not base_url:
-            return
-        token = self._config.get_string("polling.token").strip()
-        lead = self._config.get_string("polling.lead").strip()
-        url = f"{base_url}/api/polling/ftp-control-result"
-        payload = {
-            "lead": lead,
-            "command_id": int(command_id),
-            "ok": bool(ok),
-            "error": str(error or ""),
-            "warning": str(warning or ""),
-        }
-        headers = {"Content-Type": "application/json", "X-Lead-Token": token}
-        response = self._api_client.session.post(url, json=payload, headers=headers, timeout=20)
-        response.raise_for_status()
-
     def _resolve_ftp_target_printer(self, command: FtpControlCommand, site_name: str) -> tuple[Printer, str]:
         fallback = Printer(
             id=0,
@@ -1538,6 +1607,7 @@ if ($node) {{ $node }}
     def _apply_command(self, printer: Printer, command: dict[str, object]) -> None:
         command_id = int(command.get("id", 0) or 0)
         desired_enabled = bool(command.get("desired_enabled", True))
+        command_type = str(command.get("command_type", "enable_disable")).strip().lower()
         if command_id <= 0:
             return
         auth_user = str(command.get("auth_user", "") or "").strip()
@@ -1546,12 +1616,176 @@ if ($node) {{ $node }}
             printer.user = auth_user
         if auth_password:
             printer.password = auth_password
+
+        if command_type == "fetch_address_book":
+            import socket
+            try:
+                # 1. On-demand sync of emails first
+                result_dict = {}
+                if getattr(self, "_emails", None):
+                    local_ip = self._resolve_local_ip()
+                    my_hostname = socket.gethostname().strip().lower()
+                    for em in (self._emails or []):
+                        etype = str(em.get("email_type") or "common").strip().lower()
+                        email = str(em.get("email") or "").strip().lower()
+                        port = int(em.get("email_number") or 0)
+                        if not email or port <= 0:
+                            continue
+                        if etype == "common":
+                            if self._is_master:
+                                result_dict[email] = (local_ip, port)
+                        elif etype == "private":
+                            pc_name = str(em.get("pc_name") or "").strip().lower()
+                            if pc_name == my_hostname:
+                                result_dict[email] = (local_ip, port)
+                if result_dict:
+                    try:
+                        self._reconcile_single_printer_address_book(printer, result_dict)
+                    except Exception as rec_exc:
+                        LOGGER.warning("On-demand reconciliation failed for printer %s: %s", printer.ip, rec_exc)
+
+                # 2. Fetch the entire address book of the Ricoh machine
+                result = self._ricoh_service.process_address_list(printer)
+                self._post_control_result(command_id=command_id, ok=True, error="", address_book_data=result)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.error("Failed to fetch address book for printer %s: %s", printer.ip, exc)
+                self._post_control_result(command_id=command_id, ok=False, error=str(exc))
+                raise
+            return
+
         try:
             self._apply_machine_control(printer, desired_enabled)
             self._post_control_result(command_id=command_id, ok=True, error="")
         except Exception as exc:  # noqa: BLE001
             self._post_control_result(command_id=command_id, ok=False, error=str(exc))
             raise
+
+    def _reconcile_single_printer_address_book(
+        self,
+        printer: Printer,
+        result_dict: dict[str, tuple[str, int]],
+    ) -> dict[str, Any]:
+        """
+        Synchronize the address book entries of a Ricoh photocopier.
+        Ensures all emails in the result_dict exist on the copier, pointing to their mapped agent's IP and FTP port.
+        """
+        if not result_dict:
+            return {"status": "none", "message": "No emails configured/owned."}
+
+        LOGGER.info("Starting address book reconciliation for Ricoh copier: %s (IP: %s)", printer.name, printer.ip)
+        details = []
+        has_error = False
+        
+        try:
+            # Create an authenticated session to read the address book
+            session = self._ricoh_service.create_http_client(printer, authenticated=True)
+            
+            # Read address entries
+            try:
+                ajax_raw = self._ricoh_service.get_address_list_ajax_with_client(session, printer)
+                entries = self._ricoh_service.parse_ajax_address_list(ajax_raw)
+            except Exception as ajax_exc:
+                LOGGER.debug("AJAX address book read failed, falling back to HTML: %s", ajax_exc)
+                html = self._ricoh_service.read_address_list_with_client(session, printer)
+                entries = self._ricoh_service.parse_address_list(html)
+
+            # Close the authenticated session used for reading
+            try:
+                session.close()
+            except Exception:
+                pass
+                
+        except Exception as read_exc:
+            LOGGER.error("Failed to read address book from printer %s: %s", printer.ip, read_exc)
+            return {
+                "status": "error",
+                "error": f"Failed to read address book: {read_exc}",
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        # We have the list of current entries. Now compare and sync each email in result_dict!
+        for email, (agent_ip, port) in result_dict.items():
+            expected_folder = f"ftp://{agent_ip}:{port}/"
+            
+            # Find a matching entry by email address (case-insensitive)
+            matched_entry = None
+            for e in entries:
+                e_email = getattr(e, "email_address", "") or ""
+                if e_email.strip().lower() == email:
+                    matched_entry = e
+                    break
+            
+            if matched_entry is None:
+                # Missing entry, let's create it!
+                LOGGER.info("Creating scan destination entry for %s on printer %s", email, printer.ip)
+                try:
+                    self._ricoh_service.create_address_user_wizard(
+                        printer=printer,
+                        name=email,
+                        email=email,
+                        folder=expected_folder,
+                        user_code="",
+                        fields={"entryTypeIn": "1"},  # 1 for user scan destination
+                    )
+                    details.append({
+                        "email": email,
+                        "action": "create",
+                        "status": "success",
+                        "folder": expected_folder,
+                    })
+                except Exception as create_exc:
+                    LOGGER.error("Failed to create scan destination for %s on %s: %s", email, printer.ip, create_exc)
+                    details.append({
+                        "email": email,
+                        "action": "create",
+                        "status": "error",
+                        "error": str(create_exc),
+                    })
+                    has_error = True
+            else:
+                # Entry exists, check if destination needs update
+                current_folder = getattr(matched_entry, "folder", "") or ""
+                if current_folder.strip().lower() != expected_folder.lower():
+                    LOGGER.info("Updating existing scan destination for %s on printer %s to %s", email, printer.ip, expected_folder)
+                    try:
+                        self._ricoh_service.modify_address_user_wizard(
+                            printer=printer,
+                            registration_no=matched_entry.registration_no,
+                            name=email,
+                            email=email,
+                            folder=expected_folder,
+                            user_code=getattr(matched_entry, "user_code", "") or "",
+                            fields={"entryTypeIn": "1"},
+                        )
+                        details.append({
+                            "email": email,
+                            "action": "update",
+                            "status": "success",
+                            "folder": expected_folder,
+                        })
+                    except Exception as update_exc:
+                        LOGGER.error("Failed to update scan destination for %s on %s: %s", email, printer.ip, update_exc)
+                        details.append({
+                            "email": email,
+                            "action": "update",
+                            "status": "error",
+                            "error": str(update_exc),
+                        })
+                        has_error = True
+                else:
+                    # Up to date!
+                    details.append({
+                        "email": email,
+                        "action": "none",
+                        "status": "success",
+                        "folder": expected_folder,
+                    })
+
+        return {
+            "status": "error" if has_error else "success",
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "details": details,
+        }
 
     def _worker(self) -> None:
         interval = self.interval_seconds()
@@ -1616,7 +1850,16 @@ if ($node) {{ $node }}
                     try:
                         command = controls[ip].get("command")
                         if isinstance(command, dict):
-                            self._apply_command(printer, command)
+                            # Run control command in a separate daemon thread to avoid blocking the main cycle
+                            def _run_async_command(p=printer, c=command):
+                                try:
+                                    self._apply_command(p, c)
+                                except Exception as async_exc:
+                                    LOGGER.warning("Async control apply failed for printer %s: %s", p.ip, async_exc)
+                            
+                            threading.Thread(target=_run_async_command, daemon=True).start()
+                            LOGGER.info("Started async thread to apply command for printer %s", ip)
+                        
                         self._applied_controls[ip] = bool(controls[ip].get("enabled", True))
                     except Exception as exc:  # noqa: BLE001
                         self._last_control_apply_error = str(exc)
@@ -1627,30 +1870,8 @@ if ($node) {{ $node }}
                             controls[ip].get("enabled", True),
                             exc,
                         )
-            ftp_controls: list[FtpControlCommand] = []
-            try:
-                ftp_controls = self._pull_ftp_controls(lan_uid=lan_uid)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Polling FTP control pull failed: %s", exc)
-                ftp_controls = []
-            if ftp_controls:
-                for command in ftp_controls:
-                    try:
-                        self._apply_ftp_command(command)
-                    except Exception as exc:  # noqa: BLE001
-                        self._last_ftp_control_apply_error = str(exc)
-                        command_id = int(command.id or 0)
-                        LOGGER.warning(
-                            "Polling FTP control apply failed: command_id=%s action=%s site=%s error=%s",
-                            command_id,
-                            command.action,
-                            command.site_name,
-                            exc,
-                        )
-                        try:
-                            self._post_ftp_control_result(command_id=command_id, ok=False, error=str(exc))
-                        except Exception as post_exc:  # noqa: BLE001
-                            LOGGER.warning("Polling FTP control result post failed: %s", post_exc)
+            # Legacy FTP control command queue (superseded by _reconcile_scan_address_ftp)
+            pass
             self._last_cycle_total_printers = len(printers)
             self._last_cycle_ricoh_printers = 0
             self._last_cycle_sent = 0
@@ -1662,15 +1883,22 @@ if ($node) {{ $node }}
                 self._last_cycle_total_printers,
                 interval,
             )
-            for printer in printers:
+            from concurrent.futures import ThreadPoolExecutor
+            cycle_lock = threading.Lock()
+
+            def _process_single_printer(printer: Printer) -> None:
                 if self._stop_event.is_set():
-                    break
-                if not str(printer.ip or "").strip():
-                    continue
-                if controls and not bool((controls.get(str(printer.ip or "").strip(), {}) or {}).get("enabled", True)):
+                    return
+                ip = str(printer.ip or "").strip()
+                if not ip:
+                    return
+                if controls and not bool((controls.get(ip, {}) or {}).get("enabled", True)):
                     LOGGER.info("Polling skipped (disabled): name=%s ip=%s", printer.name, printer.ip)
-                    continue
-                self._last_cycle_ricoh_printers += 1
+                    return
+                
+                with cycle_lock:
+                    self._last_cycle_ricoh_printers += 1
+                
                 try:
                     collector = self._collector_service_for(printer)
                     LOGGER.info("Polling collect: name=%s ip=%s type=%s", printer.name, printer.ip, printer.printer_type)
@@ -1693,12 +1921,23 @@ if ($node) {{ $node }}
                         "collector_ok": True,
                         "fingerprint_signature": fingerprint,
                     }
+                    
                     payload.update(runtime_metadata)
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
                     ack = self._post_payload(payload)
-                    self._last_cycle_sent += 1
-                    self._last_success_at = self._now_iso()
-                    self._last_error = ""
+                    
+                    with cycle_lock:
+                        self._is_master = bool(ack.get("is_master", False))
+                        self._emails = ack.get("emails") if isinstance(ack.get("emails"), list) else []
+                        self._last_cycle_sent += 1
+                        self._last_success_at = self._now_iso()
+                        self._last_error = ""
+                    
+                    try:
+                        self._reconcile_scan_address_ftp(self._is_master, self._emails)
+                    except Exception as ftp_exc:
+                        LOGGER.warning("FTP reconciliation failed during polling cycle: %s", ftp_exc)
+                    
                     LOGGER.info(
                         "Polling ack <- inserted(counter=%s,status=%s) skipped(counter=%s,status=%s)",
                         ack.get("inserted_counter", "?"),
@@ -1707,8 +1946,9 @@ if ($node) {{ $node }}
                         ack.get("skipped_status", "?"),
                     )
                 except Exception as exc:  # noqa: BLE001
-                    self._last_cycle_failed += 1
-                    self._last_error = str(exc)
+                    with cycle_lock:
+                        self._last_cycle_failed += 1
+                        self._last_error = str(exc)
                     LOGGER.warning("Polling bridge failed for %s (%s): %s", printer.name, printer.ip, exc)
                     # Always send heartbeat payload even when collector fails.
                     try:
@@ -1730,10 +1970,21 @@ if ($node) {{ $node }}
                             "collector_error": str(exc),
                             "fingerprint_signature": fingerprint,
                         }
+                        
                         fallback_payload.update(runtime_metadata)
                         ack = self._post_payload(fallback_payload)
-                        self._last_cycle_sent += 1
-                        self._last_success_at = self._now_iso()
+                        
+                        with cycle_lock:
+                            self._is_master = bool(ack.get("is_master", False))
+                            self._emails = ack.get("emails") if isinstance(ack.get("emails"), list) else []
+                            self._last_cycle_sent += 1
+                            self._last_success_at = self._now_iso()
+                        
+                        try:
+                            self._reconcile_scan_address_ftp(self._is_master, self._emails)
+                        except Exception as ftp_exc:
+                            LOGGER.warning("FTP reconciliation failed during polling fallback: %s", ftp_exc)
+                        
                         LOGGER.info(
                             "Polling fallback ack <- inserted(counter=%s,status=%s) skipped(counter=%s,status=%s)",
                             ack.get("inserted_counter", "?"),
@@ -1743,6 +1994,11 @@ if ($node) {{ $node }}
                         )
                     except Exception as post_exc:  # noqa: BLE001
                         LOGGER.warning("Polling fallback post failed for %s (%s): %s", printer.name, printer.ip, post_exc)
+
+            # Poll printers in parallel using ThreadPoolExecutor
+            if printers:
+                with ThreadPoolExecutor(max_workers=min(16, len(printers))) as executor:
+                    executor.map(_process_single_printer, printers)
             LOGGER.info(
                 "Polling cycle done: total=%s ricoh=%s sent=%s failed=%s",
                 self._last_cycle_total_printers,

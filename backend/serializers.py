@@ -118,7 +118,7 @@ def _upsert_lan_and_agent(
             run_mode=run_mode or "web",
             web_port=web_port or 9173,
             ftp_ports=ftp_ports or "",
-            ftp_sites=ftp_sites if ftp_sites is not None else [],
+            ftp_sites=ftp_sites,
             is_online=bool(is_online),
             online_changed_at=seen_at,
         )
@@ -135,7 +135,6 @@ def _upsert_lan_and_agent(
                 run_mode=run_mode or "web",
                 web_port=web_port or 9173,
                 ftp_ports=ftp_ports or "",
-                ftp_sites=ftp_sites if ftp_sites is not None else [],
                 is_online=bool(is_online),
                 changed_at=seen_at,
                 last_seen_at=seen_at,
@@ -169,7 +168,6 @@ def _upsert_lan_and_agent(
                     run_mode=run_mode or agent.run_mode or "web",
                     web_port=web_port or agent.web_port or 9173,
                     ftp_ports=ftp_ports or agent.ftp_ports or "",
-                    ftp_sites=ftp_sites if ftp_sites is not None else list(agent.ftp_sites or []),
                     is_online=next_online,
                     changed_at=seen_at,
                     last_seen_at=seen_at,
@@ -343,7 +341,7 @@ def _apply_printer_enabled_state(session: Any, printer: Printer, enabled: bool, 
 
 
 def _refresh_stale_offline(session: Any, lead: str = "", lan_uid: str = "", agent_uid: str = "") -> None:
-    ONLINE_STALE_SECONDS = 300
+    ONLINE_STALE_SECONDS = 600
     stale_before = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_STALE_SECONDS)
     stmt = select(Printer).where(Printer.is_online.is_(True), Printer.updated_at < stale_before)
     if lead:
@@ -365,9 +363,9 @@ def _refresh_stale_agent_offline(
     lead: str = "",
     lan_uid: str = "",
     agent_uid: str = "",
-    stale_seconds: int = 300,
+    stale_seconds: int = 600,
 ) -> None:
-    stale_seconds = max(30, int(stale_seconds or 300))
+    stale_seconds = max(30, int(stale_seconds or 600))
     stale_before = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
     stmt = select(AgentNode).where(AgentNode.is_online.is_(True), AgentNode.last_seen_at < stale_before)
     if lead:
@@ -394,7 +392,6 @@ def _refresh_stale_agent_offline(
                 app_version=item.app_version or "",
                 run_mode=item.run_mode or "web",
                 web_port=int(item.web_port or 9173),
-                ftp_sites=list(item.ftp_sites or []),
                 is_online=False,
                 changed_at=now,
                 last_seen_at=item.last_seen_at or now,
