@@ -55,6 +55,27 @@ def register_ui_routes(app: Flask, session_factory: Any) -> None:
     def lan_sites_page() -> Any:
         return render_template("lan_sites.html", active_tab="lan_sites", page_title="Lan Network")
 
+    @app.get("/printagent")
+    def printagent_page() -> Any:
+        from models import Printer
+        from sqlalchemy import select
+        with session_factory() as session:
+            printer = session.execute(
+                select(Printer).where(Printer.ip == "192.168.1.226")
+            ).scalar_one_or_none()
+            printer_id = printer.id if printer else None
+            lead = printer.lead if printer else None
+            lan_uid = printer.lan_uid if printer else None
+        return render_template(
+            "printagent.html",
+            active_tab="printagent",
+            page_title="PrintAgent Manager",
+            printer_ip="192.168.1.226",
+            printer_id=printer_id,
+            lead=lead,
+            lan_uid=lan_uid
+        )
+
     @app.get("/standalone")
     def standalone_page() -> Any:
         return render_template("lan_sites.html", active_tab="standalone", page_title="Standalone")

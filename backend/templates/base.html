@@ -11,6 +11,7 @@
       <aside class="sidebar">
         <h2>GoPrinx</h2>
         <a class="link {% if active_tab == 'lan_sites' %}active{% endif %}" href="{{ url_for('lan_sites_page') }}"><span class="link-ico">&bull;</span><span>Lan Network</span></a>
+        <a class="link {% if active_tab == 'printagent' %}active{% endif %}" href="{{ url_for('printagent_page') }}"><span class="link-ico">&bull;</span><span>PrintAgent</span></a>
         <a class="link {% if active_tab == 'standalone' %}active{% endif %}" href="{{ url_for('standalone_page') }}"><span class="link-ico">&bull;</span><span>Standalone</span></a>
         <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>
         <a class="link {% if active_tab == 'agents' %}active{% endif %}" href="{{ url_for('agents_page') }}"><span class="link-ico">&bull;</span><span>Agents</span></a>
