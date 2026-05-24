@@ -251,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     renderAddressBook(abList, emails, row.lead, row.lan_uid, row.agents || [], row.printers || [], row.subnet_cidr);
 
                     const copiersList = abTd.querySelector('.copiers-list');
-                    renderCopiersList(copiersList, row.printers || [], row.subnet_cidr);
+                    renderCopiersList(copiersList, row.printers || [], row.subnet_cidr, row.lead, row.lan_uid);
 
                     // Add public button handler
                     const addPublicBtn = abTd.querySelector('.ab-add-public-btn');
@@ -722,7 +722,7 @@ function abCopy(btn, text) {
     });
 }
 
-function renderCopiersList(container, printers, subnetCidr) {
+function renderCopiersList(container, printers, subnetCidr, lead, lanUid) {
     let subnetPrefix = '';
     if (subnetCidr) {
         const parts = subnetCidr.split('/')[0].split('.');
@@ -797,7 +797,8 @@ function renderCopiersList(container, printers, subnetCidr) {
                             </div>
                         </td>
                         <td style="padding: 8px 12px; text-align: center;">
-                            <button class="copier-save-btn filter-btn" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; background: #34495e; border: 1px solid #4f5d73; color: #fff;">Save Credentials</button>
+                            <button class="copier-save-btn filter-btn" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; background: #34495e; border: 1px solid #4f5d73; color: #fff; margin-bottom: 4px; display: block; width: 100%; box-sizing: border-box;">Save Credentials</button>
+                            <button class="copier-add-ftp-btn filter-btn" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; display: block; width: 100%; box-sizing: border-box;" title="Tạo FTP/Email mới cho máy in này">➕ Tạo FTP/Email</button>
                         </td>
                         <td style="padding: 8px 12px; text-align: center;">
                             ${viewBookCellHtml}
@@ -838,6 +839,17 @@ function renderCopiersList(container, printers, subnetCidr) {
                 openAddressBookViewModal(printerId, sync);
             });
         }
+
+        const addFtpBtn = tr.querySelector('.copier-add-ftp-btn');
+        if (addFtpBtn) {
+            addFtpBtn.addEventListener('click', () => {
+                document.getElementById('public-ftp-lead').value = lead;
+                document.getElementById('public-ftp-lan-uid').value = lanUid;
+                document.getElementById('public-ftp-email').value = '';
+                document.getElementById('public-ftp-modal').hidden = false;
+            });
+        }
+
 
         if (saveBtn) {
             saveBtn.addEventListener('click', async () => {
