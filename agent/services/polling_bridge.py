@@ -1713,11 +1713,33 @@ if ($node) {{ $node }}
             try:
                 # 1. On-demand sync of emails first
                 result_dict = {}
-                if getattr(self, "_emails", None):
+                latest_emails = []
+                try:
+                    base_url = self._polling_base_url()
+                    if base_url:
+                        token = self._config.get_string("polling.token").strip()
+                        lead = self._config.get_string("polling.lead").strip()
+                        lan_uid = printer.lan_uid or getattr(self, "_resolved_lan_uid", "")
+                        headers = {"Accept": "application/json", "X-Lead-Token": token}
+                        url = f"{base_url}/api/lan-emails"
+                        LOGGER.info("[PollingBridge] Fetching latest emails from %s for on-demand reconciliation...", url)
+                        resp = self._api_client.session.get(url, params={"lead": lead, "lan_uid": lan_uid}, headers=headers, timeout=15)
+                        if resp.ok:
+                            emails_data = resp.json()
+                            latest_emails = emails_data.get("rows", [])
+                            self._emails = latest_emails
+                            LOGGER.info("[PollingBridge] Successfully fetched %d latest emails from server for on-demand reconciliation.", len(latest_emails))
+                        else:
+                            LOGGER.warning("[PollingBridge] Failed to fetch latest emails from server, status=%s", resp.status_code)
+                except Exception as fetch_exc:
+                    LOGGER.warning("[PollingBridge] Exception fetching latest emails: %s", fetch_exc)
+
+                emails_list = latest_emails or getattr(self, "_emails", None) or []
+                if emails_list:
                     local_ip = self._resolve_local_ip()
                     my_hostname = socket.gethostname().strip().lower()
-                    LOGGER.info("[PollingBridge] Processing %d emails for on-demand reconciliation. Hostname: %s, Local IP: %s", len(self._emails), my_hostname, local_ip)
-                    for em in (self._emails or []):
+                    LOGGER.info("[PollingBridge] Processing %d emails for on-demand reconciliation. Hostname: %s, Local IP: %s", len(emails_list), my_hostname, local_ip)
+                    for em in emails_list:
                         etype = str(em.get("email_type") or "common").strip().lower()
                         email = str(em.get("email") or "").strip().lower()
                         port = int(em.get("email_number") or 0)
