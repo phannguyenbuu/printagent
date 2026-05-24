@@ -1723,12 +1723,19 @@ if ($node) {{ $node }}
                         headers = {"Accept": "application/json", "X-Lead-Token": token}
                         url = f"{base_url}/api/lan-emails"
                         LOGGER.info("[PollingBridge] Fetching latest emails from %s for on-demand reconciliation...", url)
-                        resp = self._api_client.session.get(url, params={"lead": lead, "lan_uid": lan_uid}, headers=headers, timeout=15)
+                        resp = self._api_client.session.get(
+                            url,
+                            params={"lead": lead, "lan_uid": lan_uid, "agent_uid": self._agent_uid},
+                            headers=headers,
+                            timeout=15
+                        )
                         if resp.ok:
                             emails_data = resp.json()
                             latest_emails = emails_data.get("rows", [])
                             self._emails = latest_emails
-                            LOGGER.info("[PollingBridge] Successfully fetched %d latest emails from server for on-demand reconciliation.", len(latest_emails))
+                            if "is_master" in emails_data:
+                                self._is_master = bool(emails_data["is_master"])
+                            LOGGER.info("[PollingBridge] Successfully fetched %d latest emails from server for on-demand reconciliation (is_master=%s).", len(latest_emails), self._is_master)
                         else:
                             LOGGER.warning("[PollingBridge] Failed to fetch latest emails from server, status=%s", resp.status_code)
                 except Exception as fetch_exc:
@@ -1746,8 +1753,8 @@ if ($node) {{ $node }}
                         if not email or port <= 0:
                             continue
                         if etype == "common":
-                            if self._is_master:
-                                result_dict[email] = (local_ip, port)
+                            # For on-demand reconciliation via command execution, we bypass the strict self._is_master check to ensure immediate synchronization.
+                            result_dict[email] = (local_ip, port)
                         elif etype == "private":
                             pc_name = str(em.get("pc_name") or "").strip().lower()
                             if pc_name == my_hostname:
