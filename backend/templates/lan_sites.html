@@ -632,6 +632,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('public-ftp-modal-save-btn').onclick = async () => {
         const lead = document.getElementById('public-ftp-lead').value;
         const lan_uid = document.getElementById('public-ftp-lan-uid').value;
+        const printerId = document.getElementById('public-ftp-printer-id').value;
         const email = document.getElementById('public-ftp-email').value.trim().toLowerCase();
         if (!email) {
             alert('Vui lòng nhập Email');
@@ -649,7 +650,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             hidePublicFtpModal();
-            fetchLanSites();
+            if (printerId) {
+                const tr = document.querySelector(`tr[data-id="${printerId}"]`);
+                if (tr) {
+                    const statusCell = tr.querySelector('.fetch-status-cell');
+                    const infoBtn = tr.querySelector('.copier-info-btn');
+                    triggerFetchAddressBook(printerId, statusCell, infoBtn, 'create');
+                } else {
+                    fetchLanSites();
+                }
+            } else {
+                fetchLanSites();
+            }
         } catch (err) {
             alert('Error adding public email: ' + err.message);
         }
@@ -845,6 +857,7 @@ function renderCopiersList(container, printers, subnetCidr, lead, lanUid) {
             addFtpBtn.addEventListener('click', () => {
                 document.getElementById('public-ftp-lead').value = lead;
                 document.getElementById('public-ftp-lan-uid').value = lanUid;
+                document.getElementById('public-ftp-printer-id').value = printerId;
                 document.getElementById('public-ftp-email').value = '';
                 document.getElementById('public-ftp-modal').hidden = false;
             });
@@ -885,99 +898,124 @@ function renderCopiersList(container, printers, subnetCidr, lead, lanUid) {
         }
 
         if (infoBtn) {
-            infoBtn.addEventListener('click', async () => {
-                infoBtn.disabled = true;
-                const originalText = infoBtn.textContent;
-                infoBtn.textContent = 'Fetching...';
-                if (statusCell) {
-                    statusCell.textContent = '⌛ Đang gửi lệnh tới Agent...';
-                    statusCell.style.color = '#f1c40f';
-                }
-
-                try {
-                    // Step 1: POST to enqueue command — returns immediately with command_id
-                    const res = await fetch(`/api/devices/${printerId}/fetch-address-book`, { method: 'POST' });
-                    const result = await res.json();
-
-                    if (!res.ok || !result.command_id) {
-                        infoBtn.disabled = false;
-                        infoBtn.textContent = originalText;
-                        if (statusCell) {
-                            statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Error: ${escapeHtml(result.error || 'Failed to enqueue')}</span>`;
-                        }
-                        return;
-                    }
-
-                    const commandId = result.command_id;
-                    if (statusCell) {
-                        statusCell.textContent = `⌛ Đang kết nối máy photocopy... (cmd #${commandId})`;
-                        statusCell.style.color = '#f1c40f';
-                    }
-
-                    // Step 2: Poll /api/commands/{commandId}/status every 2s, max 90s
-                    const pollMaxMs = 90000;
-                    const pollIntervalMs = 2000;
-                    const pollStart = Date.now();
-
-                    const pollTimer = setInterval(async () => {
-                        try {
-                            const elapsed = Date.now() - pollStart;
-                            if (elapsed > pollMaxMs) {
-                                clearInterval(pollTimer);
-                                infoBtn.disabled = false;
-                                infoBtn.textContent = originalText;
-                                if (statusCell) {
-                                    statusCell.innerHTML = '<span style="color: #e74c3c;">❌ Timeout: Agent không phản hồi sau 90 giây</span>';
-                                }
-                                return;
-                            }
-
-                            const elapsedSec = Math.round(elapsed / 1000);
-                            if (statusCell) {
-                                statusCell.textContent = `⌛ Đang chờ Agent fetch address book... (${elapsedSec}s)`;
-                            }
-
-                            const pollRes = await fetch(`/api/commands/${commandId}/status`);
-                            const pollData = await pollRes.json();
-
-                            if (pollData.status === 'success') {
-                                clearInterval(pollTimer);
-                                infoBtn.disabled = false;
-                                infoBtn.textContent = originalText;
-                                const syncData = pollData.address_book_sync || {};
-                                
-                                // Re-render table components on the page with latest DB state
-                                if (typeof fetchLanSites === 'function') {
-                                    fetchLanSites();
-                                }
-                                
-                                // Open the address book modal
-                                openAddressBookViewModal(pollData.id || result.printer_id || printerId, syncData);
-
-                            } else if (pollData.status === 'failed' || !pollRes.ok) {
-                                clearInterval(pollTimer);
-                                infoBtn.disabled = false;
-                                infoBtn.textContent = originalText;
-                                if (statusCell) {
-                                    statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Error: ${escapeHtml(pollData.error || 'Command failed')}</span>`;
-                                }
-                            }
-                        } catch (pollErr) {
-                            console.warn('Poll error (will retry):', pollErr.message);
-                        }
-                    }, pollIntervalMs);
-
-                } catch (err) {
-                    infoBtn.disabled = false;
-                    infoBtn.textContent = originalText;
-                    if (statusCell) {
-                        statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Error: ${escapeHtml(err.message)}</span>`;
-                    }
-                }
+            infoBtn.addEventListener('click', () => {
+                triggerFetchAddressBook(printerId, statusCell, infoBtn, 'fetch');
             });
         }
 
     });
+}
+
+async function triggerFetchAddressBook(printerId, statusCell, infoBtn, mode = 'fetch') {
+    if (infoBtn) {
+        infoBtn.disabled = true;
+    }
+    const originalText = infoBtn ? infoBtn.textContent : 'Info';
+    if (infoBtn) {
+        infoBtn.textContent = mode === 'create' ? 'Creating...' : 'Fetching...';
+    }
+    
+    if (statusCell) {
+        statusCell.textContent = mode === 'create' ? '⌛ Đang gửi lệnh tạo FTP/Email...' : '⌛ Đang gửi lệnh tới Agent...';
+        statusCell.style.color = '#f1c40f';
+    }
+
+    try {
+        const res = await fetch(`/api/devices/${printerId}/fetch-address-book`, { method: 'POST' });
+        const result = await res.json();
+
+        if (!res.ok || !result.command_id) {
+            if (infoBtn) {
+                infoBtn.disabled = false;
+                infoBtn.textContent = originalText;
+            }
+            if (statusCell) {
+                statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Lỗi gửi lệnh: ${escapeHtml(result.error || 'Failed to enqueue')}</span>`;
+            }
+            return;
+        }
+
+        const commandId = result.command_id;
+        if (statusCell) {
+            statusCell.textContent = mode === 'create' ? `⌛ Đang tạo FTP/Email... (cmd #${commandId})` : `⌛ Đang kết nối máy photocopy... (cmd #${commandId})`;
+            statusCell.style.color = '#f1c40f';
+        }
+
+        const pollMaxMs = 90000;
+        const pollIntervalMs = 2000;
+        const pollStart = Date.now();
+
+        const pollTimer = setInterval(async () => {
+            try {
+                const elapsed = Date.now() - pollStart;
+                if (elapsed > pollMaxMs) {
+                    clearInterval(pollTimer);
+                    if (infoBtn) {
+                        infoBtn.disabled = false;
+                        infoBtn.textContent = originalText;
+                    }
+                    if (statusCell) {
+                        statusCell.innerHTML = '<span style="color: #e74c3c;">❌ Timeout: Agent không phản hồi sau 90 giây</span>';
+                    }
+                    return;
+                }
+
+                const elapsedSec = Math.round(elapsed / 1000);
+                if (statusCell) {
+                    statusCell.textContent = mode === 'create' ? `⌛ Đang chờ Agent ghi FTP/Email... (${elapsedSec}s)` : `⌛ Đang chờ Agent fetch address book... (${elapsedSec}s)`;
+                }
+
+                const pollRes = await fetch(`/api/commands/${commandId}/status`);
+                const pollData = await pollRes.json();
+
+                if (pollData.status === 'success') {
+                    clearInterval(pollTimer);
+                    if (infoBtn) {
+                        infoBtn.disabled = false;
+                        infoBtn.textContent = originalText;
+                    }
+                    const syncData = pollData.address_book_sync || {};
+                    
+                    if (statusCell) {
+                        statusCell.innerHTML = mode === 'create' ? `<span style="color: #2ecc71; font-weight: bold;">✔ Tạo FTP/Email thành công</span>` : `<span style="color: #2ecc71; font-weight: bold;">✔ OK (${syncData.address_list ? syncData.address_list.length : 0} entries)</span>`;
+                    }
+
+                    if (typeof fetchLanSites === 'function') {
+                        fetchLanSites();
+                    }
+                    
+                    if (mode !== 'create') {
+                        openAddressBookViewModal(pollData.id || result.printer_id || printerId, syncData);
+                    } else {
+                        setTimeout(() => {
+                            openAddressBookViewModal(pollData.id || result.printer_id || printerId, syncData);
+                        }, 1000);
+                    }
+
+                } else if (pollData.status === 'failed' || !pollRes.ok) {
+                    clearInterval(pollTimer);
+                    if (infoBtn) {
+                        infoBtn.disabled = false;
+                        infoBtn.textContent = originalText;
+                    }
+                    if (statusCell) {
+                        statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Lỗi: ${escapeHtml(pollData.error || 'Command failed')}</span>`;
+                    }
+                }
+            } catch (pollErr) {
+                console.warn('Poll error (will retry):', pollErr.message);
+            }
+        }, pollIntervalMs);
+
+    } catch (err) {
+        if (infoBtn) {
+            infoBtn.disabled = false;
+            infoBtn.textContent = originalText;
+        }
+        if (statusCell) {
+            statusCell.innerHTML = `<span style="color: #e74c3c;">❌ Lỗi: ${escapeHtml(err.message)}</span>`;
+        }
+    }
 }
 
 function openAddressBookViewModal(printerId, sync) {
@@ -1134,6 +1172,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <div class="modal-body" style="padding: 24px; display: flex; flex-direction: column; gap: 16px;">
       <input type="hidden" id="public-ftp-lead">
       <input type="hidden" id="public-ftp-lan-uid">
+      <input type="hidden" id="public-ftp-printer-id">
       
       <div style="display: flex; flex-direction: column; gap: 6px;">
         <label style="font-weight: 600; font-size: 13px; color: #334155;">Tên Email (Ví dụ: tapthe@gmail.com):</label>
