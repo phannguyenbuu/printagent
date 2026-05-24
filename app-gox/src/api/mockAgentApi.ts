@@ -1,6 +1,6 @@
 import type { Agent, AgentActionResult, PrinterDriverConfig, ScanConfig, Copier } from '../types/agent';
 
-const BASE_URL = 'https://agentapi.quanlymay.com';
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://agentapi.quanlymay.com';
 
 async function fetchApi(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -17,8 +17,11 @@ async function fetchApi(path: string, options: RequestInit = {}) {
   return res.json();
 }
 
-export async function mockGetAgents(): Promise<Agent[]> {
-  const data = await fetchApi('/api/infor/list?lead=default');
+export async function mockGetAgents(lanUid?: string): Promise<Agent[]> {
+  const url = lanUid
+    ? `/api/infor/list?lead=default&lan_uid=${encodeURIComponent(lanUid)}`
+    : '/api/infor/list?lead=default';
+  const data = await fetchApi(url);
   const uniqueAgents = new Map();
   
   (data.rows || []).forEach((r: any) => {
@@ -41,8 +44,42 @@ export async function mockGetAgents(): Promise<Agent[]> {
   return Array.from(uniqueAgents.values());
 }
 
-export async function mockInstallPrinterDriver(agentId: string, _config: PrinterDriverConfig): Promise<AgentActionResult> {
-  return { success: true, message: `Lệnh cài driver đã được gửi đến agent ${agentId}`, agentId };
+export async function mockInstallPrinterDriver(agentId: string, config: PrinterDriverConfig): Promise<AgentActionResult> {
+  try {
+    const res = await fetchApi(`/api/devices/${config.printerIp}/install-driver`, {
+      method: 'POST',
+      body: JSON.stringify({
+        brand: config.brand,
+        model: config.model,
+        driver_name: config.driverName,
+        driver_url: config.driverUrl || '',
+      }),
+    });
+    return {
+      success: res.ok !== false,
+      message: res.message || `Lệnh cài driver đã được gửi thành công.`,
+      agentId
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Lỗi cài driver: ${err.message}`,
+      agentId
+    };
+  }
+}
+
+export async function getDriversCatalog(brand: string): Promise<any[]> {
+  try {
+    const res = await fetchApi(`/api/drivers/${brand.toLowerCase()}`);
+    if (res.ok && res.data) {
+      return res.data;
+    }
+    return [];
+  } catch (err) {
+    console.error('Failed to fetch drivers catalog:', err);
+    return [];
+  }
 }
 
 export async function mockInstallScan(agentId: string, _config: ScanConfig): Promise<AgentActionResult> {
@@ -61,22 +98,100 @@ export async function mockSendNotification(_agentId: string | 'all', _message: s
   return { success: true, message: `Đã gửi thông báo` };
 }
 
-export async function mockGetCopiers(): Promise<Copier[]> {
-  const data = await fetchApi('/api/infor/list?lead=default');
-  return (data.rows || []).map((r: any) => ({
-    id: r.mac_id,
-    name: r.printer_name || 'Ricoh Printer',
-    model: 'MP 7503',
-    ipAddress: r.ip,
-    macId: r.mac_id,
-    status: r.is_latest ? 'online' : 'offline',
-    lastSeen: r.updated_at,
-    connectedPCs: [r.agent_uid],
-    driverVersion: 'v1.0',
-    location: r.lan_uid,
-    isConfigured: true,
-  }));
+export interface LanSiteInfo {
+  lan_uid: string;
+  lan_name: string;
+  gateway_ip: string;
+  active_agents: number;
+  printers: Array<{
+    id: number;
+    printer_name: string;
+    ip: string;
+    mac_id: string;
+    is_online: boolean;
+    enabled: boolean;
+  }>;
 }
+
+export async function getLanSites(): Promise<LanSiteInfo[]> {
+  try {
+    const res = await fetchApi('/api/lan-sites?lead=default');
+    return res.rows || [];
+  } catch (err) {
+    console.error('Failed to fetch LAN sites:', err);
+    return [];
+  }
+}
+
+export async function mockGetCopiers(lanUid?: string): Promise<Copier[]> {
+  // Use lan-sites API when filtering by LAN (includes printers per LAN)
+  if (lanUid) {
+    try {
+      const res = await fetchApi(`/api/lan-sites?lead=default`);
+      const lanRow = (res.rows || []).find((r: any) => r.lan_uid === lanUid);
+      if (!lanRow) return [];
+      return (lanRow.printers || []).map((p: any) => {
+        const printerType = (p.printer_type || p.printer_name || '').toLowerCase();
+        let brand: 'Ricoh' | 'Toshiba' | 'Xerox' = 'Ricoh';
+        if (printerType.includes('toshiba')) brand = 'Toshiba';
+        else if (printerType.includes('xerox') || printerType.includes('fujifilm')) brand = 'Xerox';
+        const rawName: string = p.printer_name || '';
+        const model = rawName.replace(/^(ricoh|toshiba|xerox|fujifilm)\s*/i, '').trim() || 'Unknown';
+        return {
+          id: String(p.id),
+          name: rawName || 'Máy photocopy',
+          brand,
+          model,
+          ipAddress: p.ip,
+          macId: p.mac_id || '',
+          status: p.is_online ? 'online' as const : 'offline' as const,
+          lastSeen: '',
+          connectedPCs: [],
+          driverVersion: '',
+          location: lanUid,
+          isConfigured: p.enabled ?? true,
+        };
+      });
+    } catch (err) {
+      console.error('Failed to fetch copiers by LAN:', err);
+      return [];
+    }
+  }
+
+  // Fallback: load all from /api/infor/list (no LAN filter)
+  const data = await fetchApi('/api/infor/list?lead=default');
+  const uniqueCopiers = new Map<string, Copier>();
+  (data.rows || []).forEach((r: any) => {
+    const key = r.mac_id || r.ip;
+    if (!key || uniqueCopiers.has(key)) return;
+
+    const printerType = (r.printer_type || '').toLowerCase();
+    let brand: 'Ricoh' | 'Toshiba' | 'Xerox' = 'Ricoh';
+    if (printerType.includes('toshiba')) brand = 'Toshiba';
+    else if (printerType.includes('xerox') || printerType.includes('fujifilm')) brand = 'Xerox';
+
+    const rawName: string = r.printer_name || '';
+    const model = rawName.replace(/^(ricoh|toshiba|xerox|fujifilm)\s*/i, '').trim() || 'Unknown';
+
+    uniqueCopiers.set(key, {
+      id: key,
+      name: rawName || 'Máy photocopy',
+      brand,
+      model,
+      ipAddress: r.ip,
+      macId: r.mac_id || '',
+      status: r.is_latest ? 'online' as const : 'offline' as const,
+      lastSeen: r.updated_at,
+      connectedPCs: [r.agent_uid].filter(Boolean),
+      driverVersion: r.driver_version || '',
+      location: r.lan_uid,
+      isConfigured: true,
+    });
+  });
+  return Array.from(uniqueCopiers.values());
+}
+
+
 
 export async function mockConfigureCopier(
   copierId: string,

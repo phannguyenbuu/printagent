@@ -19,7 +19,13 @@ def main():
     
     # We will read version from a file, or prompt / default
     # Let's see if there is an existing version we should use, e.g. "1.3.56"
-    version = "1.3.62"
+    version = "1.3.76"
+    
+    exclude_names = {
+        "address_book.py",
+        "wizard.py",
+        "web_scan.py"
+    }
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for file_path in agent_dir.rglob('*'):
@@ -29,6 +35,8 @@ def main():
             if ".git" in file_path.parts:
                 continue
             if file_path.suffix in {".pyc", ".pyo", ".db", ".log"}:
+                continue
+            if file_path.name in exclude_names:
                 continue
                 
             if file_path.is_file():
@@ -66,6 +74,14 @@ def main():
     import shutil
     shutil.copy2(zip_path, static_releases_dir / "agent_core.zip")
     print(f"Copied agent_core.zip to static releases path: {static_releases_dir / 'agent_core.zip'}")
+    
+    scripts_to_copy = ["scan_ricoh.py", "ricoh_address_book.py", "ricoh_wizard.py", "ricoh_web_scan.py"]
+    for script_name in scripts_to_copy:
+        script_file = root / script_name
+        if script_file.exists():
+            shutil.copy2(script_file, static_releases_dir / script_name)
+            print(f"Copied {script_name} to static releases path: {static_releases_dir / script_name}")
 
 if __name__ == "__main__":
     main()
+

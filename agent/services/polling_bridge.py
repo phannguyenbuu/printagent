@@ -69,8 +69,12 @@ class PollingBridge:
         self._last_ftp_control_total = 0
         self._last_ftp_control_apply_error = ""
         self._applied_controls: dict[str, bool] = {}
+        self._applied_ftp_controls: dict[str, bool] = {}
         self._control_retry_after: dict[str, datetime] = {}
         self._resolved_lan_uid = ""
+        self._control_thread: threading.Thread | None = None
+        self._running_commands: set[int] = set()
+        self._running_commands_lock = threading.Lock()
         self._agent_uid = get_machine_agent_uid(self._config.get_string("polling.agent_uid", ""))
         self._scan_last_cycle_at = ""
         self._scan_last_detected_at = ""
@@ -551,6 +555,8 @@ Get-NetNeighbor -AddressFamily IPv4 |
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._worker, daemon=True, name="polling-bridge")
         self._thread.start()
+        self._control_thread = threading.Thread(target=self._control_loop, daemon=True, name="polling-control")
+        self._control_thread.start()
         self._last_started_at = self._now_iso()
         LOGGER.info(
             "Polling bridge started: url=%s lead=%s interval=%ss",
@@ -568,6 +574,11 @@ Get-NetNeighbor -AddressFamily IPv4 |
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._control_thread and self._control_thread.is_alive():
+                self._control_thread.join(timeout=3)
         except Exception:  # noqa: BLE001
             pass
         LOGGER.info("Polling bridge stop requested")
@@ -769,6 +780,65 @@ Get-NetNeighbor -AddressFamily IPv4 |
     @staticmethod
     def _write_last_payload(payload: dict) -> None:
         LOGGER.debug("Polling payload kept in-memory only; not writing local snapshot")
+
+    def _check_and_update_scripts(self, remote_scripts: dict[str, str]) -> None:
+        if not remote_scripts or not isinstance(remote_scripts, dict):
+            return
+        
+        import os
+        from pathlib import Path
+        temp_dir = os.environ.get("TEMP")
+        if temp_dir:
+            scripts_dir = Path(temp_dir) / "GoPrinxAgent" / "scripts"
+        else:
+            import tempfile
+            scripts_dir = Path(tempfile.gettempdir()) / "GoPrinxAgent" / "scripts"
+            
+        try:
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+            
+        base_url = self._polling_base_url()
+        if not base_url:
+            return
+            
+        token = self._config.get_string("polling.token").strip()
+        headers = {"X-Lead-Token": token}
+        
+        updated_any = False
+        import hashlib
+        
+        for name, expected_hash in remote_scripts.items():
+            script_path = scripts_dir / name
+            current_hash = ""
+            if script_path.exists():
+                try:
+                    current_hash = hashlib.md5(script_path.read_bytes()).hexdigest()
+                except Exception:
+                    pass
+            
+            if current_hash != expected_hash:
+                LOGGER.info("Script %s needs update (local hash: %s, remote hash: %s)", name, current_hash, expected_hash)
+                script_url = f"{base_url}/static/releases/{name}"
+                try:
+                    resp = requests.get(script_url, headers=headers, timeout=15)
+                    if resp.status_code == 200:
+                        script_path.write_bytes(resp.content)
+                        LOGGER.info("Successfully updated dynamic script: %s", name)
+                        updated_any = True
+                    else:
+                        LOGGER.warning("Failed to download script %s: status %s", name, resp.status_code)
+                except Exception as exc:
+                    LOGGER.warning("Error downloading script %s: %s", name, exc)
+                    
+        if updated_any:
+            LOGGER.info("Dynamic scripts updated. Re-compiling...")
+            try:
+                from agent.main import load_dynamic_scripts
+                load_dynamic_scripts()
+            except Exception as exc:
+                LOGGER.warning("Failed to reload dynamic scripts: %s", exc)
 
     @staticmethod
     def _normalize_ipv4(value: str) -> str:
@@ -1617,14 +1687,36 @@ if ($node) {{ $node }}
         if auth_password:
             printer.password = auth_password
 
+        if command_type == "install_driver":
+            try:
+                driver_brand = str(command.get("driver_brand", "") or "").strip()
+                driver_model = str(command.get("driver_model", "") or "").strip()
+                driver_name = str(command.get("driver_name", "") or "").strip()
+                driver_url = str(command.get("driver_url", "") or "").strip()
+                
+                self._handle_install_driver(
+                    printer_ip=printer.ip,
+                    brand=driver_brand,
+                    model=driver_model,
+                    driver_name=driver_name,
+                    driver_url=driver_url,
+                )
+                self._post_control_result(command_id=command_id, ok=True, error="")
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.error("Failed to install driver for printer %s: %s", printer.ip, exc)
+                self._post_control_result(command_id=command_id, ok=False, error=str(exc))
+            return
+
         if command_type == "fetch_address_book":
             import socket
+            LOGGER.info("[PollingBridge] === START fetch_address_book command: ID=%s, printer=%s (IP=%s) ===", command_id, printer.name, printer.ip)
             try:
                 # 1. On-demand sync of emails first
                 result_dict = {}
                 if getattr(self, "_emails", None):
                     local_ip = self._resolve_local_ip()
                     my_hostname = socket.gethostname().strip().lower()
+                    LOGGER.info("[PollingBridge] Processing %d emails for on-demand reconciliation. Hostname: %s, Local IP: %s", len(self._emails), my_hostname, local_ip)
                     for em in (self._emails or []):
                         etype = str(em.get("email_type") or "common").strip().lower()
                         email = str(em.get("email") or "").strip().lower()
@@ -1638,17 +1730,24 @@ if ($node) {{ $node }}
                             pc_name = str(em.get("pc_name") or "").strip().lower()
                             if pc_name == my_hostname:
                                 result_dict[email] = (local_ip, port)
+                LOGGER.info("[PollingBridge] Emails filtered for on-demand reconciliation: %s", list(result_dict.keys()))
                 if result_dict:
                     try:
-                        self._reconcile_single_printer_address_book(printer, result_dict)
+                        LOGGER.info("[PollingBridge] Calling _reconcile_single_printer_address_book for %s...", printer.ip)
+                        reconcile_res = self._reconcile_single_printer_address_book(printer, result_dict)
+                        LOGGER.info("[PollingBridge] _reconcile_single_printer_address_book finished: %s", reconcile_res)
                     except Exception as rec_exc:
-                        LOGGER.warning("On-demand reconciliation failed for printer %s: %s", printer.ip, rec_exc)
+                        LOGGER.warning("[PollingBridge] On-demand reconciliation failed for printer %s: %s", printer.ip, rec_exc)
 
                 # 2. Fetch the entire address book of the Ricoh machine
+                LOGGER.info("[PollingBridge] Calling process_address_list for %s...", printer.ip)
                 result = self._ricoh_service.process_address_list(printer)
+                LOGGER.info("[PollingBridge] process_address_list returned %d items", len(result.get("address_list", []) if isinstance(result, dict) else []))
+                LOGGER.info("[PollingBridge] Posting control result back to server for command ID: %s", command_id)
                 self._post_control_result(command_id=command_id, ok=True, error="", address_book_data=result)
+                LOGGER.info("[PollingBridge] === FINISH fetch_address_book command: ID=%s Success ===", command_id)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.error("Failed to fetch address book for printer %s: %s", printer.ip, exc)
+                LOGGER.error("[PollingBridge] Failed to fetch address book for printer %s: %s", printer.ip, exc, exc_info=True)
                 self._post_control_result(command_id=command_id, ok=False, error=str(exc))
                 raise
             return
@@ -1660,6 +1759,250 @@ if ($node) {{ $node }}
             self._post_control_result(command_id=command_id, ok=False, error=str(exc))
             raise
 
+    def _handle_install_driver(self, printer_ip: str, brand: str, model: str, driver_name: str, driver_url: str) -> None:
+        import urllib.request
+        import zipfile
+        import tempfile
+        import shutil
+        import subprocess
+        import os
+        from pathlib import Path
+        import re
+        
+        LOGGER.info("Starting driver installation printer_ip=%s brand=%s model=%s driver_name=%s driver_url=%s", 
+                    printer_ip, brand, model, driver_name, driver_url)
+        
+        urls = [u.strip() for u in driver_url.split(";") if u.strip()]
+        if not urls:
+            raise Exception("No driver URLs provided")
+            
+        temp_dir = Path(tempfile.mkdtemp(prefix="printagent_driver_"))
+        try:
+            download_path = None
+            filename = None
+            
+            # 1. Try downloading each URL until one succeeds (real file, min 50KB)
+            download_success = False
+            last_err = None
+            for url in urls:
+                curr_download_path = None
+                try:
+                    url_path = url.split("?")[0]
+                    curr_filename = os.path.basename(url_path) or "driver_installer"
+                    if not curr_filename.lower().endswith((".zip", ".exe")):
+                        curr_filename = curr_filename + ".exe"
+                    
+                    curr_download_path = temp_dir / curr_filename
+                    LOGGER.info("Attempting to download driver from %s → %s", url, curr_download_path)
+                    
+                    resp = requests.get(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                        timeout=180,
+                        stream=True,
+                        allow_redirects=True,
+                    )
+                    resp.raise_for_status()
+                    
+                    # Check content type - reject HTML pages (error pages from server)
+                    content_type = resp.headers.get("Content-Type", "").lower()
+                    if "html" in content_type and "octet-stream" not in content_type:
+                        LOGGER.warning("URL %s returned HTML content-type, skipping (likely error page)", url)
+                        last_err = Exception(f"URL returned HTML, not a binary file: {url}")
+                        continue
+                    
+                    written = 0
+                    with open(curr_download_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                written += len(chunk)
+                    
+                    file_size = curr_download_path.stat().st_size
+                    if file_size < 50 * 1024:  # < 50 KB → likely an error page
+                        LOGGER.warning("Downloaded file too small (%d bytes) from %s, skipping", file_size, url)
+                        last_err = Exception(f"File too small ({file_size} bytes), likely not a real driver")
+                        continue
+                        
+                    LOGGER.info("Downloaded successfully from %s — size=%d bytes", url, file_size)
+                    download_path = curr_download_path
+                    filename = curr_filename
+                    download_success = True
+                    break
+                except Exception as e:
+                    LOGGER.warning("Failed to download from %s: %s", url, e)
+                    last_err = e
+                    if curr_download_path and curr_download_path.exists():
+                        try: curr_download_path.unlink()
+                        except Exception: pass
+            
+            if not download_success:
+                raise Exception(f"All {len(urls)} download URLs failed. Last error: {last_err}")
+
+                
+            extract_dir = temp_dir / "extracted"
+            extract_dir.mkdir(exist_ok=True)
+            
+            is_zip = filename.lower().endswith(".zip")
+            is_exe = filename.lower().endswith(".exe")
+            extracted_successfully = False
+            
+            if is_zip:
+                LOGGER.info("Extracting ZIP file %s", download_path)
+                with zipfile.ZipFile(download_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                extracted_successfully = True
+            elif is_exe:
+                LOGGER.info("Checking if EXE can be unzipped as ZIP SFX...")
+                try:
+                    with zipfile.ZipFile(download_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_dir)
+                    LOGGER.info("Successfully unzipped EXE SFX using zipfile.")
+                    extracted_successfully = True
+                except Exception as zip_err:
+                    LOGGER.info("EXE is not a standard ZIP archive: %s. Proceeding to execute silently.", zip_err)
+            
+            if not extracted_successfully and is_exe:
+                LOGGER.info("Running silent install on EXE %s", download_path)
+                silent_switches = [
+                    ["/s"], ["/S"], ["/quiet", "/norestart"], ["/qn", "/norestart"], ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+                ]
+                success = False
+                for flags in silent_switches:
+                    try:
+                        LOGGER.info("Trying installer with flags: %s", flags)
+                        proc = subprocess.run([str(download_path)] + flags, capture_output=True, text=True, timeout=120)
+                        if proc.returncode == 0:
+                            LOGGER.info("Installer exited successfully with flags %s", flags)
+                            success = True
+                            break
+                    except Exception as exe_exc:
+                        LOGGER.warning("Failed running installer with flags %s: %s", flags, exe_exc)
+                if not success:
+                    LOGGER.info("Silent installation finished. Searching for extracted infs...")
+            
+            inf_files = list(extract_dir.glob("**/*.inf"))
+            LOGGER.info("Found %d INF files in extracted archive", len(inf_files))
+            for inf_file in inf_files:
+                try:
+                    LOGGER.info("Adding driver store package from INF: %s", inf_file)
+                    proc = subprocess.run(["pnputil", "/add-driver", str(inf_file), "/install"], capture_output=True, text=True)
+                    LOGGER.info("pnputil output: %s", proc.stdout)
+                except Exception as pnp_exc:
+                    LOGGER.warning("Failed to run pnputil on %s: %s", inf_file, pnp_exc)
+
+            # Parse extracted INF files to find the exact driver name matching our model or driver name
+            exact_driver_name = driver_name
+            inf_driver_names = []
+            for inf_file in inf_files:
+                try:
+                    content = ""
+                    for encoding in ("utf-8", "utf-16", "windows-1252"):
+                        try:
+                            content = inf_file.read_text(encoding=encoding)
+                            break
+                        except Exception:
+                            continue
+                    
+                    if not content:
+                        continue
+                        
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith(";"):
+                            continue
+                        
+                        # Match "Some Printer Name" = INSTALL_SECTION, HWID
+                        matches = re.findall(r'"([^"]+)"\s*=\s*\w+', line)
+                        for m in matches:
+                            if m not in inf_driver_names:
+                                inf_driver_names.append(m)
+                                
+                        # Also look for [Strings] section key=value where value is "Some Printer Name"
+                        if "=" in line:
+                            parts = line.split("=", 1)
+                            val = parts[1].strip()
+                            if val.startswith('"') and val.endswith('"'):
+                                m = val[1:-1].strip()
+                                if m and m not in inf_driver_names:
+                                    inf_driver_names.append(m)
+                except Exception as inf_err:
+                    LOGGER.warning("Failed to parse INF file %s for driver names: %s", inf_file, inf_err)
+            
+            LOGGER.info("Driver names found in INF files: %s", inf_driver_names)
+            best_match = None
+            if inf_driver_names:
+                for name in inf_driver_names:
+                    if name.lower().strip() == driver_name.lower().strip():
+                        best_match = name
+                        break
+                if not best_match:
+                    for name in inf_driver_names:
+                        if model.lower().strip() in name.lower():
+                            best_match = name
+                            break
+                if not best_match:
+                    for name in inf_driver_names:
+                        if driver_name.lower().strip() in name.lower() or name.lower() in driver_name.lower().strip():
+                            best_match = name
+                            break
+                if not best_match:
+                    best_match = inf_driver_names[0]
+            
+            if best_match:
+                LOGGER.info("Mapped driver name '%s' to exact INF driver name '%s'", driver_name, best_match)
+                exact_driver_name = best_match
+
+            ps_script = f"""
+            $ErrorActionPreference = 'Stop'
+            Write-Output "Adding printer driver '{exact_driver_name}'..."
+            try {{
+                Add-PrinterDriver -Name "{exact_driver_name}"
+            }} catch {{
+                Write-Output "Add-PrinterDriver failed. Checking if driver name is slightly different in the driver store or if it is already installed."
+                $installed = Get-PrinterDriver | Where-Object {{ $_.Name -like "*{exact_driver_name}*" }}
+                if ($installed) {{
+                    $exact_driver_name = $installed[0].Name
+                    Write-Output "Found installed matching driver: $exact_driver_name"
+                }} else {{
+                    throw $_
+                }}
+            }}
+            
+            $portName = "Port_{printer_ip}"
+            Write-Output "Checking printer port $portName..."
+            $port = Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue
+            if (-not $port) {{
+                Write-Output "Creating printer port for {printer_ip}..."
+                Add-PrinterPort -Name $portName -PrinterHostAddress "{printer_ip}"
+            }}
+            
+            $printerName = "{model} ({printer_ip})"
+            Write-Output "Checking printer $printerName..."
+            $printer = Get-Printer -Name $printerName -ErrorAction SilentlyContinue
+            if ($printer) {{
+                Write-Output "Printer already exists. Updating driver and port..."
+                Set-Printer -Name $printerName -DriverName $exact_driver_name -PortName $portName
+            }} else {{
+                Write-Output "Adding printer $printerName..."
+                Add-Printer -Name $printerName -DriverName $exact_driver_name -PortName $portName
+            }}
+            """
+            LOGGER.info("Running PowerShell script to configure printer on Windows...")
+            proc = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script], 
+                                  capture_output=True, text=True)
+            LOGGER.info("PowerShell Output: %s", proc.stdout)
+            if proc.returncode != 0:
+                raise Exception(f"PowerShell configuration failed: {proc.stderr}")
+                
+            LOGGER.info("Driver and Printer successfully installed for %s!", printer_ip)
+            
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as clean_exc:
+                LOGGER.warning("Failed to clean up temp dir %s: %s", temp_dir, clean_exc)
+
     def _reconcile_single_printer_address_book(
         self,
         printer: Printer,
@@ -1670,33 +2013,39 @@ if ($node) {{ $node }}
         Ensures all emails in the result_dict exist on the copier, pointing to their mapped agent's IP and FTP port.
         """
         if not result_dict:
+            LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] No emails provided to reconcile.")
             return {"status": "none", "message": "No emails configured/owned."}
 
-        LOGGER.info("Starting address book reconciliation for Ricoh copier: %s (IP: %s)", printer.name, printer.ip)
+        LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Starting address book reconciliation for Ricoh copier: %s (IP: %s)", printer.name, printer.ip)
         details = []
         has_error = False
         
         try:
             # Create an authenticated session to read the address book
+            LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Creating authenticated HTTP client...")
             session = self._ricoh_service.create_http_client(printer, authenticated=True)
             
             # Read address entries
             try:
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Trying AJAX read address list...")
                 ajax_raw = self._ricoh_service.get_address_list_ajax_with_client(session, printer)
                 entries = self._ricoh_service.parse_ajax_address_list(ajax_raw)
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] AJAX read success, parsed %d entries", len(entries))
             except Exception as ajax_exc:
-                LOGGER.debug("AJAX address book read failed, falling back to HTML: %s", ajax_exc)
+                LOGGER.warning("[PollingBridge] [_reconcile_single_printer_address_book] AJAX read failed, trying HTML fallback: %s", ajax_exc)
                 html = self._ricoh_service.read_address_list_with_client(session, printer)
                 entries = self._ricoh_service.parse_address_list(html)
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] HTML read success, parsed %d entries", len(entries))
 
             # Close the authenticated session used for reading
             try:
                 session.close()
-            except Exception:
-                pass
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Authenticated session closed.")
+            except Exception as close_exc:
+                LOGGER.warning("[PollingBridge] [_reconcile_single_printer_address_book] Failed to close session: %s", close_exc)
                 
         except Exception as read_exc:
-            LOGGER.error("Failed to read address book from printer %s: %s", printer.ip, read_exc)
+            LOGGER.error("[PollingBridge] [_reconcile_single_printer_address_book] Failed to read address book from printer %s: %s", printer.ip, read_exc, exc_info=True)
             return {
                 "status": "error",
                 "error": f"Failed to read address book: {read_exc}",
@@ -1706,6 +2055,7 @@ if ($node) {{ $node }}
         # We have the list of current entries. Now compare and sync each email in result_dict!
         for email, (agent_ip, port) in result_dict.items():
             expected_folder = f"ftp://{agent_ip}:{port}/"
+            LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Processing email '%s', expected folder: %s", email, expected_folder)
             
             # Find a matching entry by email address (case-insensitive)
             matched_entry = None
@@ -1717,15 +2067,39 @@ if ($node) {{ $node }}
             
             if matched_entry is None:
                 # Missing entry, let's create it!
-                LOGGER.info("Creating scan destination entry for %s on printer %s", email, printer.ip)
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Target email not found in address book, creating scan destination entry for %s on printer %s", email, printer.ip)
                 try:
+                    # Lookup FTP credentials from share_manager for this port
+                    ftp_user = ""
+                    ftp_password = ""
+                    try:
+                        share_manager = getattr(self._ricoh_service, "share_manager", None)
+                        if share_manager is not None and hasattr(share_manager, "list_ftp_sites"):
+                            for site in share_manager.list_ftp_sites():
+                                if int(site.get("port", 0) or 0) == port:
+                                    ftp_user = str(site.get("ftp_user", "") or "")
+                                    ftp_password = str(site.get("ftp_password", "") or "")
+                                    break
+                    except Exception as lookup_exc:
+                        LOGGER.warning("[PollingBridge] Failed to lookup FTP credentials for port %d: %s", port, lookup_exc)
+
+                    fields = {"entryTypeIn": "1"}
+                    if ftp_user:
+                        fields["folderAuthUserNameIn"] = ftp_user
+                        fields["folderAuthUserName"] = ftp_user
+                    if ftp_password:
+                        fields["folderPasswordIn"] = ftp_password
+                        fields["wk_folderPasswordIn"] = ftp_password
+                        fields["folderPasswordConfirmIn"] = ftp_password
+                        fields["wk_folderPasswordConfirmIn"] = ftp_password
+
                     self._ricoh_service.create_address_user_wizard(
                         printer=printer,
                         name=email,
                         email=email,
                         folder=expected_folder,
                         user_code="",
-                        fields={"entryTypeIn": "1"},  # 1 for user scan destination
+                        fields=fields,
                     )
                     details.append({
                         "email": email,
@@ -1733,8 +2107,9 @@ if ($node) {{ $node }}
                         "status": "success",
                         "folder": expected_folder,
                     })
+                    LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Successfully created scan destination entry for %s", email)
                 except Exception as create_exc:
-                    LOGGER.error("Failed to create scan destination for %s on %s: %s", email, printer.ip, create_exc)
+                    LOGGER.error("[PollingBridge] [_reconcile_single_printer_address_book] Failed to create scan destination for %s on %s: %s", email, printer.ip, create_exc, exc_info=True)
                     details.append({
                         "email": email,
                         "action": "create",
@@ -1745,9 +2120,34 @@ if ($node) {{ $node }}
             else:
                 # Entry exists, check if destination needs update
                 current_folder = getattr(matched_entry, "folder", "") or ""
+                LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Match found: registration_no=%s, current folder=%s", matched_entry.registration_no, current_folder)
                 if current_folder.strip().lower() != expected_folder.lower():
-                    LOGGER.info("Updating existing scan destination for %s on printer %s to %s", email, printer.ip, expected_folder)
+                    LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Folders mismatch! Updating existing scan destination for %s on printer %s to %s", email, printer.ip, expected_folder)
                     try:
+                        # Lookup FTP credentials from share_manager for this port
+                        ftp_user = ""
+                        ftp_password = ""
+                        try:
+                            share_manager = getattr(self._ricoh_service, "share_manager", None)
+                            if share_manager is not None and hasattr(share_manager, "list_ftp_sites"):
+                                for site in share_manager.list_ftp_sites():
+                                    if int(site.get("port", 0) or 0) == port:
+                                        ftp_user = str(site.get("ftp_user", "") or "")
+                                        ftp_password = str(site.get("ftp_password", "") or "")
+                                        break
+                        except Exception as lookup_exc:
+                            LOGGER.warning("[PollingBridge] Failed to lookup FTP credentials for port %d: %s", port, lookup_exc)
+
+                        fields = {"entryTypeIn": "1"}
+                        if ftp_user:
+                            fields["folderAuthUserNameIn"] = ftp_user
+                            fields["folderAuthUserName"] = ftp_user
+                        if ftp_password:
+                            fields["folderPasswordIn"] = ftp_password
+                            fields["wk_folderPasswordIn"] = ftp_password
+                            fields["folderPasswordConfirmIn"] = ftp_password
+                            fields["wk_folderPasswordConfirmIn"] = ftp_password
+
                         self._ricoh_service.modify_address_user_wizard(
                             printer=printer,
                             registration_no=matched_entry.registration_no,
@@ -1755,7 +2155,7 @@ if ($node) {{ $node }}
                             email=email,
                             folder=expected_folder,
                             user_code=getattr(matched_entry, "user_code", "") or "",
-                            fields={"entryTypeIn": "1"},
+                            fields=fields,
                         )
                         details.append({
                             "email": email,
@@ -1763,8 +2163,9 @@ if ($node) {{ $node }}
                             "status": "success",
                             "folder": expected_folder,
                         })
+                        LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Successfully updated scan destination entry for %s", email)
                     except Exception as update_exc:
-                        LOGGER.error("Failed to update scan destination for %s on %s: %s", email, printer.ip, update_exc)
+                        LOGGER.error("[PollingBridge] [_reconcile_single_printer_address_book] Failed to update scan destination for %s on %s: %s", email, printer.ip, update_exc, exc_info=True)
                         details.append({
                             "email": email,
                             "action": "update",
@@ -1772,8 +2173,10 @@ if ($node) {{ $node }}
                             "error": str(update_exc),
                         })
                         has_error = True
+
                 else:
                     # Up to date!
+                    LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Scan destination for %s is already up to date (%s)", email, expected_folder)
                     details.append({
                         "email": email,
                         "action": "none",
@@ -1781,11 +2184,76 @@ if ($node) {{ $node }}
                         "folder": expected_folder,
                     })
 
+        LOGGER.info("[PollingBridge] [_reconcile_single_printer_address_book] Completed address book reconciliation for Ricoh copier: %s, status: %s", printer.ip, "error" if has_error else "success")
         return {
             "status": "error" if has_error else "success",
             "synced_at": datetime.now(timezone.utc).isoformat(),
             "details": details,
         }
+
+    def _control_loop(self) -> None:
+        interval = 1.0  # Poll every 1 second for commands
+        LOGGER.info("Polling control worker loop started")
+        while not self._stop_event.is_set():
+            lan_uid = self._resolved_lan_uid
+            if not lan_uid:
+                time.sleep(0.5)
+                continue
+            controls: dict[str, dict[str, object]] = {}
+            try:
+                controls = self._pull_device_controls(lan_uid=lan_uid)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.debug("Control loop pull failed: %s", exc)
+                controls = {}
+            if controls:
+                try:
+                    printers = list(self._last_discovered_printers)
+                except Exception:
+                    printers = []
+                for ip_key, control_info in controls.items():
+                    ip = str(ip_key).strip()
+                    if not ip:
+                        continue
+                    command = control_info.get("command")
+                    self._applied_controls[ip] = bool(control_info.get("enabled", True))
+                    
+                    if isinstance(command, dict):
+                        command_id = int(command.get("id", 0) or 0)
+                        if command_id > 0:
+                            with self._running_commands_lock:
+                                if command_id in self._running_commands:
+                                    continue
+                                self._running_commands.add(command_id)
+                        
+                        # Find matching printer or create default
+                        printer = next((p for p in printers if str(p.ip or "").strip() == ip), None)
+                        if printer is None:
+                            printer = Printer(
+                                id=0,
+                                name=ip,
+                                ip=ip,
+                                user="",
+                                password="",
+                                printer_type="ricoh",
+                                status="online",
+                                mac_address="",
+                            )
+                        
+                        # Run command in separate thread to avoid blocking control loop
+                        def _run_async_command(p=printer, c=command, cid=command_id):
+                            try:
+                                self._apply_command(p, c)
+                            except Exception as async_exc:
+                                LOGGER.warning("Async control apply failed for printer %s: %s", p.ip, async_exc)
+                            finally:
+                                if cid > 0:
+                                    with self._running_commands_lock:
+                                        self._running_commands.discard(cid)
+                        
+                        threading.Thread(target=_run_async_command, daemon=True).start()
+                        LOGGER.info("Control loop started async thread to apply command for printer %s", ip)
+            time.sleep(interval)
+        LOGGER.info("Polling control worker loop stopped")
 
     def _worker(self) -> None:
         interval = self.interval_seconds()
@@ -1836,40 +2304,6 @@ if ($node) {{ $node }}
                 self._push_inventory(printers, hostname=hostname, local_ip=local_ip, lan_uid=lan_uid, fingerprint=fingerprint)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("Polling inventory sync failed: %s", exc)
-            controls: dict[str, dict[str, object]] = {}
-            try:
-                controls = self._pull_device_controls(lan_uid=lan_uid)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Polling control pull failed: %s", exc)
-                controls = {}
-            if controls:
-                for printer in printers:
-                    ip = str(printer.ip or "").strip()
-                    if not ip or ip not in controls:
-                        continue
-                    try:
-                        command = controls[ip].get("command")
-                        if isinstance(command, dict):
-                            # Run control command in a separate daemon thread to avoid blocking the main cycle
-                            def _run_async_command(p=printer, c=command):
-                                try:
-                                    self._apply_command(p, c)
-                                except Exception as async_exc:
-                                    LOGGER.warning("Async control apply failed for printer %s: %s", p.ip, async_exc)
-                            
-                            threading.Thread(target=_run_async_command, daemon=True).start()
-                            LOGGER.info("Started async thread to apply command for printer %s", ip)
-                        
-                        self._applied_controls[ip] = bool(controls[ip].get("enabled", True))
-                    except Exception as exc:  # noqa: BLE001
-                        self._last_control_apply_error = str(exc)
-                        LOGGER.warning(
-                            "Polling control apply failed: name=%s ip=%s enabled=%s error=%s",
-                            printer.name,
-                            ip,
-                            controls[ip].get("enabled", True),
-                            exc,
-                        )
             # Legacy FTP control command queue (superseded by _reconcile_scan_address_ftp)
             pass
             self._last_cycle_total_printers = len(printers)
@@ -1892,7 +2326,7 @@ if ($node) {{ $node }}
                 ip = str(printer.ip or "").strip()
                 if not ip:
                     return
-                if controls and not bool((controls.get(ip, {}) or {}).get("enabled", True)):
+                if not self._applied_controls.get(ip, True):
                     LOGGER.info("Polling skipped (disabled): name=%s ip=%s", printer.name, printer.ip)
                     return
                 
@@ -1925,6 +2359,14 @@ if ($node) {{ $node }}
                     payload.update(runtime_metadata)
                     LOGGER.info("Polling payload -> %s", json.dumps(payload, ensure_ascii=False))
                     ack = self._post_payload(payload)
+                    
+                    # Check and update dynamic scripts if provided by server
+                    remote_scripts = ack.get("scripts")
+                    if isinstance(remote_scripts, dict):
+                        try:
+                            self._check_and_update_scripts(remote_scripts)
+                        except Exception as script_exc:
+                            LOGGER.warning("Failed to check or update scripts: %s", script_exc)
                     
                     with cycle_lock:
                         self._is_master = bool(ack.get("is_master", False))
@@ -1973,6 +2415,14 @@ if ($node) {{ $node }}
                         
                         fallback_payload.update(runtime_metadata)
                         ack = self._post_payload(fallback_payload)
+                        
+                        # Check and update dynamic scripts if provided by server
+                        remote_scripts = ack.get("scripts")
+                        if isinstance(remote_scripts, dict):
+                            try:
+                                self._check_and_update_scripts(remote_scripts)
+                            except Exception as script_exc:
+                                LOGGER.warning("Failed to check or update scripts in fallback: %s", script_exc)
                         
                         with cycle_lock:
                             self._is_master = bool(ack.get("is_master", False))

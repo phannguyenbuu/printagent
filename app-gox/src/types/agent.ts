@@ -14,6 +14,7 @@ export interface PrinterDriverConfig {
   printerIp: string;
   port: number | 'custom';
   customPort?: number;
+  driverUrl?: string;
 }
 
 export interface ScanChannelConfig {

@@ -924,6 +924,14 @@ def _resolve_lan_uid_with_session(session: Any, lead: str, body: dict[str, Any])
     return _resolve_lan_info_from_body(body)
 
 
+def _safe_alter_table(session: Any, table_name: str, column_name: str, sql_type: str) -> None:
+    res = session.execute(text(
+        f"SELECT 1 FROM information_schema.columns WHERE LOWER(table_name) = LOWER('{table_name}') AND LOWER(column_name) = LOWER('{column_name}')"
+    )).fetchone()
+    if not res:
+        LOGGER.info("Schema self-heal: Adding column %s to table %s", column_name, table_name)
+        session.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS {column_name} {sql_type};'))
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
     CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -934,25 +942,25 @@ def create_app() -> Flask:
     Base.metadata.create_all(bind=session_factory.kw["bind"])
     with session_factory() as session:
         # Self-heal schema drift for older deployments (PostgreSQL).
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS auth_user VARCHAR(128) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS auth_password VARCHAR(255) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS mac_address VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "Printer" ADD COLUMN IF NOT EXISTS address_book_sync JSONB;'))
+        _safe_alter_table(session, "Printer", "auth_user", "VARCHAR(128) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "Printer", "auth_password", "VARCHAR(255) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "Printer", "is_online", "BOOLEAN NOT NULL DEFAULT TRUE")
+        _safe_alter_table(session, "Printer", "online_changed_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "Printer", "mac_address", "VARCHAR(64) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "Printer", "address_book_sync", "JSONB")
         
         # Self-heal UserAccount table
-        session.execute(text('ALTER TABLE "UserAccount" ADD COLUMN IF NOT EXISTS password VARCHAR(128) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "UserAccount" ADD COLUMN IF NOT EXISTS user_type VARCHAR(32) NOT NULL DEFAULT \'support\';'))
+        _safe_alter_table(session, "UserAccount", "password", "VARCHAR(128) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "UserAccount", "user_type", "VARCHAR(32) NOT NULL DEFAULT 'support'")
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_useraccount_user_type ON "UserAccount" (user_type);'))
-        session.execute(text('ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "Lead", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "Lead" SET updated_at = COALESCE(updated_at, created_at, NOW());'))
-        session.execute(text('ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "Workspace", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "Workspace" SET updated_at = COALESCE(updated_at, created_at, NOW());'))
-        session.execute(text('ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS room VARCHAR(128);'))
-        session.execute(text('ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "Location", "room", "VARCHAR(128)")
+        _safe_alter_table(session, "Location", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "Location" SET updated_at = COALESCE(updated_at, created_at, NOW());'))
-        session.execute(text('ALTER TABLE "Material" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "Material", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "Material" SET updated_at = COALESCE(updated_at, created_at, NOW());'))
         session.execute(text(
             """
@@ -987,38 +995,42 @@ def create_app() -> Flask:
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_userworkspace_workspace_id ON "UserWorkspace" (workspace_id);'))
         
         # Self-heal LanSite table
-        session.execute(text('ALTER TABLE "LanSite" ADD COLUMN IF NOT EXISTS fingerprint_signature TEXT;'))
+        _safe_alter_table(session, "LanSite", "fingerprint_signature", "TEXT")
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_lansite_fingerprint ON "LanSite" (lead, fingerprint_signature);'))
         
         # Self-heal AgentNode table
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS app_version VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS run_mode VARCHAR(32) NOT NULL DEFAULT \'web\';'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS web_port INTEGER NOT NULL DEFAULT 9173;'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS ftp_ports TEXT NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS is_online BOOLEAN NOT NULL DEFAULT TRUE;'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS online_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "AgentNode" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "AgentNode", "last_seen_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "AgentNode", "app_version", "VARCHAR(64) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "AgentNode", "run_mode", "VARCHAR(32) NOT NULL DEFAULT 'web'")
+        _safe_alter_table(session, "AgentNode", "web_port", "INTEGER NOT NULL DEFAULT 9173")
+        _safe_alter_table(session, "AgentNode", "ftp_ports", "TEXT NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "AgentNode", "is_online", "BOOLEAN NOT NULL DEFAULT TRUE")
+        _safe_alter_table(session, "AgentNode", "online_changed_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "AgentNode", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "AgentNode" SET updated_at = COALESCE(last_seen_at, created_at, updated_at, NOW());'))
-        session.execute(text('ALTER TABLE "AgentPresenceLog" ADD COLUMN IF NOT EXISTS ftp_ports TEXT NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "AgentPresenceLog" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "AgentPresenceLog", "ftp_ports", "TEXT NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "AgentPresenceLog", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "AgentPresenceLog" SET updated_at = COALESCE(changed_at, last_seen_at, created_at, updated_at, NOW());'))
         session.execute(text('UPDATE "FtpControlCommand" SET created_at = COALESCE(requested_at, created_at, NOW()), updated_at = COALESCE(responded_at, requested_at, updated_at, NOW());'))
-        session.execute(text('ALTER TABLE "PrinterEnableLog" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "PrinterEnableLog" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "PrinterEnableLog", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "PrinterEnableLog", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "PrinterEnableLog" SET created_at = COALESCE(changed_at, created_at, NOW()), updated_at = COALESCE(changed_at, updated_at, NOW());'))
-        session.execute(text('ALTER TABLE "PrinterOnlineLog" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "PrinterOnlineLog" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "PrinterOnlineLog", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "PrinterOnlineLog", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('UPDATE "PrinterOnlineLog" SET created_at = COALESCE(changed_at, created_at, NOW()), updated_at = COALESCE(changed_at, updated_at, NOW());'))
-        session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "PrinterControlCommand" ADD COLUMN IF NOT EXISTS command_type VARCHAR(64) NOT NULL DEFAULT \'enable_disable\';'))
+        _safe_alter_table(session, "PrinterControlCommand", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "PrinterControlCommand", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "PrinterControlCommand", "command_type", "VARCHAR(64) NOT NULL DEFAULT 'enable_disable'")
+        _safe_alter_table(session, "PrinterControlCommand", "driver_brand", "VARCHAR(64) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "PrinterControlCommand", "driver_model", "VARCHAR(128) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "PrinterControlCommand", "driver_name", "VARCHAR(255) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "PrinterControlCommand", "driver_url", "TEXT NOT NULL DEFAULT ''")
         session.execute(text('UPDATE "PrinterControlCommand" SET created_at = COALESCE(requested_at, created_at, NOW()), updated_at = COALESCE(responded_at, requested_at, updated_at, NOW());'))
         # Self-heal CounterInfor / StatusInfor for dedupe + touch-updated flow
-        session.execute(text('ALTER TABLE "CounterInfor" ADD COLUMN IF NOT EXISTS mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "CounterInfor" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
-        session.execute(text('ALTER TABLE "StatusInfor" ADD COLUMN IF NOT EXISTS mac_id VARCHAR(64) NOT NULL DEFAULT \'\';'))
-        session.execute(text('ALTER TABLE "StatusInfor" ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();'))
+        _safe_alter_table(session, "CounterInfor", "mac_id", "VARCHAR(64) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "CounterInfor", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        _safe_alter_table(session, "StatusInfor", "mac_id", "VARCHAR(64) NOT NULL DEFAULT ''")
+        _safe_alter_table(session, "StatusInfor", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()")
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_counterinfor_lead_lan_agent_ip_mac ON "CounterInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_statusinfor_lead_lan_agent_ip_mac ON "StatusInfor" (lead, lan_uid, agent_uid, ip, mac_id);'))
         session.execute(text('CREATE INDEX IF NOT EXISTS idx_deviceinfor_lead_lan_mac ON "DeviceInfor" (lead, lan_uid, mac_id);'))
@@ -2223,9 +2235,22 @@ def create_app() -> Flask:
                 .scalars()
                 .first()
             )
-        raw_ref = _to_text(device_ref)
+        raw_ref = _to_text(device_ref).strip()
         if raw_ref.isdigit():
             return session.get(Printer, int(raw_ref))
+        if raw_ref:
+            import re
+            if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", raw_ref):
+                return (
+                    session.execute(
+                        select(Printer)
+                        .where(Printer.ip == raw_ref)
+                        .order_by(Printer.updated_at.desc(), Printer.id.desc())
+                        .limit(1)
+                    )
+                    .scalars()
+                    .first()
+                )
         return None
 
     def _submit_printer_control_command(
@@ -2429,6 +2454,151 @@ def create_app() -> Flask:
             enabled=enabled,
             action_name="unlock" if enabled else "lock",
         )
+
+    @app.post("/api/devices/<device_ref>/install-driver")
+    def device_install_driver(device_ref: str) -> Any:
+        body = request.get_json(silent=True) or {}
+        brand = str(body.get("brand", "")).strip()
+        model = str(body.get("model", "")).strip()
+        driver_name = str(body.get("driver_name", "")).strip()
+        driver_url = str(body.get("driver_url", "")).strip()
+
+        if not brand or not model or not driver_name or not driver_url:
+            return jsonify({"ok": False, "error": "brand, model, driver_name, and driver_url are required"}), 400
+
+        # Collect alternative URLs from local catalog JSON to allow the agent to try them
+        all_urls = [driver_url]
+        try:
+            from pathlib import Path
+            import json
+            brand_clean = brand.lower().strip()
+            catalog_file = Path("storage/drivers") / f"{brand_clean}.json"
+            if catalog_file.exists():
+                with open(catalog_file, encoding="utf-8") as f:
+                    catalog_data = json.load(f)
+                
+                # Find matching model object
+                model_obj = None
+                if isinstance(catalog_data, list):
+                    for item in catalog_data:
+                        if str(item.get("model", "")).strip().lower() == model.lower().strip():
+                            model_obj = item
+                            break
+                
+                if model_obj:
+                    model_links = []
+                    # 1. Ricoh or standard drivers object mapping (dict)
+                    drivers_field = model_obj.get("drivers")
+                    if isinstance(drivers_field, dict):
+                        for u in drivers_field.values():
+                            if isinstance(u, str):
+                                model_links.append(u.strip())
+                    # 2. Toshiba format drivers array (list of dicts)
+                    elif isinstance(drivers_field, list):
+                        for d in drivers_field:
+                            if isinstance(d, dict) and "download_url" in d:
+                                model_links.append(str(d["download_url"]).strip())
+                    
+                    # 3. Fujifilm all_links (only if no drivers field exists)
+                    if not model_links:
+                        all_links_field = model_obj.get("all_links")
+                        if isinstance(all_links_field, list):
+                            for u in all_links_field:
+                                if isinstance(u, str):
+                                    model_links.append(u.strip())
+                    
+                    # Define generic keywords/prefixes to filter out for all brands
+                    generic_keywords = [
+                        "diagnostic", "diagnostictool", "diagnostic_tool", "utility", 
+                        "webinstaller", "web_installer", "installer", "easysetup", 
+                        "easy_setup", "opkpcl6", "opkps", "mmdspcl6", "mmd2pcl6", "xps"
+                    ]
+                    
+                    # Add unique URLs while keeping selected one first, filtering out generic utilities
+                    import os
+                    for u in model_links:
+                        if not u or u in all_urls:
+                            continue
+                        
+                        filename = os.path.basename(u.split("?")[0]).lower()
+                        if any(k in filename for k in generic_keywords):
+                            continue
+                            
+                        all_urls.append(u)
+        except Exception as e:
+            LOGGER.warning("Failed to collect alternative driver URLs in device_install_driver: %s", e)
+            
+        driver_url_combined = ";".join(all_urls)
+
+        requested_at = datetime.now(timezone.utc)
+        with session_factory() as session:
+            printer = _resolve_printer_control_target(session, device_ref)
+            if printer is None:
+                return jsonify({"ok": False, "error": "Printer not found"}), 404
+            
+            pending = session.execute(
+                select(PrinterControlCommand).where(
+                    PrinterControlCommand.printer_id == printer.id,
+                    PrinterControlCommand.status == "pending",
+                )
+            ).scalars().all()
+            for cmd in pending:
+                cmd.status = "failed"
+                cmd.error_message = "Superseded by newer command"
+                cmd.responded_at = requested_at
+
+            command = PrinterControlCommand(
+                printer_id=printer.id,
+                lead=printer.lead,
+                lan_uid=printer.lan_uid,
+                agent_uid=printer.agent_uid,
+                printer_name=printer.printer_name,
+                ip=printer.ip,
+                desired_enabled=printer.enabled,
+                command_type="install_driver",
+                driver_brand=brand,
+                driver_model=model,
+                driver_name=driver_name,
+                driver_url=driver_url_combined,
+                auth_user=printer.auth_user,
+                auth_password=printer.auth_password,
+                status="pending",
+                error_message="",
+                requested_at=requested_at,
+                responded_at=None,
+            )
+            session.add(command)
+            session.commit()
+            command_id = int(command.id)
+
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=15)
+        while datetime.now(timezone.utc) < deadline:
+            with session_factory() as session:
+                current = session.get(PrinterControlCommand, command_id)
+                if current is None:
+                    break
+                if current.status == "success":
+                    return jsonify({
+                        "ok": True,
+                        "status": "success",
+                        "message": f"Successfully installed driver {driver_name}",
+                        "command_id": command_id,
+                    }), 200
+                if current.status == "failed":
+                    return jsonify({
+                        "ok": False,
+                        "status": "failed",
+                        "error": current.error_message or "Execution failed on agent",
+                        "command_id": command_id,
+                    }), 502
+            time_module.sleep(0.5)
+
+        return jsonify({
+            "ok": True,
+            "status": "pending",
+            "message": "Driver installation command queued. Check back for results.",
+            "command_id": command_id,
+        }), 202
 
     @app.post("/api/devices/<device_ref>/unlock")
     def device_unlock(device_ref: str) -> Any:
@@ -3019,6 +3189,10 @@ def create_app() -> Flask:
                                 "command_type": pending_by_printer[int(r.id)].command_type or "enable_disable",
                                 "auth_user": pending_by_printer[int(r.id)].auth_user or "",
                                 "auth_password": pending_by_printer[int(r.id)].auth_password or "",
+                                "driver_brand": pending_by_printer[int(r.id)].driver_brand or "",
+                                "driver_model": pending_by_printer[int(r.id)].driver_model or "",
+                                "driver_name": pending_by_printer[int(r.id)].driver_name or "",
+                                "driver_url": pending_by_printer[int(r.id)].driver_url or "",
                             }
                             if int(r.id) in pending_by_printer
                             else None

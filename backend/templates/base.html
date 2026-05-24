@@ -10,13 +10,14 @@
     <div class="shell">
       <aside class="sidebar">
         <h2>GoPrinx</h2>
+        <a class="link {% if active_tab == 'lan_sites' %}active{% endif %}" href="{{ url_for('lan_sites_page') }}"><span class="link-ico">&bull;</span><span>Lan Network</span></a>
+        <a class="link {% if active_tab == 'standalone' %}active{% endif %}" href="{{ url_for('standalone_page') }}"><span class="link-ico">&bull;</span><span>Standalone</span></a>
+        <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>
         <a class="link {% if active_tab == 'agents' %}active{% endif %}" href="{{ url_for('agents_page') }}"><span class="link-ico">&bull;</span><span>Agents</span></a>
         <a class="link {% if active_tab == 'drivers' %}active{% endif %}" href="{{ url_for('drivers_page_ui') }}"><span class="link-ico">&bull;</span><span>Drivers</span></a>
         <div class="sidebar-sep"></div>
         <a class="link {% if active_tab == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="link-ico">&bull;</span><span>Dashboard</span></a>
-        <a class="link {% if active_tab == 'infor' %}active{% endif %}" href="{{ url_for('infor_page') }}"><span class="link-ico">&bull;</span><span>Infor</span></a>
         <a class="link {% if active_tab == 'api_docs' %}active{% endif %}" href="{{ url_for('api_docs_page') }}"><span class="link-ico">&bull;</span><span>API</span></a>
-        <a class="link {% if active_tab == 'lan_sites' %}active{% endif %}" href="{{ url_for('lan_sites_page') }}"><span class="link-ico">&bull;</span><span>Lan Network</span></a>
         <a class="link {% if active_tab == 'heatmap' %}active{% endif %}" href="{{ url_for('heatmap_page') }}"><span class="link-ico">&bull;</span><span>Heatmap</span></a>
         <a class="link {% if active_tab == 'configs' %}active{% endif %}" href="{{ url_for('configs_page') }}"><span class="link-ico">&bull;</span><span>Configs</span></a>
         <div class="sidebar-sep"></div>
@@ -26,7 +27,6 @@
         <a class="link {% if active_tab == 'materials' %}active{% endif %}" href="{{ url_for('materials_page') }}"><span class="link-ico">&bull;</span><span>Materials</span></a>
         <a class="link {% if active_tab == 'users' %}active{% endif %}" href="{{ url_for('users_page') }}"><span class="link-ico">&bull;</span><span>Users</span></a>
         <a class="link {% if active_tab == 'companies' %}active{% endif %}" href="{{ url_for('networks_page') }}"><span class="link-ico">&bull;</span><span>Networks</span></a>
-        <a class="link {% if active_tab == 'scan' %}active{% endif %}" href="{{ url_for('scan_page') }}"><span class="link-ico">&bull;</span><span>Scan</span></a>
         <a class="link {% if active_tab == 'repairs' %}active{% endif %}" href="{{ url_for('repairs_page') }}"><span class="link-ico">&bull;</span><span>Tasks</span></a>
       </aside>
       <main class="content">
@@ -142,4 +142,3 @@
     {% include "_app_scripts.html" %}
   </body>
 </html>
-

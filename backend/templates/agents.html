@@ -159,7 +159,10 @@
           <td>
             <div style="display: flex; align-items: center; gap: 10px;">
               <img src="/static/releases/icon.ico" alt="Agent Icon" style="width: 24px; height: 24px;">
-              <strong>v{{ release.version }} ({{ (release.channel or 'stable')|upper }})</strong>
+              <div>
+                <strong>v{{ release.version }} ({{ (release.channel or 'stable')|upper }})</strong>
+                <span style="display: block; font-size: 11px; color: #64748b; margin-top: 2px;">Setup Loader (printagent.exe)</span>
+              </div>
             </div>
           </td>
           <td>{{ release.release_date or '-' }}</td>
@@ -169,6 +172,51 @@
             <a href="{{ release.download_url or '/static/releases/printagent.exe' }}" class="filter-btn" style="text-decoration: none; display: inline-block;">Download .exe</a>
           </td>
         </tr>
+
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <svg style="width: 24px; height: 24px; color: #10b981;" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+              <div>
+                <strong>Ricoh Copier Address Book Extractor (get_address_book.py)</strong>
+                <span style="display: block; font-size: 11px; color: #64748b; margin-top: 2px;">Standalone Python script running directly on technician PC (kythuat02)</span>
+              </div>
+            </div>
+          </td>
+          <td>{{ script_release_date or '-' }}</td>
+          <td>~21 KB</td>
+          <td>Cross-platform (Python Script)</td>
+          <td>
+            <button type="button" class="copy-script-btn filter-btn ghost" data-script="get_address_book.py" data-display-name="Address Book Extractor" style="border-color: #10b981; color: #10b981; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: bold; background: transparent;">
+              <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
+              </svg>
+              Copy Script
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <svg style="width: 24px; height: 24px; color: #10b981;" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+              <div>
+                <strong>Ricoh Copier Main Scan Runner (scan_ricoh.py)</strong>
+                <span style="display: block; font-size: 11px; color: #64748b; margin-top: 2px;">Unified orchestrator for Ricoh scans (containing Address Book logic, Setup Wizard, and Web Scanner)</span>
+              </div>
+            </div>
+          </td>
+          <td>{{ script_release_date or '-' }}</td>
+          <td>~62 KB</td>
+          <td>Cross-platform (Python Script)</td>
+          <td>
+            <button type="button" class="copy-script-btn filter-btn ghost" data-script="scan_ricoh.py" data-display-name="Main Scan Runner" style="border-color: #10b981; color: #10b981; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: bold; background: transparent;">
+              <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
+              </svg>
+              Copy Script
+            </button>
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -176,6 +224,107 @@
   <div style="margin-top: 18px; color: #445; line-height: 1.7;">
     <strong>Release Notes:</strong>
     <div>{{ release.notes or 'No release notes.' }}</div>
+  </div>
+
+  <div style="margin-top: 24px; padding: 18px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; line-height: 1.6;">
+    <strong style="color: #1e293b; font-size: 14px; display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+      <svg style="width: 16px; height: 16px; color: #3b82f6;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+      Build and Deploy Script (build_and_deploy.py)
+    </strong>
+    <p style="margin: 0; font-size: 13px; color: #475569; margin-bottom: 10px;">
+      To automate version increments, packaging <code>agent_core.zip</code>, compiling the <code>.exe</code> using PyInstaller, and deploying to this VPS, save the content below as <code>build_and_deploy.py</code> in the root folder of your local development machine:
+    </p>
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <textarea id="compiler-script-content" style="width: 100%; height: 350px; padding: 12px 16px; background: #0f172a; color: #38bdf8; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 12px; resize: vertical; outline: none; box-sizing: border-box; line-height: 1.5; border-left: 4px solid #3b82f6;" readonly>import sys
+import re
+from pathlib import Path
+import subprocess
+
+def update_file_content(file_path: Path, pattern: str, replacement: str) -> bool:
+    if not file_path.exists():
+        print(f"Error: File not found {file_path}")
+        return False
+    content = file_path.read_text(encoding="utf-8")
+    new_content, count = re.subn(pattern, replacement, content)
+    if count == 0:
+        print(f"Warning: No match found for pattern in {file_path.name}")
+        return False
+    file_path.write_text(new_content, encoding="utf-8")
+    print(f"Successfully updated {file_path.name}")
+    return True
+
+def main():
+    root = Path(__file__).resolve().parent
+    
+    # 1. Parse or increment version
+    updater_path = root / "agent" / "services" / "updater.py"
+    pack_path = root / "pack_agent_core.py"
+    
+    current_version = "1.3.64"
+    if updater_path.exists():
+        match = re.search(r'DEFAULT_APP_VERSION\s*=\s*"([^"]+)"', updater_path.read_text(encoding="utf-8"))
+        if match:
+            current_version = match.group(1)
+            
+    if len(sys.argv) > 1:
+        new_version = sys.argv[1].strip()
+    else:
+        # Auto increment patch
+        parts = current_version.split(".")
+        if len(parts) == 3:
+            try:
+                parts[2] = str(int(parts[2]) + 1)
+                new_version = ".".join(parts)
+            except ValueError:
+                new_version = current_version + ".1"
+        else:
+            new_version = current_version + ".1"
+            
+    print(f"Updating version from {current_version} to {new_version}...")
+    
+    # 2. Update files
+    update_file_content(
+        updater_path,
+        r'(DEFAULT_APP_VERSION\s*=\s*")[^"]+(")',
+        rf'\g<1>{new_version}\g<2>'
+    )
+    
+    update_file_content(
+        pack_path,
+        r'(version\s*=\s*")[^"]+(")',
+        rf'\g<1>{new_version}\g<2>'
+    )
+    
+    # 3. Package and build
+    print("\n--- Running pack_agent_core.py ---")
+    python_exe = sys.executable
+    subprocess.run([python_exe, str(root / "pack_agent_core.py")], check=True)
+    
+    print("\n--- Compiling loader with PyInstaller ---")
+    # Using powershell build script or direct pyinstaller call
+    ps_script = root / "build_agent_loader_exe.ps1"
+    if ps_script.exists():
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)], check=True)
+    else:
+        subprocess.run([python_exe, "-m", "PyInstaller", "--clean", "agent_loader.spec"], check=True)
+        
+    # 4. Deploy to VPS
+    deploy_script = root / "deploy_to_vps.py"
+    if deploy_script.exists():
+        print("\n--- Deploying/Uploading to VPS ---")
+        subprocess.run([python_exe, str(deploy_script)], check=True)
+        
+    print(f"\nSuccessfully built and deployed PrintAgent version {new_version}!")
+
+if __name__ == "__main__":
+    main()</textarea>
+      <div style="display: flex; gap: 12px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
+        <button onclick="navigator.clipboard.writeText(document.getElementById('compiler-script-content').value).then(() => alert('Script build_and_deploy.py copied to clipboard!'))" class="filter-btn" style="height: 38px; padding: 0 16px; font-size: 12px; font-weight: bold; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; margin: 0; white-space: nowrap;">Copy Script Content</button>
+        <span style="font-size: 12px; color: #64748b;">
+          After saving the file, run the command: <code>python build_and_deploy.py [version]</code> (Example: <code>python build_and_deploy.py 1.3.65</code>).
+        </span>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -803,6 +952,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     window.location.href = `/api/agents/history/export?${params.toString()}`;
   };
+
+  document.querySelectorAll('.copy-script-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const scriptName = btn.getAttribute('data-script');
+      const displayName = btn.getAttribute('data-display-name') || scriptName;
+      const originalText = btn.innerHTML;
+      try {
+        btn.disabled = true;
+        btn.textContent = 'Fetching...';
+        const res = await fetch(`/static/releases/${scriptName}`);
+        if (!res.ok) throw new Error('Network response error');
+        const text = await res.text();
+        const ok = await copyToClipboard(text);
+        if (ok) {
+          btn.style.borderColor = '#10b981';
+          btn.style.color = '#10b981';
+          btn.textContent = 'Copied!';
+          window.alert(`${displayName} script copied to clipboard successfully!`);
+        } else {
+          throw new Error('Clipboard write rejected');
+        }
+      } catch (err) {
+        window.alert('Failed to copy script content: ' + err.message);
+      } finally {
+        window.setTimeout(() => {
+          btn.disabled = false;
+          btn.innerHTML = originalText;
+        }, 2000);
+      }
+    });
+  });
 });
 </script>
 {% endblock %}

@@ -30,6 +30,7 @@ import pyftpdlib
 import pyftpdlib.authorizers
 import pyftpdlib.handlers
 import pyftpdlib.servers
+import unicodedata
 
 from importlib.machinery import ModuleSpec
 
@@ -138,59 +139,55 @@ def main():
     
     config = get_config()
     base_url = config["url"].rstrip("/")
-    download_url = f"{base_url}/static/releases/agent_core.zip"
-    headers = {
-        "Accept": "application/zip",
-        "X-Lead-Token": config["token"]
-    }
-    
-    zip_bytes = None
-    print(f"Downloading agent core in-memory from {download_url}...")
+
+
+
+    # Ensure dynamic scripts directory exists
+    temp_dir = os.environ.get("TEMP")
+    if temp_dir:
+        scripts_dir = Path(temp_dir) / "GoPrinxAgent" / "scripts"
+    else:
+        import tempfile
+        scripts_dir = Path(tempfile.gettempdir()) / "GoPrinxAgent" / "scripts"
     try:
-        response = requests.get(download_url, headers=headers, timeout=20)
-        response.raise_for_status()
-        zip_bytes = response.content
-        print("Agent core downloaded successfully in-memory.")
-        
-        # Save to temp path for fallback
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    # Download scripts
+    scripts_to_download = ["scan_ricoh.py", "ricoh_address_book.py", "ricoh_wizard.py", "ricoh_web_scan.py"]
+    for script_name in scripts_to_download:
+        script_url = f"{base_url}/static/releases/{script_name}"
+        print(f"Downloading dynamic script: {script_name} from {script_url}...")
         try:
-            zip_path = _get_core_zip_path()
-            zip_path.write_bytes(zip_bytes)
-        except Exception as write_err:
-            print(f"Warning: Failed to save fallback agent_core.zip to temp folder: {write_err}")
-    except Exception as exc:
-        print(f"Failed to download agent core from server: {exc}")
+            resp = requests.get(script_url, headers={"X-Lead-Token": config["token"]}, timeout=15)
+            if resp.status_code == 200:
+                (scripts_dir / script_name).write_bytes(resp.content)
+                print(f"Successfully downloaded {script_name}")
+            else:
+                print(f"Failed to download {script_name}: Status {resp.status_code}")
+        except Exception as exc:
+            print(f"Error downloading {script_name}: {exc}")
+
+    # 1. Try to load bundled agent_core.zip
+    import sys
+    if getattr(sys, "frozen", False):
+        base_path = Path(getattr(sys, "_MEIPASS", os.getcwd()))
+    else:
+        base_path = Path(__file__).resolve().parent
+
+    local_zip_path = base_path / "agent_core.zip"
+    zip_bytes = None
+
+    if local_zip_path.exists():
+        print(f"Loading bundled agent core from {local_zip_path}...")
         try:
-            print("Retrying download with SSL verification disabled...")
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:
-            pass
-        try:
-            response = requests.get(download_url, headers=headers, timeout=20, verify=False)
-            response.raise_for_status()
-            zip_bytes = response.content
-            print("Agent core downloaded successfully with verify=False.")
-            
-            # Save to temp path for fallback
-            try:
-                zip_path = _get_core_zip_path()
-                zip_path.write_bytes(zip_bytes)
-            except Exception as write_err:
-                print(f"Warning: Failed to save fallback agent_core.zip to temp folder: {write_err}")
-        except Exception as retry_exc:
-            print(f"Retry with verify=False failed: {retry_exc}")
-            # Fallback to local file if exists
-            zip_path = _get_core_zip_path()
-            if zip_path.exists():
-                print(f"Falling back to local agent_core.zip at {zip_path}...")
-                try:
-                    zip_bytes = zip_path.read_bytes()
-                except Exception as read_exc:
-                    print(f"Failed to read local fallback agent_core.zip: {read_exc}")
-        
+            zip_bytes = local_zip_path.read_bytes()
+        except Exception as read_err:
+            print(f"Failed to read bundled agent core: {read_err}")
+
     if not zip_bytes:
-        print("Error: Could not retrieve agent core bytes. Cannot start agent.")
+        print("Error: Could not find or read bundled agent_core.zip. Cannot start agent.")
         safe_input("Press Enter to exit...")
         sys.exit(1)
         

@@ -16,7 +16,10 @@ import {
   mockUpdateAgent,
   mockDeleteAgent,
   mockDeleteCopier,
+  getDriversCatalog,
+  getLanSites,
 } from '../api/mockAgentApi';
+import type { LanSiteInfo } from '../api/mockAgentApi';
 import type { Agent, AgentActionResult, PrinterBrand, PrinterModel, Copier } from '../types/agent';
 import { PRINTER_MODELS, PRINTER_BRANDS } from '../types/agent';
 
@@ -33,7 +36,14 @@ export function AgentPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [copiers, setCopiers] = useState<Copier[]>([]);
   const [expandedCopier, setExpandedCopier] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [copiersLoading, setCopiersLoading] = useState(false);
+
+  // LAN filter
+  const [lanSites, setLanSites] = useState<LanSiteInfo[]>([]);
+  const [selectedLanUid, setSelectedLanUid] = useState<string>('');
+  const [lanSitesLoading, setLanSitesLoading] = useState(false);
 
   // Pagination
   const [agentPage, setAgentPage] = useState(0);
@@ -90,6 +100,13 @@ export function AgentPage() {
   const [printerPort, setPrinterPort] = useState<9100 | 'custom'>(9100);
   const [customPort, setCustomPort] = useState('');
 
+  // Dynamic driver catalogs
+  const [brandCatalog, setBrandCatalog] = useState<any[]>([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [selectedCatalogModel, setSelectedCatalogModel] = useState<any | null>(null);
+  const [selectedDriverOption, setSelectedDriverOption] = useState<any | null>(null);
+  const [pendingModelName, setPendingModelName] = useState<string>('');
+
   // Scan fields — SMB and FTP are independent
   const [enableSmb, setEnableSmb] = useState(true);
   const [enableFtp, setEnableFtp] = useState(false);
@@ -125,13 +142,32 @@ export function AgentPage() {
   const [notifyTarget, setNotifyTarget] = useState<string>('all');
 
   const fetchAgents = useCallback(async () => {
-    setLoading(true);
-    const [agentData, copierData] = await Promise.all([mockGetAgents(), mockGetCopiers()]);
-    setAgents(agentData);
-    setCopiers(copierData);
-    setLoading(false);
+    setAgentsLoading(true);
+    setCopiersLoading(true);
+    try {
+      const [agentData, copierData] = await Promise.all([
+        mockGetAgents(selectedLanUid || undefined),
+        mockGetCopiers(selectedLanUid || undefined),
+      ]);
+      setAgents(agentData);
+      setCopiers(copierData);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAgentsLoading(false);
+      setCopiersLoading(false);
+    }
+  }, [selectedLanUid]);
+
+  // Load LAN sites once
+  const fetchLanSites = useCallback(async () => {
+    setLanSitesLoading(true);
+    const sites = await getLanSites();
+    setLanSites(sites);
+    setLanSitesLoading(false);
   }, []);
 
+  useEffect(() => { fetchLanSites(); }, [fetchLanSites]);
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
 
   const onlineCount = agents.filter((a) => a.status === 'online').length;
@@ -141,8 +177,105 @@ export function AgentPage() {
     return PRINTER_MODELS.filter((m) => m.brand === selectedBrand);
   }, [selectedBrand]);
 
+  const driverOptionsForModel = useMemo(() => {
+    if (!selectedCatalogModel) return [];
+    
+    let list: any[] = [];
+    
+    // Ricoh format: object mapping name to url
+    if (selectedCatalogModel.drivers && !Array.isArray(selectedCatalogModel.drivers)) {
+      list = Object.entries(selectedCatalogModel.drivers).map(([name, url]) => ({
+        name,
+        download_url: url,
+      }));
+    }
+    // Toshiba format: array of objects
+    else if (Array.isArray(selectedCatalogModel.drivers)) {
+      list = selectedCatalogModel.drivers.map((d: any) => ({
+        name: d.name || d.description || 'Printer Driver',
+        download_url: d.download_url,
+        version: d.version,
+        date: d.date,
+      }));
+    }
+    // Fujifilm format: array of links in all_links
+    else if (Array.isArray(selectedCatalogModel.all_links)) {
+      list = selectedCatalogModel.all_links.map((link: string) => {
+        const filename = link.split('/').pop() || 'Driver Installer';
+        return {
+          name: filename,
+          download_url: link,
+        };
+      });
+    }
+    
+    // Filter out generic utilities and installers to only keep specific/correct drivers
+    const genericKeywords = [
+      "diagnostic", "diagnostictool", "diagnostic_tool", "utility", 
+      "webinstaller", "web_installer", "installer", "easysetup", 
+      "easy_setup", "opkpcl6", "opkps", "mmdspcl6", "mmd2pcl6", "xps"
+    ];
+    
+    return list.filter((opt) => {
+      const filename = (opt.download_url || '').split('/').pop()?.toLowerCase() || '';
+      return !genericKeywords.some((k) => filename.includes(k));
+    });
+  }, [selectedCatalogModel]);
+
+  // Auto-select the first driver option when catalog model changes
+  useEffect(() => {
+    if (selectedCatalogModel) {
+      if (driverOptionsForModel.length > 0) {
+        const exists = driverOptionsForModel.some(opt => opt.download_url === selectedDriverOption?.download_url);
+        if (!exists) {
+          setSelectedDriverOption(driverOptionsForModel[0]);
+        }
+      } else {
+        setSelectedDriverOption(null);
+      }
+    } else {
+      setSelectedDriverOption(null);
+    }
+  }, [selectedCatalogModel, driverOptionsForModel]);
+
+  useEffect(() => {
+    if (!selectedBrand) {
+      setBrandCatalog([]);
+      setSelectedCatalogModel(null);
+      setSelectedDriverOption(null);
+      return;
+    }
+    setLoadingCatalog(true);
+    getDriversCatalog(selectedBrand)
+      .then((data) => {
+        setBrandCatalog(data);
+        setLoadingCatalog(false);
+        
+        // If there is a pending model name to select, find and select it automatically
+        if (pendingModelName) {
+          const matched = data.find((m: any) => m.model && m.model.toLowerCase().trim() === pendingModelName.toLowerCase().trim());
+          if (matched) {
+            setSelectedCatalogModel(matched);
+          }
+          setPendingModelName('');
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        setLoadingCatalog(false);
+      });
+  }, [selectedBrand, pendingModelName]);
+
   const resetForm = () => {
-    setSelectedBrand(''); setSelectedModel(null); setPrinterIp(''); setPrinterPort(9100); setCustomPort('');
+    setSelectedBrand('');
+    setSelectedModel(null);
+    setPrinterIp('');
+    setPrinterPort(9100);
+    setCustomPort('');
+    setBrandCatalog([]);
+    setSelectedCatalogModel(null);
+    setSelectedDriverOption(null);
+    setPendingModelName('');
     setEnableSmb(true); setEnableFtp(false); setScanPriority('smb'); setScanAutoConfig(true);
     setCopierUser('admin'); setCopierPass(''); setCopierIp('');
     setSmbDrive('C'); setFtpDrive('C');
@@ -177,6 +310,19 @@ export function AgentPage() {
     setConfigMacLookupLoading(false);
     setConfigShowPass(false);
     setModal('copier_config');
+  };
+
+  const openCopierDriverInstall = (copier: Copier) => {
+    resetForm();
+    setPrinterIp(copier.ipAddress);
+    if (copier.brand) {
+      setSelectedBrand(copier.brand as PrinterBrand);
+    }
+    if (copier.model) {
+      setPendingModelName(copier.model);
+    }
+    setModal('driver');
+    setSelectedAgent(null);
   };
 
   const handleConfigIpChange = async (ip: string) => {
@@ -215,13 +361,15 @@ export function AgentPage() {
   };
 
   const buildDriverConfig = () => ({
-    brand: selectedModel?.brand ?? (selectedBrand as PrinterBrand),
-    model: selectedModel?.model ?? '',
-    driverName: selectedModel?.driverName ?? '',
+    brand: selectedBrand as PrinterBrand,
+    model: selectedCatalogModel?.model ?? selectedModel?.model ?? '',
+    driverName: selectedDriverOption?.name ?? selectedModel?.driverName ?? '',
+    driverUrl: selectedDriverOption?.download_url ?? '',
     printerIp: printerIp.trim(),
     port: printerPort,
     customPort: printerPort === 'custom' ? Number(customPort) || undefined : undefined,
   });
+
 
   const buildScanConfig = () => ({
     enableSmb,
@@ -236,13 +384,16 @@ export function AgentPage() {
   });
 
   const handleInstallDriver = useCallback(async () => {
-    if (!selectedAgent || !selectedModel || !printerIp.trim()) return;
+    if ((!selectedCatalogModel && !selectedModel) || !printerIp.trim()) return;
+    if (!selectedDriverOption && !selectedModel?.driverName) return;
     setActionLoading(true);
-    const r = await mockInstallPrinterDriver(selectedAgent.id, buildDriverConfig());
+    const config = buildDriverConfig();
+    const r = await mockInstallPrinterDriver(selectedAgent?.id ?? 'direct', config);
     setResults([r]);
     setActionLoading(false);
+    if (!selectedAgent) return; // opened from copier, no need to refresh agents
     await fetchAgents();
-  }, [selectedAgent, selectedModel, printerIp, printerPort, customPort, fetchAgents]);
+  }, [selectedAgent, selectedCatalogModel, selectedModel, printerIp, printerPort, customPort, selectedDriverOption, selectedBrand, fetchAgents]);
 
   const handleInstallScan = useCallback(async () => {
     if (!selectedAgent || (!enableSmb && !enableFtp)) return;
@@ -254,13 +405,13 @@ export function AgentPage() {
   }, [selectedAgent, enableSmb, enableFtp, scanPriority, scanAutoConfig, copierIp, copierUser, copierPass, smbServer, smbPath, smbUser, smbPass, ftpServer, ftpPath, ftpUser, ftpPass, fetchAgents]);
 
   const handleBulkDriver = useCallback(async () => {
-    if (!selectedModel || !printerIp.trim()) return;
+    if ((!selectedCatalogModel && !selectedModel) || !printerIp.trim()) return;
     setActionLoading(true);
     const r = await mockBulkInstallDriver(buildDriverConfig());
     setResults(r);
     setActionLoading(false);
     await fetchAgents();
-  }, [selectedModel, printerIp, printerPort, customPort, fetchAgents]);
+  }, [selectedCatalogModel, selectedModel, printerIp, printerPort, customPort, selectedDriverOption, selectedBrand, fetchAgents]);
 
   const handleBulkScan = useCallback(async () => {
     if (!enableSmb && !enableFtp) return;
@@ -435,6 +586,59 @@ export function AgentPage() {
       <h1 style={styles.title}>🖥️ Kỹ thuật - Agent</h1>
       <p style={{ ...styles.subtitle, margin: 0 }}>{agents.length} máy tính · {onlineCount} online · {agents.length - onlineCount} offline</p>
 
+      {/* ── LAN Filter ── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        padding: '10px 14px',
+        margin: '16px 0 8px 0',
+        background: 'color-mix(in srgb, var(--color-primary) 6%, var(--color-surface))',
+        borderRadius: '10px',
+        border: '1px solid color-mix(in srgb, var(--color-primary) 20%, transparent)',
+        flexWrap: 'wrap',
+      }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>
+          🌐 Mạng LAN:
+        </span>
+        {lanSitesLoading ? (
+          <LoadingSpinner size="sm" />
+        ) : (
+          <select
+            value={selectedLanUid}
+            onChange={(e) => {
+              setSelectedLanUid(e.target.value);
+              setAgentPage(0);
+              setCopierPage(0);
+            }}
+            style={{
+              ...styles.input,
+              flex: 1,
+              minWidth: '180px',
+              maxWidth: '360px',
+              fontSize: '0.82rem',
+              padding: '6px 10px',
+              margin: 0,
+            }}
+          >
+            <option value="">— Tất cả LAN ({lanSites.length} mạng) —</option>
+            {lanSites.map((lan) => (
+              <option key={lan.lan_uid} value={lan.lan_uid}>
+                {lan.lan_name || lan.lan_uid} · {lan.gateway_ip} · {lan.active_agents} agent · {lan.printers?.length ?? 0} máy
+              </option>
+            ))}
+          </select>
+        )}
+        {selectedLanUid && (
+          <button
+            style={{ ...styles.smallBtn, fontSize: '0.72rem', padding: '4px 10px' }}
+            onClick={() => { setSelectedLanUid(''); setAgentPage(0); setCopierPage(0); }}
+          >
+            ✕ Bỏ lọc
+          </button>
+        )}
+      </div>
+
       {/* Tab switcher */}
       <div style={styles.tabBar}>
         {([['agents', '🖥️ Máy tính'], ['copiers', '🖨️ Photocopy']] as [LanTab, string][]).map(([tab, label]) => (
@@ -495,8 +699,13 @@ export function AgentPage() {
               </div>
             </GlowCard>
 
-            <AnimatedList>
-              {pagedAgents.map((agent) => (
+            {agentsLoading && agents.length === 0 ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                <LoadingSpinner size="md" />
+              </div>
+            ) : (
+              <AnimatedList>
+                {pagedAgents.map((agent) => (
                 <GlowCard key={agent.id}>
                   <div style={styles.agentHeader}>
                     <div style={styles.agentInfo}>
@@ -594,15 +803,19 @@ export function AgentPage() {
                     </div>
                   )}
                 </GlowCard>
-              ))}
-            </AnimatedList>
+                ))}
+              </AnimatedList>
+            )}
           </motion.div>
         ) : lanTab === 'copiers' ? (
           <motion.div key="copiers" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.2 }}
             style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={styles.copierSummaryText}>
                 {copiers.length} máy · {copiers.filter(c => c.status === 'online').length} online · {copiers.filter(c => c.status === 'offline').length} offline
+                {selectedLanUid && <span style={{ color: 'var(--color-primary)', marginLeft: 6 }}>· đang lọc theo LAN</span>}
               </span>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button style={styles.smallBtn} onClick={() => openModal('copier_scan')}>🔍 Quét mạng</button>
@@ -610,8 +823,14 @@ export function AgentPage() {
                   onClick={() => openModal('copier_add')}>➕ Thêm thủ công</button>
               </div>
             </div>
-            <AnimatedList>
-              {pagedCopiers.map((copier) => {
+
+            {copiersLoading && copiers.length === 0 ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                <LoadingSpinner size="md" />
+              </div>
+            ) : (
+              <AnimatedList>
+                {pagedCopiers.map((copier) => {
                 const isExpanded = expandedCopier === copier.id;
                 const isOnline = copier.status === 'online';
                 return (
@@ -663,7 +882,7 @@ export function AgentPage() {
                     </div>
 
                     {/* Config button */}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
                       <button
                         style={{ ...styles.smallBtn, color: 'var(--color-error)' }}
                         onClick={() => handleDeleteCopier(copier.id)}
@@ -675,6 +894,12 @@ export function AgentPage() {
                         onClick={() => openCopierConfig(copier)}
                       >
                         ⚙️ Cấu hình
+                      </button>
+                      <button
+                        style={{ ...styles.smallBtn, borderColor: 'var(--color-success, #00e676)', color: 'var(--color-success, #00e676)' }}
+                        onClick={() => openCopierDriverInstall(copier)}
+                      >
+                        🖨️ Cài driver
                       </button>
                     </div>
 
@@ -726,7 +951,8 @@ export function AgentPage() {
                   </GlowCard>
                 );
               })}
-            </AnimatedList>
+              </AnimatedList>
+            )}
           </motion.div>
         ) : (
           <motion.div key="downloads" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.05 }} transition={{ duration: 0.2 }}
@@ -827,7 +1053,7 @@ export function AgentPage() {
           <motion.div style={styles.modal} onClick={(e) => e.stopPropagation()}
             initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}>
             <h3 style={styles.modalTitle}>
-              {modal === 'driver' && `🖨️ Cài driver - ${selectedAgent?.hostname}`}
+              {modal === 'driver' && `🖨️ Cài driver - ${selectedAgent?.hostname ?? (printerIp ? `IP: ${printerIp}` : 'Máy in')}`}
               {modal === 'scan' && `📠 Cài scan - ${selectedAgent?.hostname}`}
               {modal === 'bulk_driver' && '🖨️ Cài driver toàn bộ agent'}
               {modal === 'bulk_scan' && '📠 Cài scan toàn bộ agent'}
@@ -1241,23 +1467,88 @@ export function AgentPage() {
                 {selectedBrand && (
                   <div style={styles.formField}>
                     <label style={styles.label}>Mã máy *</label>
-                    <div style={styles.modelGrid}>
-                      {modelsForBrand.map((m) => (
-                        <button key={m.code} style={{
-                          ...styles.modelBtn,
-                          background: selectedModel?.code === m.code ? 'color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))' : 'var(--color-bg)',
-                          borderColor: selectedModel?.code === m.code ? 'var(--color-primary)' : 'var(--color-surface-light)',
-                          color: selectedModel?.code === m.code ? 'var(--color-primary)' : 'var(--color-text)',
-                        }} onClick={() => setSelectedModel(m)}>
-                          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{m.code}</span>
-                          <span style={{ fontSize: '0.6rem', color: 'var(--color-text-secondary)', textAlign: 'center' as const }}>{m.model}</span>
-                        </button>
+                    {loadingCatalog ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 0' }}>
+                        <LoadingSpinner size="sm" />
+                        <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Đang tải danh sách driver từ server...</span>
+                      </div>
+                    ) : brandCatalog.length > 0 ? (
+                      <div style={{ ...styles.modelGrid, maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
+                        {brandCatalog.map((m: any) => (
+                          <button key={m.model} style={{
+                            ...styles.modelBtn,
+                            background: selectedCatalogModel?.model === m.model ? 'color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))' : 'var(--color-bg)',
+                            borderColor: selectedCatalogModel?.model === m.model ? 'var(--color-primary)' : 'var(--color-surface-light)',
+                            color: selectedCatalogModel?.model === m.model ? 'var(--color-primary)' : 'var(--color-text)',
+                          }} onClick={() => {
+                            setSelectedCatalogModel(m);
+                          }}>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>{m.model}</span>
+                            <span style={{ fontSize: '0.62rem', color: 'var(--color-text-secondary)', textAlign: 'center' as const }}>{m.category || m.family || 'Printer'}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ ...styles.modelGrid }}>
+                        {modelsForBrand.map((m) => (
+                          <button key={m.code} style={{
+                            ...styles.modelBtn,
+                            background: selectedModel?.code === m.code ? 'color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))' : 'var(--color-bg)',
+                            borderColor: selectedModel?.code === m.code ? 'var(--color-primary)' : 'var(--color-surface-light)',
+                            color: selectedModel?.code === m.code ? 'var(--color-primary)' : 'var(--color-text)',
+                          }} onClick={() => setSelectedModel(m)}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{m.code}</span>
+                            <span style={{ fontSize: '0.6rem', color: 'var(--color-text-secondary)', textAlign: 'center' as const }}>{m.model}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Driver variant selection for catalog models */}
+                {selectedCatalogModel && driverOptionsForModel.length > 0 && (
+                  <div style={styles.formField}>
+                    <label style={styles.label}>Driver đề xuất *</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                      {driverOptionsForModel.map((opt: any) => (
+                        <div key={opt.download_url} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--color-surface-light)',
+                          background: selectedDriverOption?.download_url === opt.download_url ? 'color-mix(in srgb, var(--color-primary) 8%, var(--color-surface))' : 'var(--color-bg)',
+                          borderColor: selectedDriverOption?.download_url === opt.download_url ? 'var(--color-primary)' : 'var(--color-surface-light)',
+                          cursor: 'pointer',
+                        }} onClick={() => setSelectedDriverOption(opt)}>
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: selectedDriverOption?.download_url === opt.download_url ? 'var(--color-primary)' : 'var(--color-text)' }}>
+                              {opt.name}
+                            </span>
+                            {opt.version && (
+                              <span style={{ fontSize: '0.65rem', color: 'var(--color-text-secondary)' }}>
+                                Version: {opt.version} {opt.date ? `| Release: ${opt.date}` : ''}
+                              </span>
+                            )}
+                            <span style={{ fontSize: '0.62rem', color: 'color-mix(in srgb, var(--color-primary) 65%, var(--color-text-secondary))', wordBreak: 'break-all' }}>
+                              URL: {opt.download_url}
+                            </span>
+                          </div>
+                          <input
+                            type="radio"
+                            name="driver_option"
+                            checked={selectedDriverOption?.download_url === opt.download_url}
+                            onChange={() => setSelectedDriverOption(opt)}
+                            style={{ marginLeft: '12px', accentColor: 'var(--color-primary)' }}
+                          />
+                        </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {selectedModel && (
+                {selectedModel && !selectedCatalogModel && (
                   <div style={{ fontSize: '0.78rem', color: 'var(--color-primary)' }}>Driver: {selectedModel.driverName}</div>
                 )}
 
