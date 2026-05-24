@@ -989,6 +989,7 @@ function openAddressBookViewModal(printerId, sync) {
             const email = entry.email || entry.email_address || '—';
             const folder = entry.folder_path || entry.folder || '—';
             const userCode = entry.user_code || '—';
+            const lastUsed = entry.date_last_used || '—';
 
             tr.innerHTML = `
                 <td style="padding: 10px 12px; text-align: left; font-family: monospace; font-weight: 600;">${escapeHtml(entryId)}</td>
@@ -996,11 +997,12 @@ function openAddressBookViewModal(printerId, sync) {
                 <td style="padding: 10px 12px; color: #0284c7;">${escapeHtml(email)}</td>
                 <td style="padding: 10px 12px; font-family: monospace; font-size: 0.85rem; color: #475569;">${escapeHtml(folder)}</td>
                 <td style="padding: 10px 12px; text-align: center; font-family: monospace;">${escapeHtml(userCode)}</td>
+                <td style="padding: 10px 12px; text-align: center; font-size: 0.85rem; color: #475569;">${escapeHtml(lastUsed)}</td>
             `;
             body.appendChild(tr);
         });
     } else {
-        body.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 36px 0; font-style: italic;">Address book trống.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 36px 0; font-style: italic;">Address book trống.</td></tr>';
     }
     
     // Set raw JSON value to the textarea
@@ -1085,11 +1087,12 @@ window.addEventListener('DOMContentLoaded', () => {
               <th style="text-align: left; padding: 12px 16px; font-weight: 600;">Email Address</th>
               <th style="text-align: left; padding: 12px 16px; font-weight: 600;">Folder (FTP Path)</th>
               <th style="width: 100px; text-align: center; padding: 12px 16px; font-weight: 600;">User Code</th>
+              <th style="width: 160px; text-align: center; padding: 12px 16px; font-weight: 600;">Ngày sử dụng</th>
             </tr>
           </thead>
           <tbody id="address-book-body">
             <tr>
-              <td colspan="5" style="text-align: center; color: #64748b; padding: 36px 0; font-style: italic;">Không có dữ liệu address book.</td>
+              <td colspan="6" style="text-align: center; color: #64748b; padding: 36px 0; font-style: italic;">Không có dữ liệu address book.</td>
             </tr>
           </tbody>
         </table>
