@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="tools">
+    <select id="trend-mode">
+      <option value="day" selected>Daily</option>
+      <option value="week">Weekly</option>
+      <option value="month">Monthly</option>
+    </select>
+    <input id="trend-date-from" type="date" />
+    <input id="trend-date-to" type="date" />
+    <input id="trend-printer-ip" placeholder="printer ip (optional)" />
+    <button id="trend-apply">Apply</button>
+  </div>
+  <section class="panel">
+    <h4>Printed Paper Trend</h4>
+    <div id="trend-meta" class="meta-line">Loading...</div>
+    <div class="chart-card" style="min-height: 420px;">
+      <canvas id="trend-chart" class="chart-rect"></canvas>
+    </div>
+    <div id="trend-table-wrap" class="table-wrap" style="margin-top:10px;"></div>
+  </section>
+  <div id="heatmap-wrap" hidden></div>
+  <div class="pager" hidden>
+    <div id="heatmap-page" class="pager-pages"></div>
+  </div>
+</section>
+{% endblock %}

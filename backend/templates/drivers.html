@@ -1,0 +1,609 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>Printer Drivers</h2>
+    <p>Select a brand and model to find driver download links.</p>
+  </div>
+
+  <div class="tab-container" style="margin-top:20px;">
+    <div class="tab-header" style="display:flex;gap:0;border-bottom:2px solid #e8eaed;">
+      <button class="tab-btn active" id="btn-ricoh" onclick="showTab('ricoh')">🔵 Ricoh</button>
+      <button class="tab-btn" id="btn-toshiba" onclick="showTab('toshiba')">🔴 Toshiba</button>
+      <button class="tab-btn" id="btn-fujifilm" onclick="showTab('fujifilm')">🟢 Fujifilm</button>
+    </div>
+
+    <!-- RICOH TAB -->
+    <div id="tab-ricoh" class="tab-content" style="padding-top:16px;">
+      <input type="text" id="ricoh-search" placeholder="Search Ricoh models (e.g. MP 3054, IM C3500)..."
+        class="search-input" oninput="filterModels('ricoh')">
+      <div id="ricoh-cats" class="cat-bar">
+        <button class="cat-btn active" onclick="setCat('ricoh','')">All</button>
+        <button class="cat-btn" onclick="setCat('ricoh','IM')">IM</button>
+        <button class="cat-btn" onclick="setCat('ricoh','IM C')">IM C</button>
+        <button class="cat-btn" onclick="setCat('ricoh','MP')">MP</button>
+        <button class="cat-btn" onclick="setCat('ricoh','MP C')">MP C</button>
+        <button class="cat-btn" onclick="setCat('ricoh','Aficio')">Aficio</button>
+        <button class="cat-btn" onclick="setCat('ricoh','SP')">SP</button>
+        <button class="cat-btn" onclick="setCat('ricoh','M')">M / M C</button>
+      </div>
+      <div id="ricoh-count" class="model-count-bar"></div>
+      <div id="ricoh-listbox" class="driver-listbox">
+        <div class="loading-msg">Loading Ricoh catalog...</div>
+      </div>
+    </div>
+
+    <!-- TOSHIBA TAB -->
+    <div id="tab-toshiba" class="tab-content" style="padding-top:16px;display:none;">
+      <input type="text" id="toshiba-search" placeholder="Search Toshiba models (e.g. e-STUDIO1208)..."
+        class="search-input" oninput="filterModels('toshiba')">
+      <div id="toshiba-count" class="model-count-bar"></div>
+      <div id="toshiba-listbox" class="driver-listbox">
+        <div class="loading-msg">Loading Toshiba catalog...</div>
+      </div>
+    </div>
+
+    <!-- FUJIFILM TAB -->
+    <div id="tab-fujifilm" class="tab-content" style="padding-top:16px;display:none;">
+      <input type="text" id="fujifilm-search" placeholder="Search Fujifilm models (e.g. Apeos 5330, ApeosPort)..."
+        class="search-input" oninput="filterModels('fujifilm')">
+      <div id="fujifilm-cats" class="cat-bar">
+        <button class="cat-btn active" onclick="setCat('fujifilm','')">All</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','ApeosPort')">ApeosPort</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','Apeos')">Apeos</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','DocuCentre')">DocuCentre</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','DocuPrint')">DocuPrint</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','ApeosPrint')">ApeosPrint</button>
+        <button class="cat-btn" onclick="setCat('fujifilm','ApeosPro')">ApeosPro</button>
+      </div>
+      <div id="fujifilm-count" class="model-count-bar"></div>
+      <div id="fujifilm-listbox" class="driver-listbox">
+        <div class="loading-msg">Loading Fujifilm catalog...</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide-in detail panel -->
+<div id="driver-panel" class="detail-panel">
+  <div class="panel-header">
+    <div>
+      <div id="panel-brand" class="panel-brand-badge"></div>
+      <h3 id="panel-model-name" style="margin:4px 0 0;font-size:1.05rem;"></h3>
+    </div>
+    <button onclick="closePanel()" class="panel-close-btn">&#x2715;</button>
+  </div>
+  <div id="panel-body"></div>
+</div>
+<div id="panel-overlay" onclick="closePanel()" class="panel-overlay"></div>
+
+<style>
+  /* Tabs */
+  .tab-btn {
+    padding: 10px 22px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: .92rem;
+    color: #888;
+    transition: all .18s;
+    margin-bottom: -2px;
+  }
+
+  .tab-btn.active {
+    color: var(--color-primary, #3b82f6);
+    border-bottom-color: var(--color-primary, #3b82f6);
+  }
+
+  .tab-btn:hover:not(.active) {
+    color: #555;
+  }
+
+  /* Category bar */
+  .cat-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 12px 0 8px;
+  }
+
+  .cat-btn {
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1.5px solid #dde1e8;
+    background: #fff;
+    cursor: pointer;
+    font-size: .8rem;
+    font-weight: 600;
+    color: #666;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+
+  .cat-btn:hover {
+    border-color: #93c5fd;
+    color: #3b82f6;
+  }
+
+  .cat-btn.active {
+    background: var(--color-primary, #3b82f6);
+    border-color: var(--color-primary, #3b82f6);
+    color: #fff;
+  }
+
+  /* Search */
+  .search-input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid #dde1e8;
+    border-radius: 8px;
+    font-size: .93rem;
+    outline: none;
+    transition: border-color .15s;
+    box-sizing: border-box;
+    margin-bottom: 2px;
+  }
+
+  .search-input:focus {
+    border-color: var(--color-primary, #3b82f6);
+  }
+
+  /* Count bar */
+  .model-count-bar {
+    font-size: .76rem;
+    color: #bbb;
+    margin-bottom: 7px;
+    padding-left: 2px;
+  }
+
+  /* List */
+  .driver-listbox {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1.5px solid #e8eaed;
+    border-radius: 10px;
+  }
+
+  .driver-item {
+    padding: 11px 16px;
+    border-bottom: 1px solid #f3f4f6;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background .12s;
+    gap: 12px;
+  }
+
+  .driver-item:last-child {
+    border-bottom: none;
+  }
+
+  .driver-item:hover {
+    background: #f5f8ff;
+  }
+
+  .model-name {
+    font-weight: 500;
+    color: #222;
+    font-size: .93rem;
+  }
+
+  .model-meta {
+    font-size: .74rem;
+    color: #bbb;
+    margin-top: 2px;
+  }
+
+  .download-badge {
+    flex-shrink: 0;
+    font-size: .76rem;
+    font-weight: 600;
+    color: var(--color-primary, #3b82f6);
+    background: #eff6ff;
+    padding: 3px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  .no-driver-badge {
+    flex-shrink: 0;
+    font-size: .74rem;
+    color: #ccc;
+    white-space: nowrap;
+  }
+
+  .loading-msg {
+    padding: 32px 20px;
+    text-align: center;
+    color: #bbb;
+    font-style: italic;
+  }
+
+  /* Panel */
+  .detail-panel {
+    display: none;
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 400px;
+    max-width: 95vw;
+    background: #fff;
+    box-shadow: -6px 0 32px rgba(0, 0, 0, .13);
+    z-index: 1001;
+    overflow-y: auto;
+    border-left: 1px solid #e8eaed;
+  }
+
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 2;
+  }
+
+  .panel-brand-badge {
+    display: inline-block;
+    font-size: .7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #eff6ff;
+    color: var(--color-primary, #3b82f6);
+    margin-bottom: 4px;
+  }
+
+  .panel-close-btn {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    cursor: pointer;
+    color: #999;
+    padding: 0 4px;
+  }
+
+  .panel-close-btn:hover {
+    color: #333;
+  }
+
+  .panel-body-inner {
+    padding: 14px 20px 32px;
+  }
+
+  .section-label {
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #ccc;
+    margin: 18px 0 8px;
+  }
+
+  .dl-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid #f5f5f5;
+    gap: 8px;
+  }
+
+  .dl-row:last-child {
+    border-bottom: none;
+  }
+
+  .dl-name {
+    font-weight: 500;
+    font-size: .87rem;
+    color: #333;
+  }
+
+  .dl-sub {
+    font-size: .72rem;
+    color: #bbb;
+    margin-top: 2px;
+  }
+
+  .dl-btn {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    background: var(--color-primary, #3b82f6);
+    color: #fff;
+    border-radius: 6px;
+    font-size: .77rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: opacity .15s;
+    white-space: nowrap;
+  }
+
+  .dl-btn:hover {
+    opacity: .82;
+  }
+
+  .dl-btn.ghost {
+    background: none;
+    color: var(--color-primary, #3b82f6);
+    border: 1.5px solid var(--color-primary, #3b82f6);
+  }
+
+  .panel-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .18);
+    z-index: 1000;
+  }
+</style>
+
+<script>
+  /* ════════════════════════════════
+     STATE
+  ════════════════════════════════ */
+  const catalogs = { ricoh: null, toshiba: null, fujifilm: null };
+  const activeCat = { ricoh: '', toshiba: '', fujifilm: '' };
+
+  /* ════════════════════════════════
+     LOAD API
+  ════════════════════════════════ */
+  async function loadCatalog(brand) {
+    if (catalogs[brand] !== null) return;
+    const el = document.getElementById(`${brand}-listbox`);
+    try {
+      const r = await fetch(`/api/drivers/${brand}`);
+      const j = await r.json();
+      if (j.ok) { catalogs[brand] = j.data; renderList(brand); }
+      else el.innerHTML = `<div class="loading-msg" style="color:#e55;">Error: ${j.error}</div>`;
+    } catch { el.innerHTML = `<div class="loading-msg" style="color:#e55;">Failed to load</div>`; }
+  }
+
+  /* ════════════════════════════════
+     HELPERS
+  ════════════════════════════════ */
+  function getModelName(brand, m) { return m.model || m.name || '—'; }
+
+  function getDriverCount(brand, m) {
+    if (brand === 'ricoh') return Object.keys(m.drivers || {}).length;
+    if (brand === 'toshiba') return (m.drivers || []).length;
+    if (brand === 'fujifilm') return (m.all_links || []).length;
+    return 0;
+  }
+
+  /* Detect Ricoh series from model name */
+  function ricohSeries(name) {
+    if (/^IM C/i.test(name)) return 'IM C';
+    if (/^IM /i.test(name)) return 'IM';
+    if (/^MP C/i.test(name)) return 'MP C';
+    if (/^MP /i.test(name)) return 'MP';
+    if (/^Aficio/i.test(name)) return 'Aficio';
+    if (/^SP C/i.test(name)) return 'SP';
+    if (/^SP /i.test(name)) return 'SP';
+    if (/^M C/i.test(name)) return 'M';
+    if (/^M /i.test(name)) return 'M';
+    return 'Other';
+  }
+
+  /* Fujifilm family */
+  function fujifamily(m) { return (m.family || '').trim(); }
+
+  /* Check if model matches active category filter */
+  function matchesCat(brand, m) {
+    const cat = activeCat[brand];
+    if (!cat) return true;
+    if (brand === 'ricoh') {
+      // "M" button matches "M" and "M C"
+      if (cat === 'M') return /^M[ C]/.test(m.model || '');
+      if (cat === 'SP') return /^SP[ C]/.test(m.model || '');
+      return (m.model || '').startsWith(cat + ' ') || (m.model || '').startsWith(cat + ' ') || ricohSeries(m.model || '') === cat;
+    }
+    if (brand === 'fujifilm') {
+      return fujifamily(m) === cat;
+    }
+    return true;
+  }
+
+  /* ════════════════════════════════
+     RENDER
+  ════════════════════════════════ */
+  function renderList(brand, searchQ) {
+    const container = document.getElementById(`${brand}-listbox`);
+    const countEl = document.getElementById(`${brand}-count`);
+    const data = catalogs[brand];
+    if (!data) return;
+
+    const q = (searchQ !== undefined
+      ? searchQ
+      : (document.getElementById(`${brand}-search`)?.value || '')
+    ).toLowerCase().trim();
+
+    const filtered = data.filter(m => {
+      const nameMatch = q === '' || getModelName(brand, m).toLowerCase().includes(q);
+      return nameMatch && matchesCat(brand, m);
+    });
+
+    countEl.textContent = `${filtered.length} model${filtered.length !== 1 ? 's' : ''}`;
+
+    if (!filtered.length) {
+      container.innerHTML = '<div class="loading-msg">No models found</div>';
+      return;
+    }
+
+    container.innerHTML = filtered.map(m => {
+      const name = getModelName(brand, m);
+      const count = getDriverCount(brand, m);
+      let meta = '';
+      if (brand === 'fujifilm') meta = fujifamily(m) || m.category || '';
+      if (brand === 'toshiba') meta = m.category || '';
+
+      const badge = count > 0
+        ? `<span class="download-badge">&#8595; ${count} file${count > 1 ? 's' : ''}</span>`
+        : `<span class="no-driver-badge">&#8594; Support site</span>`;
+
+      return `
+      <div class="driver-item" onclick='openPanel("${brand}", ${JSON.stringify(m)})'>
+        <div style="min-width:0;">
+          <div class="model-name">${name}</div>
+          ${meta ? `<div class="model-meta">${meta}</div>` : ''}
+        </div>
+        ${badge}
+      </div>`;
+    }).join('');
+  }
+
+  function filterModels(brand) {
+    renderList(brand, document.getElementById(`${brand}-search`).value);
+  }
+
+  /* ════════════════════════════════
+     CATEGORY FILTER
+  ════════════════════════════════ */
+  function setCat(brand, cat) {
+    activeCat[brand] = cat;
+    // Update button styles
+    const bar = document.getElementById(`${brand}-cats`);
+    if (bar) {
+      bar.querySelectorAll('.cat-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.trim() === (cat || 'All'));
+      });
+    }
+    // Also clear search
+    const searchEl = document.getElementById(`${brand}-search`);
+    renderList(brand, searchEl ? searchEl.value : '');
+  }
+
+  /* ════════════════════════════════
+     DETAIL PANEL
+  ════════════════════════════════ */
+  function openPanel(brand, model) {
+    document.getElementById('panel-model-name').textContent = getModelName(brand, model);
+    document.getElementById('panel-brand').textContent = brand.charAt(0).toUpperCase() + brand.slice(1);
+
+    let html = '<div class="panel-body-inner">';
+
+    if (brand === 'ricoh') {
+      const entries = Object.entries(model.drivers || {});
+      if (!entries.length) {
+        html += noDriverMsg('Ricoh', model.support_url);
+      } else {
+        html += '<div class="section-label">Windows Print Drivers</div>';
+        html += entries.map(([type, url]) => {
+          const fn = url.split('/').pop();
+          const ext = fn.split('.').pop().toUpperCase();
+          return `<div class="dl-row">
+          <div><div class="dl-name">${type}</div><div class="dl-sub">${fn}</div></div>
+          <a href="${url}" target="_blank" class="dl-btn">&#8595; ${ext}</a>
+        </div>`;
+        }).join('');
+        if (model.support_url)
+          html += `<div style="margin-top:16px;text-align:center;">
+          <a href="${model.support_url}" target="_blank" class="dl-btn ghost">All on Ricoh Support</a></div>`;
+      }
+    }
+
+    else if (brand === 'toshiba') {
+      const drivers = model.drivers || [];
+      if (!drivers.length) {
+        html += noDriverMsg('Toshiba', `https://business.toshiba.com/product/${model.slug}#downloads`);
+      } else {
+        html += '<div class="section-label">Print Drivers</div>';
+        html += drivers.map(d => {
+          const ext = (d.filename || '').split('.').pop().toUpperCase() || 'ZIP';
+          return `<div class="dl-row">
+          <div>
+            <div class="dl-name">${d.description || d.name || '—'}</div>
+            <div class="dl-sub">${d.version ? 'v' + d.version + ' · ' : ''}${d.date || ''}</div>
+          </div>
+          <a href="${d.download_url}" target="_blank" class="dl-btn">&#8595; ${ext}</a>
+        </div>`;
+        }).join('');
+        if (model.slug)
+          html += `<div style="margin-top:16px;text-align:center;">
+          <a href="https://business.toshiba.com/product/${model.slug}#downloads" target="_blank" class="dl-btn ghost">View on Toshiba</a></div>`;
+      }
+    }
+
+    else if (brand === 'fujifilm') {
+      if (model.pid)
+        html = `<div style="padding:12px 20px 0;font-size:.78rem;color:#aaa;">Code: <b>${model.pid}</b> &middot; ${model.family || ''}</div>` + html;
+      const links = model.all_links || [];
+      if (!links.length) {
+        html += noDriverMsg('Fujifilm', 'https://support-fb.fujifilm.com/');
+      } else {
+        const exeLinks = links.filter(u => u.toLowerCase().endsWith('.exe'));
+        const otherLinks = links.filter(u => !u.toLowerCase().endsWith('.exe'));
+        if (exeLinks.length) {
+          html += '<div class="section-label">Windows Drivers & Installers</div>';
+          html += exeLinks.map(url => {
+            const fn = url.split('/').pop();
+            let label = fn;
+            if (/easysetup/i.test(fn)) label = 'Easy Setup (Full Installer)';
+            else if (/pcl6/i.test(fn)) label = 'PCL6 Driver';
+            else if (/ps[^a-z]/i.test(fn)) label = 'PostScript Driver';
+            else if (/mmds/i.test(fn)) label = 'MMDS Driver';
+            else if (/xl[^a-z]/i.test(fn)) label = 'XL Driver';
+            return `<div class="dl-row">
+            <div><div class="dl-name">${label}</div><div class="dl-sub">${fn}</div></div>
+            <a href="${url}" target="_blank" class="dl-btn">&#8595; EXE</a>
+          </div>`;
+          }).join('');
+        }
+        if (otherLinks.length) {
+          html += '<div class="section-label">Other Files</div>';
+          html += otherLinks.map(url => {
+            const fn = url.split('/').pop();
+            const ext = fn.split('.').pop().toUpperCase();
+            return `<div class="dl-row">
+            <div><div class="dl-name">${fn}</div></div>
+            <a href="${url}" target="_blank" class="dl-btn">&#8595; ${ext}</a>
+          </div>`;
+          }).join('');
+        }
+        html += `<div style="margin-top:16px;text-align:center;">
+        <a href="https://support-fb.fujifilm.com/" target="_blank" class="dl-btn ghost">Fujifilm Support Site</a></div>`;
+      }
+    }
+
+    html += '</div>';
+    document.getElementById('panel-body').innerHTML = html;
+    document.getElementById('driver-panel').style.display = 'block';
+    document.getElementById('panel-overlay').style.display = 'block';
+  }
+
+  function noDriverMsg(brand, url) {
+    return `<div style="text-align:center;padding:32px 10px;color:#aaa;">
+    <div style="font-size:2rem;margin-bottom:10px;">&#128196;</div>
+    <p>No direct download links for this model.</p>
+    ${url ? `<a href="${url}" target="_blank" class="dl-btn" style="display:inline-block;margin-top:8px;">Go to ${brand} Support &rarr;</a>` : ''}
+  </div>`;
+  }
+
+  function closePanel() {
+    document.getElementById('driver-panel').style.display = 'none';
+    document.getElementById('panel-overlay').style.display = 'none';
+  }
+
+  /* ════════════════════════════════
+     TABS
+  ════════════════════════════════ */
+  function showTab(tabId) {
+    ['ricoh', 'toshiba', 'fujifilm'].forEach(b => {
+      document.getElementById(`btn-${b}`).classList.toggle('active', b === tabId);
+      document.getElementById(`tab-${b}`).style.display = b === tabId ? 'block' : 'none';
+    });
+    loadCatalog(tabId);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => loadCatalog('ricoh'));
+</script>
+{% endblock %}

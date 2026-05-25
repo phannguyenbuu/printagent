@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h3>Runtime Environment</h3>
+    <span>Current values loaded from .env</span>
+  </div>
+  <div class="env-grid">
+    {% for key, value in env_values.items() %}
+    <div class="env-item">
+      <div class="env-key">{{ key }}</div>
+      <div class="env-value">{{ value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="hint">Edit values in <code>.env</code> then refresh.</p>
+</section>
+{% endblock %}

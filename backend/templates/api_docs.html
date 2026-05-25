@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel api-docs-panel">
+  <h3>Public API Documentation</h3>
+  <div class="meta-line">Source: <code>PUBLIC_API.md</code></div>
+
+  <div class="sub-tabs">
+    <button class="sub-tab-btn active" data-tab="test">Test API</button>
+    <button class="sub-tab-btn" data-tab="docs">Documentation</button>
+  </div>
+
+  <div id="tab-test" class="sub-tab-content active">
+    <div class="api-test-layout">
+      <div class="api-test-left">
+        <div class="api-test-tools">
+          <button id="api-test-all-btn" type="button">Test All APIs</button>
+          <span id="api-test-global-status" class="api-test-status idle">Ready</span>
+        </div>
+        <div class="meta-line">Protected API tests use the server default protected scope; internal CRUD APIs fall back to the default server scope when needed.</div>
+        <div class="api-test-list">
+          <div class="api-section-title">Core System APIs</div>
+          <div class="api-test-row">
+            <label>/machinelist/</label>
+            <button type="button" class="api-test-btn" data-api-key="machinelist">Test</button>
+            <span class="api-test-status idle" id="api-test-status-machinelist">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>/networklist/</label>
+            <button type="button" class="api-test-btn" data-api-key="networklist">Test</button>
+            <span class="api-test-status idle" id="api-test-status-networklist">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>/api/infor/list</label>
+            <button type="button" class="api-test-btn" data-api-key="infor">Test</button>
+            <span class="api-test-status idle" id="api-test-status-infor">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>/api/public/device/by-mac</label>
+            <button type="button" class="api-test-btn" data-api-key="by-mac">Test</button>
+            <span class="api-test-status idle" id="api-test-status-by-mac">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>/api/public/network/by-lan</label>
+            <button type="button" class="api-test-btn" data-api-key="by-lan">Test</button>
+            <span class="api-test-status idle" id="api-test-status-by-lan">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>/all/</label>
+            <button type="button" class="api-test-btn" data-api-key="all">Test</button>
+            <span class="api-test-status idle" id="api-test-status-all">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <div class="api-section-title">Ricoh Machine Control</div>
+          <div class="api-test-row">
+            <label>Agents (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="agents-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-agents-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Devices (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="devices-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-devices-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Ricoh Machine (Unlock)</label>
+            <button type="button" class="api-test-btn" data-api-key="devices-unlock">POST</button>
+            <span class="api-test-status idle" id="api-test-status-devices-unlock">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Ricoh Machine (Lock)</label>
+            <button type="button" class="api-test-btn" data-api-key="devices-lock">POST</button>
+            <span class="api-test-status idle" id="api-test-status-devices-lock">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <div class="api-section-title">Scan Folder Queue</div>
+          <div class="meta-line" style="margin-bottom:8px;">Public route: <code>POST /api/devices/&lt;mac_id&gt;/scan-folder</code>. Create/update/delete affects a live agent, so these buttons are manual only and are excluded from <code>Test All APIs</code>.</div>
+          <div class="api-test-row">
+            <label>Scan Folder (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="ftp-queue-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-ftp-queue-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Scan Folder (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="ftp-queue-update">POST</button>
+            <span class="api-test-status idle" id="api-test-status-ftp-queue-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Scan Folder (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="ftp-queue-delete">POST</button>
+            <span class="api-test-status idle" id="api-test-status-ftp-queue-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <div class="api-section-title">API For Database (CRUD)</div>
+          
+          <!-- Workspaces -->
+          <div class="api-test-row">
+            <label>Workspaces (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="workspaces-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-workspaces-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Workspace (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="workspaces-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-workspaces-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Workspace (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="workspaces-update">PATCH</button>
+            <span class="api-test-status idle" id="api-test-status-workspaces-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Workspace (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="workspaces-delete">DELETE</button>
+            <span class="api-test-status idle" id="api-test-status-workspaces-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- Locations -->
+          <div class="api-test-row">
+            <label>Locations (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="locations-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-locations-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Location (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="locations-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-locations-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Location (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="locations-update">PATCH</button>
+            <span class="api-test-status idle" id="api-test-status-locations-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Location (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="locations-delete">DELETE</button>
+            <span class="api-test-status idle" id="api-test-status-locations-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- Materials -->
+          <div class="api-test-row">
+            <label>Materials (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="materials-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-materials-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Material (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="materials-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-materials-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Material (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="materials-update">PATCH</button>
+            <span class="api-test-status idle" id="api-test-status-materials-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Material (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="materials-delete">DELETE</button>
+            <span class="api-test-status idle" id="api-test-status-materials-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- Users -->
+          <div class="api-test-row">
+            <label>Users (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="users-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-users-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>User (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="users-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-users-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>User (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="users-update">PATCH</button>
+            <span class="api-test-status idle" id="api-test-status-users-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>User (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="users-delete">DELETE</button>
+            <span class="api-test-status idle" id="api-test-status-users-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- User / Workspace Links -->
+          <div class="api-test-row">
+            <label>User → Workspaces</label>
+            <button type="button" class="api-test-btn" data-api-key="user-workspaces-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-user-workspaces-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Workspace → Users</label>
+            <button type="button" class="api-test-btn" data-api-key="workspace-users-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-workspace-users-list">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- Tasks -->
+          <div class="api-test-row">
+            <label>Tasks (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="tasks-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-tasks-list">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Task (Create)</label>
+            <button type="button" class="api-test-btn" data-api-key="tasks-create">POST</button>
+            <span class="api-test-status idle" id="api-test-status-tasks-create">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Task (Update)</label>
+            <button type="button" class="api-test-btn" data-api-key="tasks-update">PATCH</button>
+            <span class="api-test-status idle" id="api-test-status-tasks-update">-</span>
+          </div>
+          <div class="api-test-row">
+            <label>Task (Delete)</label>
+            <button type="button" class="api-test-btn" data-api-key="tasks-delete">DELETE</button>
+            <span class="api-test-status idle" id="api-test-status-tasks-delete">-</span>
+          </div>
+
+          <div class="sidebar-sep"></div>
+          <!-- LAN Sites -->
+          <div class="api-test-row">
+            <label>LAN Sites (List)</label>
+            <button type="button" class="api-test-btn" data-api-key="lan-sites-list">GET</button>
+            <span class="api-test-status idle" id="api-test-status-lan-sites-list">-</span>
+          </div>
+        </div>
+      </div>
+      <div class="api-test-right">
+        <pre id="api-test-output" class="api-test-output">Click Test to run API check...</pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-docs" class="sub-tab-content">
+    <div class="api-docs-header">
+      <h4>Full API Reference</h4>
+      <p>This includes both the core polling APIs and the new database CRUD endpoints.</p>
+    </div>
+    <pre class="api-docs-pre">{{ api_markdown }}</pre>
+  </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const tabs = document.querySelectorAll('.sub-tab-btn');
+  const contents = document.querySelectorAll('.sub-tab-content');
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab;
+
+      tabs.forEach(t => t.classList.remove('active'));
+      contents.forEach(c => c.classList.remove('active'));
+
+      tab.classList.add('active');
+      document.getElementById(`tab-${target}`).classList.add('active');
+    });
+  });
+});
+</script>
+{% endblock %}

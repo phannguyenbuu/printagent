@@ -1,0 +1,1 @@
+"""Ricoh module."""

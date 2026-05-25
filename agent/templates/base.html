@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title }} | PrintAgent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet" />
+    {% include "_inline_styles.html" %}
+  </head>
+  <body data-page="{{ active_tab }}">
+    <div class="layout-shell" id="layout-shell">
+      <aside class="sidebar">
+        <button id="nav-close" class="nav-close" type="button" aria-label="Close menu">×</button>
+        <div class="brand">
+          <div class="brand-dot"></div>
+          <div>
+            <div class="brand-title">PrintAgent</div>
+            <div id="sidebar-lan-uid" style="font-size: 10px; color: #888; font-family: monospace; margin-top: 2px;">Loading UID...</div>
+            <div id="sidebar-agent-version" style="font-size: 10px; color: #888; font-family: monospace; margin-top: 2px;">Version: Loading...</div>
+            <details style="margin-top: 6px; font-size: 9px; max-width: 180px;">
+              <summary style="cursor: pointer; color: var(--accent-blue); font-weight: 700; outline: none; user-select: none;">Build/Deploy Script</summary>
+              <div style="margin-top: 4px; padding: 6px; background: #1e293b; color: #e2e8f0; border-radius: 6px; font-family: monospace; white-space: pre-wrap; word-break: break-all; line-height: 1.3;"># Run on Developer PC:
+python build_and_deploy.py [version]</div>
+            </details>
+          </div>
+        </div>
+        <nav class="side-nav">
+          <a class="side-link {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="side-link {% if active_tab == 'scan' %}active{% endif %}" href="{{ url_for('scan') }}">Scan</a>
+          <a class="side-link {% if active_tab == 'ftp' %}active{% endif %}" href="{{ url_for('ftp_page') }}">FTP</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <h1>{{ page_title }}</h1>
+            <p>Photocopy, print, and scanner monitoring</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="nav-toggle" class="btn ghost menu-toggle" type="button" aria-label="Open menu">☰</button>
+            <button id="refresh-btn" class="btn ghost">Refresh Data</button>
+          </div>
+        </header>
+
+        <div class="nav-tabs">
+          <a id="nav-tab-devices" class="tab {% if active_tab == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}">Devices</a>
+          <a class="tab {% if active_tab == 'scan' %}active{% endif %}" href="{{ url_for('scan') }}">Scan</a>
+          <a class="tab {% if active_tab == 'ftp' %}active{% endif %}" href="{{ url_for('ftp_page') }}">FTP</a>
+        </div>
+
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <button id="sidebar-overlay" class="sidebar-overlay" type="button" aria-label="Close menu"></button>
+    <div id="confirm-modal" class="modal-backdrop" hidden>
+      <div class="modal-card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <div class="modal-head">
+          <h4 id="confirm-modal-title">Confirm</h4>
+        </div>
+        <div id="confirm-modal-message" class="confirm-body"></div>
+        <div class="modal-tools confirm-actions">
+          <button id="confirm-modal-cancel" class="btn ghost" type="button">Cancel</button>
+          <button id="confirm-modal-ok" class="btn action" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+    {% include "_inline_scripts.html" %}
+  </body>
+</html>

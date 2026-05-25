@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+storage/
+.env
+*.log
+.build-venv/
+agent_core.zip

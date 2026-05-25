@@ -1,0 +1,56 @@
+digraph G {
+  rankdir=LR;
+  node [shape=box, style=rounded, fontsize=10];
+
+  subgraph cluster_scanner {
+    label="scanner-gox (local)";
+    color="#A3CEF1";
+    "scanner-gox/app.py\nupload_file()";
+    "scanner-gox/app.py\nrequests.post(SCAN_UPLOAD_URL)";
+    "C:/scangox/<user_id>/...";
+    "https://app.goxprint.com/api/polling/scan-upload";
+    "scanner-gox/app.py\nFTP server (pyftpdlib)";
+  }
+
+  subgraph cluster_backend {
+    label="backend (VPS)";
+    color="#B8E0D2";
+    "backend/app.py\ningest_scan_upload()";
+    "backend/app.py\nSCAN_UPLOAD_ROOT\nstorage/uploads/scans";
+    "Google Drive Sync\n(backend/google_drive_sync.py)";
+
+    "backend/app.py\nPOST /api/agents/<id>/ftp-sites";
+    "backend/app.py\nGET /api/polling/ftp-controls";
+    "backend/app.py\nPOST /api/polling/ftp-control-result";
+    "backend/models.py\nAgentNode.ftp_sites";
+    "backend/serializers.py\nftp_sites serialize";
+  }
+
+  subgraph cluster_agent {
+    label="agent (Windows PrintAgent)";
+    color="#F6D6AD";
+    "agent/main.py\nmode=ftp-worker";
+    "agent/services/ftp_worker.py\nclass FtpWorker";
+    "agent/services/polling_bridge.py\n_pull_ftp_controls()";
+    "agent/services/polling_bridge.py\n_post_ftp_control_result()";
+    "agent/web.py\napi_ftp_sites()";
+  }
+
+  // scan-upload flow
+  "scanner-gox/app.py\nupload_file()" -> "C:/scangox/<user_id>/..." [label="save file"];
+  "scanner-gox/app.py\nupload_file()" -> "scanner-gox/app.py\nrequests.post(SCAN_UPLOAD_URL)" [label="sync"];
+  "scanner-gox/app.py\nrequests.post(SCAN_UPLOAD_URL)" -> "https://app.goxprint.com/api/polling/scan-upload" [label="multipart/form-data\nlead/lan_uid/agent_uid/... + file"];
+  "https://app.goxprint.com/api/polling/scan-upload" -> "backend/app.py\ningest_scan_upload()" [label="nginx /api proxy -> :8005"];
+  "backend/app.py\ningest_scan_upload()" -> "backend/app.py\nSCAN_UPLOAD_ROOT\nstorage/uploads/scans" [label="write file"];
+  "backend/app.py\ningest_scan_upload()" -> "Google Drive Sync\n(backend/google_drive_sync.py)" [label="optional"];
+
+  // FTP CRUD flow
+  "backend/app.py\nPOST /api/agents/<id>/ftp-sites" -> "backend/models.py\nAgentNode.ftp_sites" [label="store sites"];
+  "backend/models.py\nAgentNode.ftp_sites" -> "backend/serializers.py\nftp_sites serialize" [label="API payload"];
+
+  "agent/main.py\nmode=ftp-worker" -> "agent/services/ftp_worker.py\nclass FtpWorker" [label="run worker"];
+  "agent/services/polling_bridge.py\n_pull_ftp_controls()" -> "backend/app.py\nGET /api/polling/ftp-controls" [label="pull queue"];
+  "agent/services/polling_bridge.py\n_post_ftp_control_result()" -> "backend/app.py\nPOST /api/polling/ftp-control-result" [label="report result"];
+  "backend/app.py\nGET /api/polling/ftp-controls" -> "agent/services/ftp_worker.py\nclass FtpWorker" [label="commands apply (create/update/delete site)"];
+  "agent/web.py\napi_ftp_sites()" -> "agent/services/ftp_worker.py\nclass FtpWorker" [label="list runtime sites"];
+}

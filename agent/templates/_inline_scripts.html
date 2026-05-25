@@ -1,0 +1,2525 @@
+<script>
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+
+  function avg(values) {
+    if (!values.length) return 0;
+    return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+  }
+
+  function makePath(values, width, height, pad) {
+    if (!values.length) return "";
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const spread = Math.max(max - min, 1);
+    return values
+      .map((value, idx) => {
+        const x = pad + (idx * (width - pad * 2)) / Math.max(values.length - 1, 1);
+        const normalized = (value - min) / spread;
+        const y = height - pad - normalized * (height - pad * 2);
+        return `${idx === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }
+
+  function jsonString(value) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  function hasMeaningfulScanEntryValue(row) {
+    if (!row || typeof row !== "object") return false;
+    const values = [
+      row.registration_no,
+      row.name,
+    ];
+    return values.some((v) => {
+      const t = String(v ?? "").trim();
+      return t && t !== "-" && t.toLowerCase() !== "summary";
+    });
+  }
+
+  function formatCounterResult(payload) {
+    const data = payload || {};
+    const counter = data.counter_data || {};
+    const status = data.status_data || {};
+    const rawHtml = String(data.html || "");
+    const counterSource = String(data.counter_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
+    const statusSource = String(data.status_source || "").trim() || (data.ip ? `http://${data.ip}/web/guest/en/websys/webArch/mainFrame.cgi` : "-");
+    const lines = [];
+    lines.push("SUMMARY");
+    lines.push(`printer_name: ${data.printer_name || "-"}`);
+    lines.push(`ip: ${data.ip || "-"}`);
+    lines.push(`timestamp: ${data.timestamp || "-"}`);
+    lines.push(`counter_source: ${counterSource}`);
+    lines.push(`status_source: ${statusSource}`);
+    if (data.counter_error) lines.push(`counter_error: ${data.counter_error}`);
+    if (data.status_error) lines.push(`status_error: ${data.status_error}`);
+    lines.push("");
+    lines.push("counter_data:");
+    const counterKeys = Object.keys(counter || {}).sort();
+    if (!counterKeys.length) {
+      lines.push("  - (empty -> raw html below)");
+      lines.push("");
+      lines.push("counter_raw_html:");
+      lines.push(rawHtml || "-");
+    } else {
+      counterKeys.forEach((key) => {
+        lines.push(`  - ${key}: ${counter[key]}`);
+      });
+    }
+    lines.push("");
+    lines.push("status_data:");
+    const statusKeys = Object.keys(status).sort();
+    if (!statusKeys.length) {
+      lines.push("  - (empty -> raw html below)");
+      lines.push("");
+      lines.push("status_raw_html:");
+      lines.push(rawHtml || "-");
+    } else {
+      statusKeys.forEach((key) => {
+        lines.push(`  - ${key}: ${status[key]}`);
+      });
+    }
+    return lines.join("\n");
+  }
+
+  function buildCounterHtmlPreview(payload) {
+    const data = payload || {};
+    const rawHtml = String(data.html || "");
+    return rawHtml;
+  }
+
+  const resultModalState = {
+    activeTab: "summary",
+    ip: "",
+    printerName: "",
+    counterPayload: null,
+    scanPayload: null,
+    scanLoadedIp: "",
+    protocol: "",
+    isolated: false,
+  };
+  let devicesPollingStatusTimer = null;
+
+  function formatDeviceCredential(user, password) {
+    const userText = String(user || "").trim();
+    const passText = String(password || "").trim();
+    if (userText && passText) return `${userText} / ${passText}`;
+    if (userText) return userText;
+    if (passText) return `- / ${passText}`;
+    return "-";
+  }
+
+  function updateDeviceCredentialCell(node, user, password) {
+    if (!node) return;
+    const userText = String(user || "").trim();
+    const passText = String(password || "").trim();
+    if (!userText && !passText) return;
+    const cell = node.closest("tr")?.querySelector('td[data-device-user-cell="1"]');
+    if (!cell) return;
+    cell.textContent = formatDeviceCredential(userText, passText);
+  }
+
+  function compactMachineStateError(value) {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    if (normalized.length <= 64) return normalized;
+    return `${normalized.slice(0, 61)}...`;
+  }
+
+  function normalizeMachineStateStatus(state) {
+    const raw = String(state?.status || state?.state || "").trim().toLowerCase();
+    if (raw === "enable" || raw === "enabled") return "enable";
+    if (raw === "disable" || raw === "disabled") return "disable";
+    if (raw === "error") return "error";
+    if (typeof state?.enabled === "boolean") return state.enabled ? "enable" : "disable";
+    return "error";
+  }
+
+  function setDeviceControlText(node, text, loading = false, tone = "") {
+    const textNode = node?.closest(".device-control-wrap")?.querySelector(".device-control-text");
+    if (!textNode) return;
+    textNode.textContent = String(text || "");
+    textNode.classList.toggle("loading", Boolean(loading));
+    textNode.classList.toggle("error", tone === "error");
+  }
+
+  function applyDeviceMachineState(node, state, payload = {}) {
+    if (!node) return;
+    const machineStatus = normalizeMachineStateStatus(state);
+    const method = String(state?.method || "").trim();
+    const errorText = compactMachineStateError(state?.error || payload?.error || "");
+    node.checked = machineStatus === "enable";
+    node.disabled = false;
+    node.dataset.machineLoaded = machineStatus === "error" ? "0" : "1";
+    node.dataset.machineStatus = machineStatus;
+    if (machineStatus === "enable") {
+      node.title = method ? `method=${method}` : "";
+      setDeviceControlText(node, "Enable", false);
+      return;
+    }
+    if (machineStatus === "disable") {
+      node.title = method ? `method=${method}` : "";
+      setDeviceControlText(node, "Disable", false);
+      return;
+    }
+    const details = [];
+    if (method) details.push(`method=${method}`);
+    if (errorText) details.push(`error=${errorText}`);
+    node.title = details.join(" | ");
+    setDeviceControlText(node, errorText ? `Error: ${errorText}` : "Error", false, "error");
+  }
+
+  async function refreshSingleDeviceMachineState(node) {
+    const ip = String(node?.dataset?.ip || "").trim();
+    if (!node || !ip) return;
+    node.disabled = true;
+    setDeviceControlText(node, "Loading...", true);
+    const data = await jsonFetch(`/api/devices/machine-state?ip=${encodeURIComponent(ip)}`);
+    if (!data?.ok) {
+      throw new Error(String(data?.error || "Unable to read machine state"));
+    }
+    if (!data?.state || typeof data.state !== "object") {
+      throw new Error("Machine state payload is missing");
+    }
+    applyDeviceMachineState(node, data.state, data);
+    updateDeviceCredentialCell(node, data?.auth_user, data?.auth_password);
+  }
+
+  async function refreshDeviceMachineStates(body) {
+    const nodes = Array.from(body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]'));
+    await Promise.all(
+      nodes.map(async (node) => {
+        const ip = String(node.dataset.ip || "").trim();
+        const row = node.closest("tr");
+        const name = row?.dataset?.printerName || "";
+        const type = row?.dataset?.printerType || "";
+
+        // Skip non-Ricoh machines to avoid heavy polling of random network devices.
+        if (!isValidPrinter(name, type)) {
+          node.disabled = true;
+          node.checked = false;
+          setDeviceControlText(node, "N/A", false);
+          return;
+        }
+
+        if (!ip) {
+          node.disabled = true;
+          node.checked = false;
+          setDeviceControlText(node, "N/A", false);
+          return;
+        }
+        try {
+          await refreshSingleDeviceMachineState(node);
+        } catch (err) {
+          applyDeviceMachineState(node, {
+            status: "error",
+            state: "error",
+            error: String(err?.message || err || "Unable to read machine state"),
+          });
+        }
+      })
+    );
+  }
+
+  function setResultModalView(tab) {
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const scanBtn = document.getElementById("result-modal-tab-scan");
+    const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const createBtn = document.getElementById("result-modal-tab-create-address");
+    const modalBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    const scanPanel = document.getElementById("result-modal-panel-scan");
+    const createPanel = document.getElementById("result-modal-panel-create-address");
+    if (!summaryBtn || !htmlBtn || !scanBtn || !scanHtmlTopBtn || !createBtn || !modalBody || !htmlFrame || !scanPanel || !createPanel) return;
+    let target = tab === "scan" || tab === "scan_html" || tab === "create" ? tab : "summary";
+    if (tab === "html") target = "html";
+    resultModalState.activeTab = target;
+    summaryBtn.classList.toggle("active", target === "summary");
+    htmlBtn.classList.toggle("active", target === "html");
+    scanBtn.classList.toggle("active", target === "scan");
+    scanHtmlTopBtn.classList.toggle("active", target === "scan_html");
+    createBtn.classList.toggle("active", target === "create");
+    modalBody.hidden = target !== "summary";
+    htmlFrame.hidden = target !== "html";
+    scanPanel.hidden = !(target === "scan" || target === "scan_html");
+    createPanel.hidden = target !== "create";
+  }
+
+  async function jsonFetch(url, options = {}) {
+    const res = await fetch(url, options);
+    let body = {};
+    try {
+      body = await res.json();
+    } catch (_e) {
+      body = {};
+    }
+    if (!res.ok) {
+      const message = body.error || body.message || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    return body;
+  }
+
+  function showConfirmModal(message, options = {}) {
+    const modal = document.getElementById("confirm-modal");
+    const titleEl = document.getElementById("confirm-modal-title");
+    const messageEl = document.getElementById("confirm-modal-message");
+    const okBtn = document.getElementById("confirm-modal-ok");
+    const cancelBtn = document.getElementById("confirm-modal-cancel");
+    if (!modal || !titleEl || !messageEl || !okBtn || !cancelBtn) {
+      return Promise.resolve(window.confirm(message));
+    }
+    titleEl.textContent = options.title || "Confirm";
+    messageEl.textContent = message;
+    modal.hidden = false;
+    return new Promise((resolve) => {
+      const cleanup = (result) => {
+        modal.hidden = true;
+        resolve(result);
+      };
+      const onOk = () => cleanup(true);
+      const onCancel = () => cleanup(false);
+      const onBackdrop = (event) => {
+        if (event.target === modal) onCancel();
+      };
+      const onKey = (event) => {
+        if (event.key === "Escape") onCancel();
+      };
+      okBtn.addEventListener("click", onOk, { once: true });
+      cancelBtn.addEventListener("click", onCancel, { once: true });
+      modal.addEventListener("click", onBackdrop, { once: true });
+      document.addEventListener("keydown", onKey, { once: true });
+    });
+  }
+
+  function renderTrendChart(el, labels, seriesA, seriesB, seriesC) {
+    if (!el) return;
+    const width = 900;
+    const height = 320;
+    const pad = 30;
+    const grid = [];
+    for (let i = 0; i < 5; i++) {
+      const y = pad + ((height - pad * 2) / 4) * i;
+      grid.push(`<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="#e6edf7" stroke-width="1" />`);
+    }
+    const labelNodes = labels
+      .map((label, idx) => {
+        const x = pad + (idx * (width - pad * 2)) / Math.max(labels.length - 1, 1);
+        return `<text x="${x}" y="${height - 8}" font-size="11" fill="#728197" text-anchor="middle">${label}</text>`;
+      })
+      .join("");
+
+    el.innerHTML = `
+    ${grid.join("")}
+    <path d="${makePath(seriesA, width, height, pad)}" fill="none" stroke="#2e78ff" stroke-width="4" stroke-linecap="round" />
+    <path d="${makePath(seriesB, width, height, pad)}" fill="none" stroke="#ff7a1a" stroke-width="4" stroke-linecap="round" />
+    <path d="${makePath(seriesC, width, height, pad)}" fill="none" stroke="#10b8b8" stroke-width="4" stroke-linecap="round" />
+    ${labelNodes}
+  `;
+  }
+
+  function renderBars(el, labels, a, b, c) {
+    if (!el) return;
+    const maxVal = Math.max(...a, ...b, ...c, 1);
+    el.innerHTML = labels
+      .map((label, i) => {
+        const ha = clamp((a[i] / maxVal) * 100, 4, 100);
+        const hb = clamp((b[i] / maxVal) * 100, 4, 100);
+        const hc = clamp((c[i] / maxVal) * 100, 4, 100);
+        return `
+      <div class="bar-col">
+        <div class="bar-stack">
+          <div class="bar a" style="height:${ha}%"></div>
+          <div class="bar b" style="height:${hb}%"></div>
+          <div class="bar c" style="height:${hc}%"></div>
+        </div>
+        <div class="bar-label">${label}</div>
+      </div>`;
+      })
+      .join("");
+  }
+
+  async function loadOverview() {
+    const data = await jsonFetch("/api/overview");
+    const stats = data.stats || {};
+    const trend = data.trend || {};
+    const alerts = data.alerts || [];
+
+    const byId = (id) => document.getElementById(id);
+    if (byId("stat-total")) byId("stat-total").textContent = stats.total_devices ?? "--";
+    if (byId("stat-ricoh")) byId("stat-ricoh").textContent = stats.ricoh_devices ?? "--";
+    if (byId("stat-active")) byId("stat-active").textContent = stats.active_devices ?? "--";
+    if (byId("stat-offline")) byId("stat-offline").textContent = stats.offline_devices ?? "--";
+    const copierTotal = byId("stat-copier-total");
+    const printTotal = byId("stat-print-total");
+    const scanTotal = byId("stat-scan-total");
+    if (copierTotal) copierTotal.textContent = stats.copier_pages_total ?? "--";
+    if (printTotal) printTotal.textContent = stats.print_pages_total ?? "--";
+    if (scanTotal) scanTotal.textContent = stats.scan_pages_total ?? "--";
+
+    renderBars(
+      byId("bar-chart"),
+      trend.labels || [],
+      trend.copier_pages || [],
+      trend.print_pages || [],
+      trend.scan_pages || []
+    );
+
+    renderTrendChart(
+      byId("trend-chart"),
+      trend.labels || [],
+      trend.copier_pages || [],
+      trend.print_pages || [],
+      trend.scan_pages || []
+    );
+
+    if (byId("avg-copier")) byId("avg-copier").textContent = avg(trend.copier_pages || []);
+    if (byId("avg-print")) byId("avg-print").textContent = avg(trend.print_pages || []);
+    if (byId("avg-scan")) byId("avg-scan").textContent = avg(trend.scan_pages || []);
+
+    const alertsEl = byId("alerts");
+    if (alertsEl) {
+      alertsEl.innerHTML = alerts
+        .map(
+          (item) => `
+      <div class="alert-item">
+        <div>${item.title}</div>
+        <div class="count">${item.count}</div>
+      </div>`
+        )
+        .join("");
+    }
+  }
+
+  async function runAction(ip, action, options = {}) {
+    const silent = Boolean(options.silent);
+    const out = document.getElementById("collect-output");
+    if (out) out.textContent = `Running ${action} on ${ip}...`;
+    const simplifyError = (raw) => {
+      const msg = String(raw || "");
+      const lowered = msg.toLowerCase();
+      if (
+        lowered.includes("connecttimeout") ||
+        lowered.includes("timed out") ||
+        lowered.includes("max retries exceeded")
+      ) {
+        return `Device ${ip || ""} is unreachable (connection timeout).`;
+      }
+      if (lowered.includes("connection refused")) {
+        return `Device ${ip || ""} refused the connection.`;
+      }
+      if (lowered.includes("name or service not known") || lowered.includes("nodename nor servname")) {
+        return `Cannot resolve device address: ${ip || "unknown host"}.`;
+      }
+      return `Action "${action}" failed for ${ip || "selected device"}.`;
+    };
+
+    try {
+      const data = await jsonFetch("/api/devices/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip, action }),
+      });
+      if (data.ok) {
+        if (out) out.textContent = jsonString(data);
+        if (!out && !silent) {
+          let msg = data.message || `${action} succeeded`;
+          if (action === "counter") {
+            const c = data?.payload?.counter_data || {};
+            msg = `Counter ${ip}: total=${c.total || "-"}, copier_bw=${c.copier_bw || "-"}, printer_bw=${c.printer_bw || "-"}, scanner_bw=${c.scanner_send_bw || "-"}`;
+          } else if (action === "status") {
+            const s = data?.payload?.status_data || {};
+            msg = `Status ${ip}: system=${s.system_status || "-"}, printer=${s.printer_status || s.printer_alerts || "-"}`;
+          }
+          alert(msg);
+        }
+        return data;
+      }
+      const friendly = simplifyError(data.error || "Unknown error");
+      if (out) out.textContent = friendly;
+      if (!out && !silent) alert(friendly);
+      return { ...data, ok: false, error: friendly };
+    } catch (err) {
+      const friendly = simplifyError(err?.message || err);
+      if (out) out.textContent = friendly;
+      if (!out && !silent) alert(friendly);
+      return { ok: false, error: friendly };
+    }
+  }
+
+  function renderResultModalScanRows(entries) {
+    const body = document.getElementById("result-modal-scan-body");
+    if (!body) return;
+    const rows = Array.isArray(entries)
+      ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+      : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((row) => {
+        const reg = row.registration_no || "";
+        const name = row.name || "-";
+        const userCode = row.user_code || "";
+        const entryId = row.entry_id || "";
+        const email = row.email_address || "-";
+        const folder = row.folder || "-";
+        return `
+        <tr data-registration-no="${String(reg).replaceAll('"', "&quot;")}" data-user-code="${String(userCode).replaceAll('"', "&quot;")}" data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
+          <td class="scan-actions">
+            <button class="btn action scan-row-apply" type="button" title="Apply" disabled>&#10003;</button>
+            <button class="btn action alt scan-row-delete" type="button" title="Delete" aria-label="Delete">&#128465;</button>
+          </td>
+          <td><input class="scan-inline-input" data-field="name" value="${String(name).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input" data-field="folder" value="${String(folder).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input" data-field="email" value="${String(email).replaceAll('"', "&quot;")}" /></td>
+          <td><input class="scan-inline-input scan-reg-input" data-field="registration_no" value="${String(reg).replaceAll('"', "&quot;")}" readonly /></td>
+        </tr>
+      `;
+      })
+      .join("");
+  }
+
+  function getSelectedScanProtocol() {
+    const checked = document.querySelector('input[name="result-modal-scan-protocol"]:checked');
+    return String(checked?.value || "FTP").trim();
+  }
+
+  function setSelectedScanProtocol(value) {
+    const protocol = String(value || "FTP").trim();
+    document.querySelectorAll('input[name="result-modal-scan-protocol"]').forEach((node) => {
+      node.checked = String(node.value || "") === protocol;
+    });
+  }
+
+  function setResultModalScanView(mode) {
+    const htmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const listWrap = document.getElementById("result-modal-scan-list-wrap");
+    const htmlFrame = document.getElementById("result-modal-scan-html");
+    if (!listWrap || !htmlFrame) return;
+    const htmlEnabled = String(htmlTopBtn?.dataset.enabled || "0") === "1";
+    const target = mode === "html" && htmlEnabled ? "html" : "list";
+    listWrap.hidden = target !== "list";
+    htmlFrame.hidden = target !== "html";
+  }
+
+  function appendScanLog(message, detail = null, level = "info") {
+    const out = document.getElementById("result-modal-scan-output");
+    const ts = new Date().toISOString();
+    const prefix = `[${ts}] [${String(level || "info").toUpperCase()}]`;
+    let line = `${prefix} ${String(message || "").trim()}`;
+    if (detail !== null && detail !== undefined) {
+      try {
+        const raw = typeof detail === "string" ? detail : jsonString(detail);
+        line += `\n${raw}`;
+      } catch (_err) {
+        line += `\n${String(detail)}`;
+      }
+    }
+    if (out) {
+      const prev = String(out.textContent || "").trim();
+      out.textContent = prev ? `${prev}\n${line}` : line;
+    }
+    if (level === "error") {
+      console.error(line);
+    } else if (level === "warn") {
+      console.warn(line);
+    } else {
+      console.info(line);
+    }
+  }
+
+  function buildScanHtmlPreview(payload) {
+    const data = payload || {};
+    const rawHtml = String(data.easysecurity_html || data.html || "");
+    if (!rawHtml.trim()) return "";
+    const ip = String(data.ip || "").trim();
+    const baseTag = ip ? `<base href="http://${ip}/">` : "";
+    let prepared = rawHtml;
+    if (baseTag) {
+      if (/<head[^>]*>/i.test(prepared)) {
+        prepared = prepared.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+      } else {
+        prepared = `${baseTag}${prepared}`;
+      }
+    }
+    return prepared;
+  }
+
+  async function loadResultModalScanProtocol() {
+    const hint = document.getElementById("result-modal-scan-protocol-hint");
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) {
+      if (hint) hint.textContent = "Missing printer IP";
+      return;
+    }
+    try {
+      const query = new URLSearchParams({ ip }).toString();
+      const data = await jsonFetch(`/api/scan/protocol?${query}`);
+      const protocol = String(data?.protocol || "FTP").trim();
+      const forced = "FTP";
+      setSelectedScanProtocol(forced);
+      resultModalState.protocol = forced;
+      if (hint) {
+        const detected = String(data?.detected || "").trim();
+        hint.textContent = detected
+          ? `Detected: ${detected} | Current: FTP`
+          : `Current: FTP`;
+      }
+    } catch (err) {
+      if (hint) hint.textContent = String(err?.message || err);
+    }
+  }
+
+  async function loadResultModalScanAddressList() {
+    const out = document.getElementById("result-modal-scan-output");
+    const htmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const htmlFrame = document.getElementById("result-modal-scan-html");
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) {
+      if (out) out.textContent = "Missing printer IP";
+      renderResultModalScanRows([]);
+      if (htmlBtn) {
+        htmlBtn.dataset.enabled = "0";
+        htmlBtn.disabled = true;
+      }
+      if (htmlFrame) htmlFrame.srcdoc = "";
+      return;
+    }
+    if (out) out.textContent = "";
+    appendScanLog(`Loading address list`, { ip });
+    await ensureScanIsolationForModal();
+    const payload = await fetchScanAddressListForIp(ip, true);
+    const entries = payload.address_list || [];
+    appendScanLog("Address list loaded", {
+      ip,
+      total_entries: Array.isArray(entries) ? entries.length : 0,
+      trace_id: payload?.debug?.trace_id || "",
+      mode: payload?.debug?.mode || "",
+    });
+    resultModalState.scanPayload = payload;
+    resultModalState.scanLoadedIp = ip;
+    renderResultModalScanRows(entries);
+    const scanHtmlPreview = buildScanHtmlPreview(payload);
+    if (htmlBtn) {
+      htmlBtn.dataset.enabled = scanHtmlPreview ? "1" : "0";
+      htmlBtn.disabled = !scanHtmlPreview;
+    }
+    if (htmlFrame) {
+      htmlFrame.srcdoc = scanHtmlPreview || "<html><body><p>No scan HTML payload.</p></body></html>";
+    }
+    appendScanLog("Address list payload (raw)", payload);
+    await loadResultModalScanProtocol();
+  }
+
+  async function fetchScanAddressListForIp(ip, forceRefreshDevices = true) {
+    const targetIp = String(ip || "").trim();
+    if (!targetIp) {
+      throw new Error("Missing printer IP");
+    }
+    if (forceRefreshDevices) {
+      appendScanLog("Refreshing devices before loading address list", { ip: targetIp });
+      await jsonFetch("/api/devices/refresh", { method: "POST" });
+    }
+    const query = new URLSearchParams({ ip: targetIp, mode: "adrsListAll" }).toString();
+    appendScanLog("Calling address-list API", { query: `/api/scan/address-list?${query}` });
+    const data = await jsonFetch(`/api/scan/address-list?${query}`);
+    return data.payload || {};
+  }
+
+  async function loadCounterStatusForModal() {
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    const [counterSettled, statusSettled] = await Promise.allSettled([
+      runAction(ip, "counter", { silent: true }),
+      runAction(ip, "status", { silent: true }),
+    ]);
+    const counterResult =
+      counterSettled.status === "fulfilled"
+        ? counterSettled.value
+        : { ok: false, error: String(counterSettled.reason || "counter failed") };
+    const statusResult =
+      statusSettled.status === "fulfilled"
+        ? statusSettled.value
+        : { ok: false, error: String(statusSettled.reason || "status failed") };
+    if (!counterResult.ok && !statusResult.ok) {
+      throw new Error(counterResult.error || statusResult.error || "Counter/Status failed");
+    }
+    const counterPayload = counterResult.payload || {};
+    const statusPayload = statusResult.payload || {};
+    resultModalState.counterPayload = {
+      printer_name: counterPayload.printer_name || statusPayload.printer_name || resultModalState.printerName || "Local Printer",
+      ip: counterPayload.ip || statusPayload.ip || ip,
+      timestamp: counterPayload.timestamp || statusPayload.timestamp || "",
+      counter_data: counterPayload.counter_data || {},
+      status_data: statusPayload.status_data || {},
+      html: counterPayload.html || statusPayload.html || "",
+      counter_source: counterPayload.counter_source || "",
+      status_source: statusPayload.status_source || "",
+      counter_error: counterResult.ok ? "" : String(counterResult.error || ""),
+      status_error: statusResult.ok ? "" : String(statusResult.error || ""),
+    };
+    return resultModalState.counterPayload;
+  }
+
+  function hasRealSummaryData(payload) {
+    const data = payload || {};
+    const counterSource = String(data.counter_source || "").toLowerCase();
+    const statusSource = String(data.status_source || "").toLowerCase();
+    const counterIsFinal = counterSource.includes("/web/guest/en/websys/status/getunificationcounter.cgi");
+    const statusIsFinal = statusSource.includes("/web/guest/en/websys/webarch/getstatus.cgi");
+    const hasCounterData = Object.keys(data.counter_data || {}).length > 0;
+    const hasStatusData = Object.keys(data.status_data || {}).length > 0;
+    return counterIsFinal && statusIsFinal && (hasCounterData || hasStatusData);
+  }
+
+  async function waitForRealSummaryData(maxAttempts = 6, delayMs = 700) {
+    let lastPayload = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const payload = await loadCounterStatusForModal();
+      lastPayload = payload;
+      if (hasRealSummaryData(payload)) return payload;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return lastPayload;
+  }
+
+  async function ensureScanIsolationForModal() {
+    if (resultModalState.isolated) return;
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    await jsonFetch("/api/scan/isolate-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    resultModalState.isolated = true;
+    loadDevicesPollingStatus().catch(() => { });
+  }
+
+  async function releaseScanIsolationForModal() {
+    if (!resultModalState.isolated) return;
+    try {
+      await jsonFetch("/api/scan/release-session", { method: "POST" });
+    } finally {
+      resultModalState.isolated = false;
+      loadDevicesPollingStatus().catch(() => { });
+    }
+  }
+
+  async function forceResetScanIsolationForModal() {
+    const ip = String(resultModalState.ip || "").trim();
+    if (!ip) return;
+    try {
+      await jsonFetch("/api/scan/release-session", { method: "POST" });
+    } catch (_err) {
+      // Best effort: continue to isolate even if release failed.
+    }
+    await jsonFetch("/api/scan/isolate-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    resultModalState.isolated = true;
+    loadDevicesPollingStatus().catch(() => { });
+  }
+
+  function showResultModal(title, payload) {
+    const modal = document.getElementById("result-modal");
+    const modalTitle = document.getElementById("result-modal-title");
+    const modalLoading = document.getElementById("result-modal-loading");
+    const tools = document.getElementById("result-modal-tools");
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const counterBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    const scanOut = document.getElementById("result-modal-scan-output");
+    if (
+      !modal ||
+      !modalTitle ||
+      !counterBody ||
+      !modalLoading ||
+      !tools ||
+      !summaryBtn ||
+      !htmlBtn ||
+      !htmlFrame ||
+      !scanOut
+    ) {
+      return;
+    }
+
+    modalTitle.textContent = title;
+    modalLoading.hidden = true;
+    resultModalState.counterPayload = payload || {};
+    resultModalState.ip = String(payload?.ip || "").trim();
+    resultModalState.printerName = String(payload?.printer_name || "").trim();
+    resultModalState.scanPayload = null;
+    resultModalState.scanLoadedIp = "";
+    resultModalState.protocol = "";
+    const scanHtmlBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const scanHtmlFrame = document.getElementById("result-modal-scan-html");
+    const createOut = document.getElementById("result-modal-create-output");
+    const createName = document.getElementById("result-modal-create-name");
+    const createEmail = document.getElementById("result-modal-create-email");
+    const createFolder = document.getElementById("result-modal-create-folder");
+    const createUserCode = document.getElementById("result-modal-create-user-code");
+    const scanCreateName = document.getElementById("result-modal-scan-create-name");
+    const scanCreateEmail = document.getElementById("result-modal-scan-create-email");
+    const scanCreateFolder = document.getElementById("result-modal-scan-create-folder");
+    const scanCreateUserCode = document.getElementById("result-modal-scan-create-user-code");
+    if (scanHtmlBtn) {
+      scanHtmlBtn.dataset.enabled = "0";
+      scanHtmlBtn.disabled = true;
+    }
+    if (scanHtmlFrame) scanHtmlFrame.srcdoc = "";
+    if (createOut) createOut.textContent = "Open Create Address tab to create a new entry.";
+    if (createName) createName.value = "";
+    if (createEmail) createEmail.value = "";
+    if (createFolder) createFolder.value = "";
+    if (createUserCode) createUserCode.value = "";
+    if (scanCreateName) scanCreateName.value = "";
+    if (scanCreateEmail) scanCreateEmail.value = "";
+    if (scanCreateFolder) scanCreateFolder.value = "";
+    if (scanCreateUserCode) scanCreateUserCode.value = "";
+    setCreateAddressLoading(false);
+    scanOut.textContent = "Open Scan tab to load Address List.";
+    renderResultModalScanRows([]);
+    setSelectedScanProtocol("FTP");
+    setResultModalScanView("list");
+
+    const htmlPreview = buildCounterHtmlPreview(payload);
+    if (payload && typeof payload === "object" && ("counter_data" in payload || "status_data" in payload)) {
+      counterBody.textContent = formatCounterResult(payload);
+      htmlBtn.dataset.enabled = "1";
+      htmlBtn.disabled = false;
+      htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+      tools.hidden = false;
+      setResultModalView("summary");
+    } else {
+      counterBody.textContent = jsonString(payload || {});
+      htmlBtn.dataset.enabled = "1";
+      htmlBtn.disabled = false;
+      htmlFrame.srcdoc = "<html><body><p>No HTML payload.</p></body></html>";
+      tools.hidden = false;
+      setResultModalView("summary");
+    }
+    // Default opening tab: Summary.
+    setResultModalView("summary");
+    setResultModalScanView("list");
+    modal.hidden = false;
+    forceResetScanIsolationForModal()
+      .then(() => loadResultModalScanAddressList())
+      .catch((err) => {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      });
+  }
+
+  function showResultModalLoading(title, loadingText) {
+    const modal = document.getElementById("result-modal");
+    const modalTitle = document.getElementById("result-modal-title");
+    const modalLoading = document.getElementById("result-modal-loading");
+    const modalLoadingText = document.getElementById("result-modal-loading-text");
+    const tools = document.getElementById("result-modal-tools");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const counterBody = document.getElementById("result-modal-counter-body");
+    const htmlFrame = document.getElementById("result-modal-counter-html");
+    if (!modal || !modalTitle || !counterBody || !modalLoading || !modalLoadingText || !tools || !htmlBtn || !htmlFrame) {
+      return;
+    }
+    modalTitle.textContent = title;
+    modalLoadingText.textContent = loadingText || "Loading...";
+    counterBody.textContent = "";
+    htmlFrame.srcdoc = "";
+    htmlBtn.dataset.enabled = "1";
+    htmlBtn.disabled = false;
+    tools.hidden = false;
+    counterBody.hidden = true;
+    htmlFrame.hidden = true;
+    const scanPanel = document.getElementById("result-modal-panel-scan");
+    const createPanel = document.getElementById("result-modal-panel-create-address");
+    if (scanPanel) scanPanel.hidden = true;
+    if (createPanel) createPanel.hidden = true;
+    modalLoading.hidden = false;
+    modal.hidden = false;
+  }
+
+  function showResultModalError(title, message) {
+    const modal = document.getElementById("result-modal");
+    if (!modal) return;
+    showResultModal(title, { ok: false, error: String(message || "Unknown error") });
+  }
+
+  function setCreateAddressLoading(loading) {
+    const submitBtn = document.getElementById("result-modal-create-submit");
+    const fields = [
+      document.getElementById("result-modal-create-name"),
+      document.getElementById("result-modal-create-email"),
+      document.getElementById("result-modal-create-folder"),
+      document.getElementById("result-modal-create-user-code"),
+    ];
+    if (submitBtn) {
+      submitBtn.disabled = Boolean(loading);
+      submitBtn.textContent = loading ? "Creating..." : "Create Address";
+    }
+    fields.forEach((node) => {
+      if (!node) return;
+      node.disabled = Boolean(loading);
+    });
+  }
+
+  function bindResultModal() {
+    const modal = document.getElementById("result-modal");
+    const closeBtn = document.getElementById("result-modal-close");
+    const summaryBtn = document.getElementById("result-modal-tab-summary");
+    const htmlBtn = document.getElementById("result-modal-tab-html");
+    const scanTabBtn = document.getElementById("result-modal-tab-scan");
+    const scanHtmlTopBtn = document.getElementById("result-modal-tab-scan-html-preview");
+    const createTabBtn = document.getElementById("result-modal-tab-create-address");
+    const scanReloadBtn = document.getElementById("result-modal-scan-reload");
+    const scanCreateSubmitBtn = document.getElementById("result-modal-scan-create-submit");
+    const scanBody = document.getElementById("result-modal-scan-body");
+    const createSubmitBtn = document.getElementById("result-modal-create-submit");
+    const protocolInputs = document.querySelectorAll('input[name="result-modal-scan-protocol"]');
+    if (
+      !modal ||
+      !closeBtn ||
+      !summaryBtn ||
+      !htmlBtn ||
+      !scanTabBtn ||
+      !scanHtmlTopBtn ||
+      !createTabBtn ||
+      !scanReloadBtn ||
+      !scanCreateSubmitBtn ||
+      !scanBody ||
+      !createSubmitBtn ||
+      closeBtn.dataset.bound
+    ) {
+      return;
+    }
+    const close = () => {
+      releaseScanIsolationForModal().catch(() => { });
+      modal.hidden = true;
+    };
+    closeBtn.dataset.bound = "1";
+    closeBtn.addEventListener("click", close);
+    summaryBtn.addEventListener("click", () => {
+      setResultModalView("summary");
+      const current = resultModalState.counterPayload || {};
+      const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+      if (!hasData) {
+        releaseScanIsolationForModal()
+          .catch(() => { })
+          .then(() => loadCounterStatusForModal())
+          .then((payload) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            const htmlBtn = document.getElementById("result-modal-tab-html");
+            const htmlFrame = document.getElementById("result-modal-counter-html");
+            if (counterBody) counterBody.textContent = formatCounterResult(payload);
+            const htmlPreview = buildCounterHtmlPreview(payload);
+            if (htmlBtn) {
+              htmlBtn.dataset.enabled = "1";
+              htmlBtn.disabled = false;
+            }
+            if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+          })
+          .catch((err) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            if (counterBody) counterBody.textContent = String(err?.message || err);
+          });
+      }
+    });
+    htmlBtn.addEventListener("click", () => {
+      setResultModalView("html");
+      const current = resultModalState.counterPayload || {};
+      const hasData = Object.keys(current.counter_data || {}).length > 0 || Object.keys(current.status_data || {}).length > 0;
+      if (!hasData) {
+        releaseScanIsolationForModal()
+          .catch(() => { })
+          .then(() => loadCounterStatusForModal())
+          .then((payload) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            const htmlTopBtn = document.getElementById("result-modal-tab-html");
+            const htmlFrame = document.getElementById("result-modal-counter-html");
+            if (counterBody) counterBody.textContent = formatCounterResult(payload);
+            const htmlPreview = buildCounterHtmlPreview(payload);
+            if (htmlTopBtn) {
+              htmlTopBtn.dataset.enabled = "1";
+              htmlTopBtn.disabled = false;
+            }
+            if (htmlFrame) htmlFrame.srcdoc = htmlPreview || "<html><body><p>No HTML payload.</p></body></html>";
+            setResultModalView("html");
+          })
+          .catch((err) => {
+            const counterBody = document.getElementById("result-modal-counter-body");
+            if (counterBody) counterBody.textContent = String(err?.message || err);
+            setResultModalView("summary");
+          });
+      }
+    });
+    scanTabBtn.addEventListener("click", async () => {
+      setResultModalView("scan");
+      setResultModalScanView("list");
+      try {
+        const ip = String(resultModalState.ip || "").trim();
+        if (ip && resultModalState.scanLoadedIp !== ip) {
+          await loadResultModalScanAddressList();
+        } else {
+          await loadResultModalScanProtocol();
+        }
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+    scanHtmlTopBtn.addEventListener("click", async () => {
+      setResultModalView("scan_html");
+      setResultModalScanView("html");
+      try {
+        const ip = String(resultModalState.ip || "").trim();
+        if (ip && resultModalState.scanLoadedIp !== ip) {
+          await loadResultModalScanAddressList();
+        } else {
+          await loadResultModalScanProtocol();
+        }
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        if (out) out.textContent = String(err?.message || err);
+      }
+    });
+    createTabBtn.addEventListener("click", () => {
+      setResultModalView("create");
+    });
+    scanReloadBtn.addEventListener("click", async () => {
+      try {
+        appendScanLog("User clicked Load Address List");
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        const out = document.getElementById("result-modal-scan-output");
+        appendScanLog("Load address list failed", String(err?.message || err), "error");
+        if (out) out.textContent = `${out.textContent}\n${String(err?.message || err)}`;
+      }
+    });
+    scanBody.addEventListener("click", async (event) => {
+      const row = event.target.closest("tr[data-registration-no]");
+      if (!row) return;
+      const reg = String(row.dataset.registrationNo || "").trim();
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const entryId = String(row.dataset.entryId || "").trim();
+      if (!ip || (!reg && !entryId)) return;
+      const btnDelete = event.target.closest(".scan-row-delete");
+      const btnApply = event.target.closest(".scan-row-apply");
+      if (btnDelete) {
+        const label = reg || entryId;
+        if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
+        const prevLabel = btnDelete.innerHTML;
+        const controls = row.querySelectorAll("button, input");
+        controls.forEach((node) => {
+          node.disabled = true;
+        });
+        btnDelete.textContent = "Deleting...";
+        try {
+          const data = await jsonFetch("/api/scan/address-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip, registration_no: reg, entry_id: entryId, confirm: true }),
+          });
+          if (out) out.textContent = jsonString(data.payload || data);
+          if (row.isConnected) row.remove();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        } finally {
+          if (row.isConnected) {
+            controls.forEach((node) => {
+              node.disabled = false;
+            });
+            btnDelete.innerHTML = prevLabel;
+          }
+        }
+        return;
+      }
+      if (!btnApply) return;
+      const prevApplyLabel = btnApply.innerHTML;
+      btnApply.textContent = "Applying...";
+      btnApply.disabled = true;
+      const val = (field) =>
+        String(row.querySelector(`input[data-field="${field}"]`)?.value || "").trim();
+      try {
+        const payload = {
+          ip,
+          registration_no: reg,
+          entry_id: entryId,
+          name: val("name"),
+          email: val("email"),
+          folder: val("folder"),
+          user_code: String(row.dataset.userCode || "").trim(),
+          fields: {},
+          recreate_on_fail: true,
+        };
+        const data = await jsonFetch("/api/scan/address-modify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (out) out.textContent = jsonString(data.payload || data);
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+        btnApply.disabled = false;
+      } finally {
+        if (btnApply.isConnected) {
+          btnApply.innerHTML = prevApplyLabel;
+        }
+      }
+    });
+    const saveProtocol = async () => {
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const protocol = getSelectedScanProtocol();
+      if (!ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      if (!protocol) {
+        if (out) out.textContent = "Please select scan protocol";
+        return;
+      }
+      try {
+        const data = await jsonFetch("/api/scan/protocol", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ip, protocol }),
+        });
+        resultModalState.protocol = protocol;
+        if (out) out.textContent = jsonString(data);
+        await loadResultModalScanProtocol();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    };
+    protocolInputs.forEach((node) => {
+      if (node.dataset.bound) return;
+      node.dataset.bound = "1";
+      node.addEventListener("change", () => {
+        saveProtocol().catch(() => { });
+      });
+    });
+    scanCreateSubmitBtn.addEventListener("click", async () => {
+      const out = document.getElementById("result-modal-scan-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const name = String(document.getElementById("result-modal-scan-create-name")?.value || "").trim();
+      const email = String(document.getElementById("result-modal-scan-create-email")?.value || "").trim();
+      const folder = String(document.getElementById("result-modal-scan-create-folder")?.value || "").trim();
+      const userCode = String(document.getElementById("result-modal-scan-create-user-code")?.value || "").trim() || "-";
+      if (!ip) {
+        appendScanLog("Create FTP Address blocked: missing printer IP", null, "warn");
+        if (out) out.textContent = `${out.textContent}\nMissing printer IP`;
+        return;
+      }
+      if (!name) {
+        appendScanLog("Create FTP Address blocked: missing name", null, "warn");
+        if (out) out.textContent = `${out.textContent}\nMissing name`;
+        return;
+      }
+      scanCreateSubmitBtn.disabled = true;
+      scanCreateSubmitBtn.textContent = "Creating...";
+      try {
+        appendScanLog("Create FTP Address started", {
+          ip,
+          name,
+          email_set: Boolean(email),
+          folder_set: Boolean(folder),
+          user_code_set: Boolean(userCode && userCode !== "-"),
+          protocol: "FTP",
+        });
+        const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip,
+            name,
+            email,
+            folder,
+            user_code: userCode,
+            protocol: "FTP",
+            fields: { entryTypeIn: "1" },
+          }),
+        });
+        appendScanLog("Create FTP Address success", data);
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        appendScanLog("Create FTP Address failed", String(err?.message || err), "error");
+      } finally {
+        scanCreateSubmitBtn.disabled = false;
+        scanCreateSubmitBtn.textContent = "Create FTP Address";
+      }
+    });
+    scanBody.addEventListener("input", (event) => {
+      const row = event.target.closest("tr[data-registration-no]");
+      if (!row) return;
+      const applyBtn = row.querySelector(".scan-row-apply");
+      if (!applyBtn) return;
+      applyBtn.disabled = false;
+    });
+    createSubmitBtn.addEventListener("click", async () => {
+      const out = document.getElementById("result-modal-create-output");
+      const ip = String(resultModalState.ip || "").trim();
+      const name = String(document.getElementById("result-modal-create-name")?.value || "").trim();
+      const email = String(document.getElementById("result-modal-create-email")?.value || "").trim();
+      const folder = String(document.getElementById("result-modal-create-folder")?.value || "").trim();
+      const userCode = String(document.getElementById("result-modal-create-user-code")?.value || "").trim() || "-";
+      if (!ip) {
+        if (out) out.textContent = "Missing printer IP";
+        return;
+      }
+      if (!name) {
+        if (out) out.textContent = "Missing name";
+        return;
+      }
+      setCreateAddressLoading(true);
+      if (out) out.textContent = `Creating address "${name}" on ${ip}...`;
+      try {
+        const data = await jsonFetch("/api/scan/address-create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip,
+            name,
+            email,
+            folder,
+            user_code: userCode,
+            fields: { entryTypeIn: "1" },
+          }),
+        });
+        if (out) out.textContent = jsonString(data.payload || data);
+        await loadResultModalScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      } finally {
+        setCreateAddressLoading(false);
+      }
+    });
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close();
+    });
+  }
+
+  function setRowEnabled(row, enabled) {
+    if (!row) return;
+    row.classList.toggle("device-row-disabled", !enabled);
+    row.querySelectorAll("button, input, select, textarea").forEach((el) => {
+      if (el.dataset.rowChecker === "enable") return;
+      el.disabled = !enabled;
+    });
+  }
+
+  function getDeviceFilterMode() {
+    const validOnlyInput = document.getElementById("valid-printer-only");
+    // Checked = Valid printer only, Unchecked = Show All
+    return validOnlyInput?.checked ? "valid_only" : "all";
+  }
+
+  function renderDevicesPollingStatus(status, errorText = "") {
+    const badge = document.getElementById("devices-polling-status");
+    const toggle = document.getElementById("devices-polling-toggle");
+    if (!badge) return;
+    badge.classList.remove("ok", "warn", "off", "loading");
+    if (errorText) {
+      badge.classList.add("warn");
+      badge.textContent = "Polling: error";
+      badge.title = errorText;
+      if (toggle) {
+        toggle.disabled = false;
+        toggle.title = errorText;
+      }
+      return;
+    }
+    const enabled = Boolean(status?.enabled);
+    const running = Boolean(status?.running);
+    if (enabled && running) {
+      badge.classList.add("ok");
+      badge.textContent = "Polling: ON";
+    } else {
+      badge.classList.add("off");
+      badge.textContent = "Polling: OFF";
+    }
+    const interval = Number(status?.interval_seconds || 0);
+    const lastCycle = String(status?.last_cycle_at || "").trim();
+    badge.title = `enabled=${enabled} running=${running} interval=${Number.isFinite(interval) ? interval : 0}s${lastCycle ? ` last_cycle=${lastCycle}` : ""}`;
+    if (toggle) {
+      toggle.checked = enabled;
+      toggle.disabled = false;
+      toggle.title = enabled ? "Polling enabled" : "Polling disabled";
+    }
+  }
+
+  async function loadDevicesPollingStatus() {
+    const badge = document.getElementById("devices-polling-status");
+    if (!badge) return;
+    if (!badge.textContent || badge.textContent.includes("checking")) {
+      badge.classList.remove("ok", "warn", "off");
+      badge.classList.add("loading");
+      badge.textContent = "Polling: checking...";
+    }
+    try {
+      const data = await jsonFetch("/api/polling/status");
+      renderDevicesPollingStatus(data || {});
+    } catch (err) {
+      renderDevicesPollingStatus(null, String(err?.message || err));
+    }
+  }
+
+  function startDevicesPollingStatusLoop() {
+    if (!document.getElementById("devices-polling-status")) return;
+    if (devicesPollingStatusTimer) {
+      clearInterval(devicesPollingStatusTimer);
+      devicesPollingStatusTimer = null;
+    }
+    loadDevicesPollingStatus().catch(() => { });
+    devicesPollingStatusTimer = setInterval(() => {
+      loadDevicesPollingStatus().catch(() => { });
+    }, 5000);
+  }
+
+  function isValidPrinter(name, type) {
+    const t = String(type || "").toLowerCase();
+    if (t === "ricoh") return true;
+    if (t === "unknown") {
+      const lowered = String(name || "").toLowerCase();
+      // If it was discovered but not identified as Ricoh, it's NOT a valid printer for our purposes.
+      if (lowered.includes("máy photo:")) return false;
+    }
+
+    const blockedPrefixes = ["microsoft", "microsft", "ruskdesk", "rustdesk", "anydesk", "fax", "foxit"];
+    const loweredName = String(name || "").trim().toLowerCase();
+    if (!loweredName) return true;
+    return !blockedPrefixes.some((prefix) => loweredName.startsWith(prefix));
+  }
+
+  function applyValidPrinterFilter() {
+    const body = document.getElementById("device-table-body");
+    if (!body) return;
+    const validOnly = getDeviceFilterMode() === "valid_only";
+    body.querySelectorAll("tr[data-printer-name]").forEach((row) => {
+      if (!validOnly) {
+        row.style.display = "";
+        return;
+      }
+      const name = row.dataset.printerName || "";
+      const type = row.dataset.printerType || "";
+      row.style.display = !isValidPrinter(name, type) ? "none" : "";
+    });
+  }
+
+  async function loadDevices(forceRefresh = false) {
+    const body = document.getElementById("device-table-body");
+    if (!body) return;
+    body.innerHTML = `
+    <tr>
+      <td colspan="8">
+        <div class="table-loading">
+          <span class="spinner"></span>
+          <span>Loading printers...</span>
+        </div>
+      </td>
+    </tr>`;
+    const url = forceRefresh ? "/api/devices?refresh=1" : "/api/devices";
+    const data = await jsonFetch(url);
+    const rawDevices = Array.isArray(data.devices) ? data.devices : [];
+    const rankSource = (source) => {
+      const s = String(source || "").toLowerCase();
+      if (s === "api") return 3;
+      if (s === "test") return 2;
+      return 1;
+    };
+    const keyOf = (d) => {
+      const ip = String(d?.ip || "").trim();
+      if (ip) return `ip:${ip}`;
+      const name = String(d?.name || "").trim().toLowerCase();
+      const port = String(d?.port_name || "").trim().toLowerCase();
+      return `name:${name}|port:${port}`;
+    };
+    const dedupMap = new Map();
+    for (const row of rawDevices) {
+      const key = keyOf(row);
+      const prev = dedupMap.get(key);
+      if (!prev) {
+        dedupMap.set(key, row);
+        continue;
+      }
+      if (rankSource(row?.source) > rankSource(prev?.source)) {
+        dedupMap.set(key, row);
+      }
+    }
+    const devices = Array.from(dedupMap.values());
+    if (!devices.length) {
+      body.innerHTML = `<tr><td colspan="9">No devices found.</td></tr>`;
+      return;
+    }
+    body.innerHTML = devices
+      .map((d) => {
+        const hasIp = Boolean(d.ip);
+        const canQuery = hasIp;
+        const mac = d.mac_id || "-";
+        const userDisplay = formatDeviceCredential(d.user, d.password);
+        return `
+      <tr data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-printer-type="${d.type || "unknown"}">
+        <td>
+          <button class="name-counter-trigger" data-counter-trigger="1" data-printer-name="${String(d.name || "").replaceAll('"', "&quot;")}" data-ip="${d.ip || ""}" ${canQuery ? "" : "disabled"}>${d.name}</button>
+        </td>
+        <td>${d.ip || "-"}</td>
+        <td class="device-mac" data-ip="${d.ip || ""}">${mac}</td>
+        <td>${d.type}</td>
+        <td data-device-user-cell="1">${userDisplay}</td>
+        <td>
+          <div class="device-control-wrap">
+            <button class="btn ghost btn-check-status" data-ip="${d.ip || ""}" ${hasIp ? "" : "disabled"}>Check Status</button>
+            <div class="device-control-state-display" style="display:none; align-items:center; gap:8px;">
+                <label class="mini-switch">
+                  <input type="checkbox" data-device-enable-toggle="1" data-ip="${d.ip || ""}" disabled />
+                  <span class="mini-slider"></span>
+                </label>
+                <span class="device-control-text"></span>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+      })
+      .join("");
+
+    const macCells = Array.from(body.querySelectorAll("td.device-mac[data-ip]"));
+    for (const cell of macCells) {
+      const ip = String(cell.dataset.ip || "").trim();
+      if (!ip) continue;
+      try {
+        const data = await jsonFetch(`/api/device/interface?ip=${encodeURIComponent(ip)}`);
+        if (Array.isArray(data.macs) && data.macs.length) {
+          cell.textContent = data.macs[0];
+        }
+      } catch (_err) {
+        // Keep existing value (mac_id or "-") on failure.
+      }
+    }
+
+    body.querySelectorAll("button[data-counter-trigger][data-ip]").forEach((btn) => {
+      if (btn.dataset.boundTrigger) return;
+      btn.dataset.boundTrigger = "1";
+      btn.addEventListener("click", async () => {
+        const printerName = String(btn.dataset.printerName || btn.textContent || "Printer").trim();
+        const selectedIp = String(btn.dataset.ip || "").trim();
+        const baseTitle = `${printerName} (${selectedIp})`;
+        resultModalState.ip = selectedIp;
+        resultModalState.printerName = printerName;
+        resultModalState.scanLoadedIp = "";
+        resultModalState.isolated = false;
+        showResultModalLoading(baseTitle, "Loading summary from device...");
+        const modal = document.getElementById("result-modal");
+        if (!modal || modal.hidden) return;
+        const finalTitle = `${baseTitle}`;
+        try {
+          const payload = await waitForRealSummaryData();
+          showResultModal(finalTitle, payload || {
+            printer_name: printerName || "Local Printer",
+            ip: selectedIp || "",
+            timestamp: "",
+            counter_data: {},
+            status_data: {},
+            html: "",
+          });
+        } catch (err) {
+          showResultModalError(finalTitle, String(err?.message || err || "Failed to load summary"));
+        }
+      });
+    });
+
+    body.querySelectorAll(".btn-check-status").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const wrap = btn.closest(".device-control-wrap");
+        const display = wrap.querySelector(".device-control-state-display");
+        const node = wrap.querySelector('input[data-device-enable-toggle="1"]');
+        
+        btn.disabled = true;
+        btn.textContent = "Checking...";
+        
+        try {
+          await refreshSingleDeviceMachineState(node);
+          btn.style.display = "none";
+          display.style.display = "flex";
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = "Check Status";
+          alert(String(err?.message || err || "Check failed"));
+        }
+      });
+    });
+
+    body.querySelectorAll('input[data-device-enable-toggle="1"][data-ip]').forEach((node) => {
+      node.addEventListener("change", async () => {
+        const ip = String(node.dataset.ip || "").trim();
+        if (!ip) {
+          node.checked = !node.checked;
+          return;
+        }
+        const previousChecked = !Boolean(node.checked);
+        const desiredEnabled = Boolean(node.checked);
+        node.disabled = true;
+        setDeviceControlText(node, "Applying...", true);
+        try {
+          const action = desiredEnabled ? "enable_machine" : "disable_machine";
+          const result = await runAction(ip, action, { silent: true });
+          if (!result?.ok) {
+            throw new Error(String(result?.error || "Action failed"));
+          }
+          setDeviceControlText(node, "Verifying...", true);
+          // Wait 3s to let the machine UI catch up before checking.
+          await new Promise((r) => setTimeout(r, 3000));
+          await refreshSingleDeviceMachineState(node);
+        } catch (err) {
+          node.checked = previousChecked;
+          node.disabled = false;
+          setDeviceControlText(node, node.checked ? "Enable" : "Disable", false);
+          const message = String(err?.message || err || "Toggle failed");
+          const out = document.getElementById("collect-output");
+          if (out) out.textContent = message;
+          else alert(message);
+        }
+      });
+    });
+
+    applyValidPrinterFilter();
+  }
+
+  async function initDevicesPage() {
+    bindResultModal();
+    startDevicesPollingStatusLoop();
+    const pollingTrigger = document.getElementById("devices-polling-trigger");
+    if (pollingTrigger && !pollingTrigger.dataset.bound) {
+      pollingTrigger.dataset.bound = "1";
+      pollingTrigger.addEventListener("click", async () => {
+        const badge = document.getElementById("devices-polling-status");
+        pollingTrigger.disabled = true;
+        if (badge) {
+          badge.classList.remove("ok", "warn", "off");
+          badge.classList.add("loading");
+          badge.textContent = "Polling: triggering...";
+        }
+        try {
+          const data = await jsonFetch("/api/polling/trigger", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          renderDevicesPollingStatus(data?.status || {}, "");
+          setTimeout(() => {
+            loadDevicesPollingStatus().catch(() => { });
+          }, 800);
+        } catch (err) {
+          const message = String(err?.message || err || "Trigger polling failed");
+          if (badge) {
+            badge.classList.remove("ok", "off", "loading");
+            badge.classList.add("warn");
+            badge.textContent = "Polling: error";
+            badge.title = message;
+          }
+        } finally {
+          pollingTrigger.disabled = false;
+        }
+      });
+    }
+    const pollingToggle = document.getElementById("devices-polling-toggle");
+    if (pollingToggle && !pollingToggle.dataset.bound) {
+      pollingToggle.dataset.bound = "1";
+      pollingToggle.addEventListener("change", async () => {
+        const desiredEnabled = Boolean(pollingToggle.checked);
+        const badge = document.getElementById("devices-polling-status");
+        pollingToggle.disabled = true;
+        if (badge) {
+          badge.classList.remove("ok", "warn", "off");
+          badge.classList.add("loading");
+          badge.textContent = "Polling: applying...";
+        }
+        try {
+          const data = await jsonFetch("/api/polling/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: desiredEnabled }),
+          });
+          renderDevicesPollingStatus(data?.status || {}, "");
+        } catch (err) {
+          pollingToggle.checked = !desiredEnabled;
+          const message = String(err?.message || err || "Toggle polling failed");
+          const out = document.getElementById("collect-output");
+          if (out) out.textContent = message;
+          else alert(message);
+        } finally {
+          pollingToggle.disabled = false;
+        }
+      });
+    }
+    const validOnlyInput = document.getElementById("valid-printer-only");
+    if (validOnlyInput && !validOnlyInput.dataset.bound) {
+      validOnlyInput.dataset.bound = "1";
+      try {
+        const cfg = await jsonFetch("/api/ui/config");
+        const mode = String(cfg?.device_filters?.filter_mode || "valid_only");
+        validOnlyInput.checked = mode === "valid_only";
+      } catch (_e) {
+        validOnlyInput.checked = true;
+      }
+      validOnlyInput.addEventListener("change", () => {
+        applyValidPrinterFilter();
+      });
+    }
+    await loadDevices();
+  }
+
+  const ftpState = {
+    pcs: [],
+    sites: [],
+    selectedId: "",
+    mode: "create",
+    editingSiteName: "",
+  };
+
+  function normalizeFtpName(value) {
+    const cleaned = String(value || "")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^A-Za-z0-9_-]/g, "");
+    return cleaned.slice(0, 48);
+  }
+
+  function normalizeFtpPath(value) {
+    return String(value || "").trim().replace(/\\/g, "/");
+  }
+
+  function renderFtpPcList() {
+    const body = document.getElementById("ftp-pc-body");
+    if (!body) return;
+    const rows = Array.isArray(ftpState.pcs) ? ftpState.pcs : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5">No PCs found.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((pc) => {
+        const id = String(pc.id || "");
+        const selected = id === String(ftpState.selectedId || "");
+        return `
+        <tr class="${selected ? "selected" : ""}">
+          <td><input type="radio" name="ftp-selected-pc" value="${id}" ${selected ? "checked" : ""} /></td>
+          <td>${escapeHtml(pc.name || "-")}</td>
+          <td>${escapeHtml(pc.ip || "-")}</td>
+          <td>${escapeHtml(pc.department || "-")}</td>
+          <td>${escapeHtml(pc.source || "-")}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  function renderFtpSiteList() {
+    const body = document.getElementById("ftp-sites-body");
+    if (!body) return;
+    const rows = Array.isArray(ftpState.sites) ? ftpState.sites : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7">No active FTP sites.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((site) => {
+        const name = String(site.name || "");
+        const port = String(site.port || "");
+        const path = String(site.upload_path || site.path || "");
+        const user = String(site.ftp_user || "");
+        const password = String(site.ftp_password || "");
+        const url = String(site.upload_url || site.ftp_url || "");
+        return `
+          <tr>
+            <td style="font-family:monospace;font-weight:700;">${escapeHtml(name)}</td>
+            <td style="font-family:monospace;">${escapeHtml(port || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(path || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(user || "-")}</td>
+            <td style="font-family:monospace;">${escapeHtml(password || "-")}</td>
+            <td>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : '<span style="color:#888;">-</span>'}</td>
+            <td>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn ghost ftp-site-edit" data-site-name="${escapeHtml(name)}">Edit</button>
+                <button type="button" class="btn ghost ftp-site-delete" data-site-name="${escapeHtml(name)}">Delete</button>
+              </div>
+            </td>
+          </tr>`;
+      })
+      .join("");
+  }
+
+  async function loadFtpPcs() {
+    const body = document.getElementById("ftp-pc-body");
+    if (!body) return;
+    body.innerHTML = `<tr><td colspan="5">Loading...</td></tr>`;
+    const data = await jsonFetch("/api/ftp/pcs");
+    ftpState.pcs = Array.isArray(data?.pcs) ? data.pcs : [];
+    const exists = ftpState.pcs.some((x) => String(x.id || "") === String(ftpState.selectedId || ""));
+    if (!exists) ftpState.selectedId = String(ftpState.pcs[0]?.id || "");
+    renderFtpPcList();
+  }
+
+  async function loadFtpSites() {
+    const body = document.getElementById("ftp-sites-body");
+    if (!body) return;
+    body.innerHTML = `<tr><td colspan="7">Loading...</td></tr>`;
+    const data = await jsonFetch("/api/ftp/sites");
+    ftpState.sites = Array.isArray(data?.sites) ? data.sites : [];
+    renderFtpSiteList();
+  }
+
+  function openFtpSiteModal(mode = "create", site = null) {
+    const modal = document.getElementById("ftp-create-modal");
+    const title = document.getElementById("ftp-create-modal-title");
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    const hiddenOriginal = document.getElementById("ftp-site-original-name");
+    if (!modal || !title || !inputName || !inputPath || !inputPort || !hiddenOriginal) return;
+    ftpState.mode = mode === "edit" ? "edit" : "create";
+    ftpState.editingSiteName = ftpState.mode === "edit" && site ? String(site.name || "") : "";
+    hiddenOriginal.value = ftpState.editingSiteName;
+    title.textContent = ftpState.mode === "edit" ? "Edit FTP" : "Create FTP";
+    if (ftpState.mode === "edit" && site) {
+      inputName.value = normalizeFtpName(site.name || "");
+      inputPath.value = normalizeFtpPath(site.path || "");
+      inputPort.value = String(site.port || 2121);
+    } else {
+      const selected = ftpState.pcs.find((x) => String(x.id || "") === String(ftpState.selectedId || ""));
+      const defaultName = selected ? `ftp_${String(selected.name || "site")}` : "ftp_site";
+      inputName.value = normalizeFtpName(defaultName);
+      inputPath.value = normalizeFtpPath(`storage/ftp/${normalizeFtpName(defaultName) || "ftp_site"}`);
+      inputPort.value = "2121";
+    }
+    modal.hidden = false;
+    setTimeout(() => {
+      inputName.focus();
+      inputName.select();
+    }, 0);
+  }
+
+  function closeFtpCreateModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    if (!modal) return;
+    modal.hidden = true;
+  }
+
+  async function submitFtpSiteModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    const hiddenOriginal = document.getElementById("ftp-site-original-name");
+    const output = document.getElementById("ftp-output");
+    if (!modal || !inputName || !inputPath || !inputPort || !hiddenOriginal) return;
+    const ftpName = normalizeFtpName(inputName.value);
+    const ftpPath = normalizeFtpPath(inputPath.value);
+    const ftpPort = Number.parseInt(String(inputPort.value || "0"), 10) || 0;
+    const originalName = normalizeFtpName(hiddenOriginal.value);
+    if (!ftpName) {
+      if (output) output.textContent = "FTP name is required.";
+      return;
+    }
+
+    const selectedId = String(ftpState.selectedId || "");
+    if (ftpState.mode === "create" && !selectedId) {
+      if (output) output.textContent = "Please select one PC first.";
+      closeFtpCreateModal();
+      return;
+    }
+
+    const okBtn = document.getElementById("ftp-create-ok");
+    if (okBtn) okBtn.disabled = true;
+    try {
+      if (ftpState.mode === "edit") {
+        if (output) output.textContent = "Updating FTP...";
+        const payload = await jsonFetch("/api/ftp/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            site_name: originalName || ftpName,
+            new_site_name: ftpName,
+            local_path: ftpPath,
+            port: ftpPort,
+          }),
+        });
+        if (output) output.textContent = jsonString(payload);
+      } else {
+        if (output) output.textContent = "Creating FTP...";
+        const payload = await jsonFetch("/api/ftp/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            computer_id: selectedId,
+            ftp_name: ftpName,
+            ftp_path: ftpPath,
+            port: ftpPort,
+          }),
+        });
+        if (output) output.textContent = jsonString(payload);
+      }
+      closeFtpCreateModal();
+      await loadFtpSites();
+    } catch (err) {
+      if (output) output.textContent = `${ftpState.mode === "edit" ? "Update" : "Create"} FTP failed: ${String(err?.message || err)}`;
+    } finally {
+      if (okBtn) okBtn.disabled = false;
+    }
+  }
+
+  function bindFtpModal() {
+    const modal = document.getElementById("ftp-create-modal");
+    const okBtn = document.getElementById("ftp-create-ok");
+    const cancelBtn = document.getElementById("ftp-create-cancel");
+    const inputName = document.getElementById("ftp-create-name");
+    const inputPath = document.getElementById("ftp-create-path");
+    const inputPort = document.getElementById("ftp-create-port");
+    if (!modal || !okBtn || !cancelBtn || !inputName || !inputPath || !inputPort) return;
+    if (modal.dataset.bound) return;
+    modal.dataset.bound = "1";
+
+    cancelBtn.addEventListener("click", () => closeFtpCreateModal());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeFtpCreateModal();
+    });
+    inputName.addEventListener("input", () => {
+      const next = normalizeFtpName(inputName.value);
+      if (next !== inputName.value) inputName.value = next;
+    });
+    inputPath.addEventListener("input", () => {
+      const next = normalizeFtpPath(inputPath.value);
+      if (next !== inputPath.value) inputPath.value = next;
+    });
+    okBtn.addEventListener("click", () => submitFtpSiteModal());
+  }
+
+  async function deleteFtpSite(siteName) {
+    const output = document.getElementById("ftp-output");
+    const safeName = normalizeFtpName(siteName);
+    if (!safeName) return;
+    const ok = window.confirm(`Delete FTP site "${safeName}"?`);
+    if (!ok) return;
+    if (output) output.textContent = `Deleting ${safeName}...`;
+    const payload = await jsonFetch(`/api/ftp/sites/${encodeURIComponent(safeName)}`, { method: "DELETE" });
+    if (output) output.textContent = jsonString(payload);
+    await loadFtpSites();
+  }
+
+  let activeCopierForFtp = null;
+
+  async function refreshFtpPrinters(forceBackendRefresh = true) {
+    const body = document.getElementById("ftp-devices-body");
+    if (!body) return;
+    body.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #888; padding: 24px 0; font-style: italic;">Loading printers...</td></tr>`;
+
+    try {
+      const req = forceBackendRefresh
+        ? jsonFetch("/api/devices/refresh", { method: "POST" })
+        : jsonFetch("/api/devices");
+      const data = await req;
+      const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
+      const rankSource = (source) => {
+        const s = String(source || "").toLowerCase();
+        if (s === "api") return 3;
+        if (s === "test") return 2;
+        return 1;
+      };
+      const byIp = new Map();
+      for (const row of rawDevices) {
+        const ip = String(row?.ip || "").trim();
+        const type = String(row?.type || "").toLowerCase();
+        if (!ip || type !== "ricoh") continue;
+        const prev = byIp.get(ip);
+        if (!prev || rankSource(row?.source) > rankSource(prev?.source)) {
+          byIp.set(ip, row);
+        }
+      }
+      const devices = Array.from(byIp.values()).sort((a, b) => {
+        const nameA = String(a?.name || "").toLowerCase();
+        const nameB = String(b?.name || "").toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
+
+      if (devices.length === 0) {
+        body.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #888; padding: 24px 0; font-style: italic;">No online Ricoh copiers found.</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = devices.map(d => {
+        const ip = String(d.ip || "").trim();
+        const name = String(d.name || ip).trim();
+        const mac = String(d.mac_id || "-").trim();
+        const cachedUser = localStorage.getItem(`copier_user_${ip}`) || d.user || "admin";
+        const cachedPass = localStorage.getItem(`copier_pass_${ip}`) || d.password || "";
+
+        return `
+          <tr style="border-bottom: 1px solid #222; background: #000;" data-ip="${escapeHtml(ip)}">
+            <td style="padding: 8px 12px; font-family: monospace; font-weight: 700; color: #00bfff;">${escapeHtml(ip)}</td>
+            <td style="padding: 8px 12px; color: #ffffff; font-weight: 500;">${escapeHtml(name)}</td>
+            <td style="padding: 8px 12px; font-family: monospace; color: #888;">${escapeHtml(mac)}</td>
+            <td style="padding: 8px 12px;">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" class="copier-user-input" value="${escapeHtml(cachedUser)}" placeholder="admin" style="background: #111; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: #fff; width: 90px;">
+                <input type="password" class="copier-pass-input" value="${escapeHtml(cachedPass)}" placeholder="password" style="background: #111; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: #fff; width: 110px;">
+              </div>
+            </td>
+            <td style="padding: 8px 12px; text-align: center;">
+              <button class="copier-add-btn btn action" type="button" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; display: block; width: 100%; box-sizing: border-box;" title="Tạo FTP/Email mới cho máy in này">➕ Tạo FTP/Email</button>
+            </td>
+            <td style="padding: 8px 12px; text-align: center;">
+              <button class="copier-view-btn btn action" type="button" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; background: #27ae60; border-color: #27ae60; display: block; width: 100%; box-sizing: border-box;" title="Xem Address Book hiện tại">👁 Xem</button>
+            </td>
+            <td style="padding: 8px 12px; font-size: 11px; font-weight: 500;" class="copier-status-cell">Idle</td>
+          </tr>
+        `;
+      }).join("");
+
+      body.querySelectorAll("tr").forEach(tr => {
+        const ip = tr.dataset.ip;
+        const userInput = tr.querySelector(".copier-user-input");
+        const passInput = tr.querySelector(".copier-pass-input");
+        const viewBtn = tr.querySelector(".copier-view-btn");
+        const addBtn = tr.querySelector(".copier-add-btn");
+        const statusCell = tr.querySelector(".copier-status-cell");
+
+        if (userInput) {
+          userInput.addEventListener("input", () => {
+            localStorage.setItem(`copier_user_${ip}`, userInput.value.trim());
+          });
+        }
+        if (passInput) {
+          passInput.addEventListener("input", () => {
+            localStorage.setItem(`copier_pass_${ip}`, passInput.value.trim());
+          });
+        }
+
+        if (viewBtn) {
+          viewBtn.addEventListener("click", async () => {
+            const user = (userInput ? userInput.value : "").trim();
+            const password = (passInput ? passInput.value : "").trim();
+
+            if (statusCell) {
+              statusCell.textContent = "⌛ Connecting and reading address book... (5-15s)";
+              statusCell.style.color = "#f1c40f";
+            }
+            viewBtn.disabled = true;
+
+            try {
+              const query = new URLSearchParams({ ip, user, password, mode: "adrslistall" }).toString();
+              const data = await jsonFetch(`/api/scan/address-list?${query}`);
+              if (!data?.ok) {
+                throw new Error(data?.error || "Failed to fetch address book");
+              }
+              if (statusCell) {
+                statusCell.textContent = "✔ OK";
+                statusCell.style.color = "#2ecc71";
+              }
+              openCopierAddressBookModal(data.payload || {});
+            } catch (err) {
+              if (statusCell) {
+                statusCell.textContent = `❌ Error: ${err.message}`;
+                statusCell.style.color = "#e74c3c";
+              }
+            } finally {
+              viewBtn.disabled = false;
+            }
+          });
+        }
+
+        if (addBtn) {
+          addBtn.addEventListener("click", () => {
+            const user = (userInput ? userInput.value : "").trim();
+            const password = (passInput ? passInput.value : "").trim();
+            activeCopierForFtp = { ip, user, password, statusCell };
+            openCopierFtpCreateModal();
+          });
+        }
+      });
+
+    } catch (err) {
+      body.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #e74c3c; padding: 24px 0;">Error loading printers: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  function openCopierAddressBookModal(payload) {
+    const modal = document.getElementById("address-book-modal");
+    const subtitle = document.getElementById("address-book-modal-subtitle");
+    const body = document.getElementById("address-book-body");
+    const rawTextarea = document.getElementById("address-book-raw");
+    if (!modal || !body) return;
+    
+    subtitle.textContent = `IP: ${payload.ip || ""} (Fetched: ${payload.timestamp ? new Date(payload.timestamp).toLocaleString("vi-VN") : "—"})`;
+    body.innerHTML = "";
+    
+    const list = payload.address_list || [];
+    const rows = list.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x));
+    if (rows.length > 0) {
+      body.innerHTML = rows.map(entry => {
+        const reg = entry.registration_no || "";
+        const name = entry.name || "—";
+        const email = entry.email_address || entry.email || "—";
+        const folder = entry.folder || "—";
+        const userCode = entry.user_code || "—";
+        return `
+          <tr style="border-bottom: 1px solid #222; background: #000;">
+            <td style="padding: 8px 12px; font-family: monospace;">${escapeHtml(reg)}</td>
+            <td style="padding: 8px 12px; font-weight: 600; color: #fff;">${escapeHtml(name)}</td>
+            <td style="padding: 8px 12px; color: #00bfff;">${escapeHtml(email)}</td>
+            <td style="padding: 8px 12px; font-family: monospace; font-size: 0.85rem; color: #888;">${escapeHtml(folder)}</td>
+            <td style="padding: 8px 12px; font-family: monospace;">${escapeHtml(userCode)}</td>
+          </tr>
+        `;
+      }).join("");
+    } else {
+      body.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888; padding: 24px 0; font-style: italic;">Address book is empty.</td></tr>';
+    }
+    
+    if (rawTextarea) {
+      rawTextarea.value = JSON.stringify(payload, null, 2);
+    }
+    modal.hidden = false;
+  }
+
+  function openCopierFtpCreateModal() {
+    const modal = document.getElementById("copier-ftp-create-modal");
+    const nameInput = document.getElementById("copier-ftp-create-name");
+    const emailInput = document.getElementById("copier-ftp-create-email");
+    const userCodeInput = document.getElementById("copier-ftp-create-user-code");
+    if (!modal || !nameInput || !emailInput || !userCodeInput) return;
+    
+    nameInput.value = "";
+    emailInput.value = "";
+    userCodeInput.value = "";
+    modal.hidden = false;
+    setTimeout(() => nameInput.focus(), 50);
+  }
+
+  function closeCopierFtpCreateModal() {
+    const modal = document.getElementById("copier-ftp-create-modal");
+    if (modal) modal.hidden = true;
+  }
+
+  function bindCopierFtpModals() {
+    const abModal = document.getElementById("address-book-modal");
+    const abCloseBtn = document.getElementById("address-book-modal-close-btn");
+    if (abModal && abCloseBtn) {
+      abCloseBtn.onclick = () => { abModal.hidden = true; };
+      abModal.onclick = (e) => { if (e.target === abModal) abModal.hidden = true; };
+    }
+    
+    const createModal = document.getElementById("copier-ftp-create-modal");
+    const cancelBtn = document.getElementById("copier-ftp-create-cancel");
+    const okBtn = document.getElementById("copier-ftp-create-ok");
+    const nameInput = document.getElementById("copier-ftp-create-name");
+    const emailInput = document.getElementById("copier-ftp-create-email");
+    const userCodeInput = document.getElementById("copier-ftp-create-user-code");
+    
+    if (createModal && cancelBtn && okBtn && nameInput && emailInput && userCodeInput) {
+      cancelBtn.onclick = closeCopierFtpCreateModal;
+      createModal.onclick = (e) => { if (e.target === createModal) closeCopierFtpCreateModal(); };
+      
+      okBtn.onclick = async () => {
+        const name = nameInput.value.trim();
+        const email = emailInput.value.trim();
+        const userCode = userCodeInput.value.trim() || "-";
+        
+        if (!name) {
+          alert("Name is required");
+          return;
+        }
+        
+        if (!activeCopierForFtp) {
+          alert("No printer selected");
+          return;
+        }
+        
+        const { ip, user, password, statusCell } = activeCopierForFtp;
+        
+        closeCopierFtpCreateModal();
+        if (statusCell) {
+          statusCell.textContent = "⌛ Đang cấu hình FTP và cài đặt Address Book trên máy photocopy... (5-15s)";
+          statusCell.style.color = "#f1c40f";
+        }
+        
+        try {
+          const res = await jsonFetch("/api/scan/address-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ip,
+              user,
+              password,
+              name,
+              email,
+              user_code: userCode
+            })
+          });
+          
+          const output = document.getElementById("ftp-output");
+          if (output) {
+            output.textContent = JSON.stringify(res, null, 2);
+          }
+          
+          if (statusCell) {
+            statusCell.textContent = "✔ Tạo FTP/Email thành công";
+            statusCell.style.color = "#2ecc71";
+          }
+          
+          // Reload active FTP sites list to show the new site
+          loadFtpSites().catch(() => {});
+        } catch (err) {
+          if (statusCell) {
+            statusCell.textContent = `❌ Lỗi: ${err.message}`;
+            statusCell.style.color = "#e74c3c";
+          }
+        }
+      };
+    }
+  }
+
+  async function initFtpPage() {
+    bindFtpModal();
+    const refreshBtn = document.getElementById("ftp-refresh-btn");
+    const createBtn = document.getElementById("ftp-create-btn");
+    const sitesRefreshBtn = document.getElementById("ftp-sites-refresh-btn");
+    const pcBody = document.getElementById("ftp-pc-body");
+    const sitesBody = document.getElementById("ftp-sites-body");
+    if (refreshBtn && !refreshBtn.dataset.bound) {
+      refreshBtn.dataset.bound = "1";
+      refreshBtn.addEventListener("click", () => {
+        loadFtpPcs().catch((err) => {
+          const output = document.getElementById("ftp-output");
+          if (output) output.textContent = `Load PCs failed: ${String(err?.message || err)}`;
+        });
+      });
+    }
+    if (sitesRefreshBtn && !sitesRefreshBtn.dataset.bound) {
+      sitesRefreshBtn.dataset.bound = "1";
+      sitesRefreshBtn.addEventListener("click", () => {
+        loadFtpSites().catch((err) => {
+          const output = document.getElementById("ftp-output");
+          if (output) output.textContent = `Load FTP sites failed: ${String(err?.message || err)}`;
+        });
+      });
+    }
+    if (pcBody && !pcBody.dataset.bound) {
+      pcBody.dataset.bound = "1";
+      pcBody.addEventListener("change", (event) => {
+        const node = event.target?.closest?.('input[name="ftp-selected-pc"]');
+        if (!node) return;
+        ftpState.selectedId = String(node.value || "");
+        renderFtpPcList();
+      });
+      pcBody.addEventListener("click", (event) => {
+        const row = event.target?.closest?.("tr");
+        if (!row) return;
+        const radio = row.querySelector('input[name="ftp-selected-pc"]');
+        if (!radio) return;
+        radio.checked = true;
+        ftpState.selectedId = String(radio.value || "");
+        renderFtpPcList();
+      });
+    }
+    if (sitesBody && !sitesBody.dataset.bound) {
+      sitesBody.dataset.bound = "1";
+      sitesBody.addEventListener("click", async (event) => {
+        const editBtn = event.target?.closest?.(".ftp-site-edit");
+        if (editBtn) {
+          const siteName = String(editBtn.getAttribute("data-site-name") || "");
+          const site = ftpState.sites.find((x) => String(x.name || "") === siteName);
+          openFtpSiteModal("edit", site || null);
+          return;
+        }
+        const deleteBtn = event.target?.closest?.(".ftp-site-delete");
+        if (deleteBtn) {
+          await deleteFtpSite(deleteBtn.getAttribute("data-site-name") || "");
+        }
+      });
+    }
+    if (createBtn && !createBtn.dataset.bound) {
+      createBtn.dataset.bound = "1";
+      createBtn.addEventListener("click", () => openFtpSiteModal("create"));
+    }
+
+    const devicesRefreshBtn = document.getElementById("ftp-devices-refresh-btn");
+
+    if (devicesRefreshBtn && !devicesRefreshBtn.dataset.bound) {
+      devicesRefreshBtn.dataset.bound = "1";
+      devicesRefreshBtn.addEventListener("click", () => {
+        refreshFtpPrinters(true).catch(err => {
+          alert(`Reload printers failed: ${err.message}`);
+        });
+      });
+    }
+
+    bindCopierFtpModals();
+    refreshFtpPrinters(false).catch(() => {});
+
+    await loadFtpPcs();
+    await loadFtpSites();
+  }
+
+  function getScanTarget() {
+    const selectedIp = (document.getElementById("scan-device-select")?.value || "").trim();
+    const ipFromField = (document.getElementById("scan-ip")?.value || "").trim();
+    const ip = selectedIp || ipFromField;
+    const user = (document.getElementById("scan-user")?.value || "").trim();
+    const password = (document.getElementById("scan-password")?.value || "").trim();
+    return { ip, user, password };
+  }
+
+  function syncScanDeviceIpField() {
+    const select = document.getElementById("scan-device-select");
+    const ipInput = document.getElementById("scan-ip");
+    if (!select || !ipInput) return;
+    ipInput.value = String(select.value || "").trim();
+  }
+
+  async function refreshScanDevices(forceBackendRefresh = true) {
+    const select = document.getElementById("scan-device-select");
+    if (!select) return [];
+    const selectedBefore = String(select.value || "").trim();
+    const req = forceBackendRefresh
+      ? jsonFetch("/api/devices/refresh", { method: "POST" })
+      : jsonFetch("/api/devices");
+    const data = await req;
+    const rawDevices = Array.isArray(data?.devices) ? data.devices : [];
+    const rankSource = (source) => {
+      const s = String(source || "").toLowerCase();
+      if (s === "api") return 3;
+      if (s === "test") return 2;
+      return 1;
+    };
+    const byIp = new Map();
+    for (const row of rawDevices) {
+      const ip = String(row?.ip || "").trim();
+      const type = String(row?.type || "").toLowerCase();
+      if (!ip || type !== "ricoh") continue;
+      const prev = byIp.get(ip);
+      if (!prev || rankSource(row?.source) > rankSource(prev?.source)) {
+        byIp.set(ip, row);
+      }
+    }
+    const devices = Array.from(byIp.values()).sort((a, b) => {
+      const nameA = String(a?.name || "").toLowerCase();
+      const nameB = String(b?.name || "").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+    const options = [`<option value="">Select device...</option>`];
+    for (const d of devices) {
+      const ip = String(d?.ip || "").trim();
+      const name = String(d?.name || ip).trim();
+      options.push(`<option value="${ip.replaceAll('"', "&quot;")}">${name} (${ip})</option>`);
+    }
+    select.innerHTML = options.join("");
+    const stillExists = devices.some((d) => String(d?.ip || "").trim() === selectedBefore);
+    if (selectedBefore && stillExists) {
+      select.value = selectedBefore;
+    } else if (devices.length) {
+      select.value = String(devices[0].ip || "").trim();
+    } else {
+      select.value = "";
+    }
+    syncScanDeviceIpField();
+    return devices;
+  }
+
+  async function ensureScanTargetDefaults() {
+    const select = document.getElementById("scan-device-select");
+    const userInput = document.getElementById("scan-user");
+    if (!select) return;
+    try {
+      const devices = await refreshScanDevices(true);
+      if (devices.length) return;
+    } catch (_err) {
+      // Fallback below.
+    }
+    try {
+      const cfg = await jsonFetch("/api/ui/config");
+      const testIp = String(cfg?.env?.TEST_IP || "").trim();
+      const testUser = String(cfg?.env?.TEST_USER || "").trim();
+      if (testIp) {
+        select.innerHTML = `<option value="${testIp.replaceAll('"', "&quot;")}">Test Printer (${testIp})</option>`;
+        select.value = testIp;
+        syncScanDeviceIpField();
+      }
+      if (userInput && !String(userInput.value || "").trim() && testUser) {
+        userInput.value = testUser;
+      }
+    } catch (_err) {
+      // Keep manual input flow if config is unavailable.
+    }
+  }
+
+  function renderScanAddressRows(entries) {
+    const body = document.getElementById("scan-address-table-body");
+    if (!body) return;
+    const rows = Array.isArray(entries)
+      ? entries.filter((x) => x && x.type !== "Summary" && hasMeaningfulScanEntryValue(x))
+      : [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="6">No address entries.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map((row) => {
+        const reg = row.registration_no || "";
+        const name = row.name || "-";
+        const email = row.email_address || "-";
+        const folder = row.folder || "-";
+        const entryId = row.entry_id || "";
+        return `
+        <tr data-entry-id="${String(entryId).replaceAll('"', "&quot;")}">
+          <td><button class="btn action alt scan-delete-btn" data-registration-no="${String(reg).replaceAll('"', "&quot;")}">Delete</button></td>
+          <td>${name}</td>
+          <td>${folder}</td>
+          <td>${email}</td>
+          <td class="col-reg-no">${reg}</td>
+        </tr>
+      `;
+      })
+      .join("");
+  }
+
+  async function loadScanAddressList() {
+    const out = document.getElementById("scan-output");
+    await refreshScanDevices(true);
+    const target = getScanTarget();
+    if (!target.ip) throw new Error("Missing printer IP");
+    const query = new URLSearchParams(target).toString();
+    const data = await jsonFetch(`/api/scan/address-list?${query}`);
+    const payload = data.payload || {};
+    const entries = payload.address_list || [];
+    renderScanAddressRows(entries);
+    if (out) out.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  async function initScanPage() {
+    const targetForm = document.getElementById("scan-target-form");
+    const createForm = document.getElementById("scan-create-form");
+    const modifyForm = document.getElementById("scan-modify-form");
+    const deviceSelect = document.getElementById("scan-device-select");
+    const out = document.getElementById("scan-output");
+    if (!targetForm || !createForm || !modifyForm) return;
+
+    if (deviceSelect && !deviceSelect.dataset.bound) {
+      deviceSelect.dataset.bound = "1";
+      deviceSelect.addEventListener("change", () => {
+        syncScanDeviceIpField();
+      });
+    }
+
+    if (!targetForm.dataset.bound) {
+      targetForm.dataset.bound = "1";
+      targetForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    if (!createForm.dataset.bound) {
+      createForm.dataset.bound = "1";
+      createForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        const body = {
+          ...target,
+          name: (document.getElementById("scan-create-name")?.value || "").trim(),
+          email: (document.getElementById("scan-create-email")?.value || "").trim(),
+          folder: (document.getElementById("scan-create-folder")?.value || "").trim(),
+          user_code: (document.getElementById("scan-create-user-code")?.value || "").trim() || "-",
+          fields: { entryTypeIn: "1" },
+        };
+        try {
+          const data = await jsonFetch("/api/scan/address-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    if (!modifyForm.dataset.bound) {
+      modifyForm.dataset.bound = "1";
+      modifyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        const body = {
+          ...target,
+          registration_no: (document.getElementById("scan-modify-registration-no")?.value || "").trim(),
+          name: (document.getElementById("scan-modify-name")?.value || "").trim(),
+          email: (document.getElementById("scan-modify-email")?.value || "").trim(),
+          folder: (document.getElementById("scan-modify-folder")?.value || "").trim(),
+          user_code: (document.getElementById("scan-modify-user-code")?.value || "").trim(),
+          fields: {},
+        };
+        if (!body.registration_no) {
+          if (out) out.textContent = "Missing registration_no";
+          return;
+        }
+        try {
+          const data = await jsonFetch("/api/scan/address-modify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    const tableBody = document.getElementById("scan-address-table-body");
+    if (tableBody && !tableBody.dataset.bound) {
+      tableBody.dataset.bound = "1";
+      tableBody.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".scan-delete-btn");
+        if (!btn) return;
+        const registrationNo = String(btn.dataset.registrationNo || "").trim();
+        const entryId = String(btn.closest("tr")?.dataset.entryId || "").trim();
+        if (!registrationNo && !entryId) return;
+        const label = registrationNo || entryId;
+        if (!(await showConfirmModal(`Delete registration_no ${label}?`))) return;
+        const target = getScanTarget();
+        if (!target.ip) {
+          if (out) out.textContent = "Missing printer IP";
+          return;
+        }
+        try {
+          const data = await jsonFetch("/api/scan/address-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...target, registration_no: registrationNo, entry_id: entryId, confirm: true }),
+          });
+          if (out) out.textContent = JSON.stringify(data.payload || data, null, 2);
+          await loadScanAddressList();
+        } catch (err) {
+          if (out) out.textContent = String(err?.message || err);
+        }
+      });
+    }
+
+    // Auto-load once on page open so user does not need to click "Load Address List".
+    if (!targetForm.dataset.autoLoaded) {
+      targetForm.dataset.autoLoaded = "1";
+      try {
+        await ensureScanTargetDefaults();
+        await loadScanAddressList();
+      } catch (err) {
+        if (out) out.textContent = String(err?.message || err);
+      }
+    }
+  }
+
+  async function initSidebarLanInfo() {
+    const lanEl = document.getElementById("sidebar-lan-uid");
+    const versionEl = document.getElementById("sidebar-agent-version");
+    const tabDevicesEl = document.getElementById("nav-tab-devices");
+    
+    // Load Polling/LAN info
+    try {
+      const data = await jsonFetch("/api/polling/status");
+      const lanUid = String(data?.resolved_lan_uid || "").trim();
+      if (lanUid && lanEl) {
+        lanEl.textContent = lanUid;
+        lanEl.title = data?.lead ? `Lead: ${String(data.lead)}` : "";
+        if (tabDevicesEl) {
+          tabDevicesEl.textContent = "Devices";
+        }
+      }
+    } catch (_e) {
+      if (lanEl) lanEl.textContent = "LAN UID: Unknown";
+    }
+
+    // Load App Version
+    try {
+      const cfg = await jsonFetch("/api/ui/config");
+      const appVersion = String(cfg?.env?.APP_VERSION || "").trim();
+      if (appVersion && versionEl) {
+        versionEl.textContent = "Version: " + appVersion;
+      }
+    } catch (_e) {
+      if (versionEl) versionEl.textContent = "Version: Unknown";
+    }
+  }
+
+  function bindMobileMenu() {
+    const shell = document.getElementById("layout-shell");
+    const openBtn = document.getElementById("nav-toggle");
+    const closeBtn = document.getElementById("nav-close");
+    const overlay = document.getElementById("sidebar-overlay");
+    if (!shell || !openBtn || !closeBtn || !overlay) return;
+    if (openBtn.dataset.bound) return;
+    const closeMenu = () => shell.classList.remove("nav-open");
+    const openMenu = () => shell.classList.add("nav-open");
+    openBtn.dataset.bound = "1";
+    openBtn.addEventListener("click", openMenu);
+    closeBtn.addEventListener("click", closeMenu);
+    overlay.addEventListener("click", closeMenu);
+    shell.querySelectorAll(".side-link").forEach((link) => {
+      link.addEventListener("click", closeMenu);
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    bindMobileMenu();
+    initSidebarLanInfo();
+    const page = document.body.dataset.page;
+    if (page === "devices") {
+      loadOverview().catch(() => { });
+      initDevicesPage().catch(() => { });
+    }
+    if (page === "scan") {
+      initScanPage().catch(() => { });
+    }
+    if (page === "ftp") {
+      initFtpPage().catch(() => { });
+    }
+    const refresh = document.getElementById("refresh-btn");
+    if (refresh) {
+      refresh.addEventListener("click", async () => {
+        if (page === "devices") {
+          loadOverview().catch(() => { });
+          loadDevices(true).catch(() => { });
+        } else if (page === "scan") {
+          loadScanAddressList().catch(() => { });
+        } else if (page === "ftp") {
+          loadFtpPcs().catch(() => { });
+        } else {
+          loadOverview().catch(() => { });
+        }
+      });
+    }
+  });
+
+</script>
